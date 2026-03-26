@@ -32,7 +32,7 @@ interface VersionSummary {
 export default function ProjectViewerPage() {
   const params = useParams();
   const projectId = params.id as string;
-  const token = useAuthStore((s) => s.token);
+  const token = useAuthStore((s) => s.token) ?? undefined;
 
   const { graphData, version, setGraphData, setGenerating, isGenerating } =
     useDesignGraphStore();
@@ -45,7 +45,7 @@ export default function ProjectViewerPage() {
 
   // ── Load project data ──────────────────────────────────────────────────
   useEffect(() => {
-    if (!token || !projectId) return;
+    if (!projectId) return;
 
     // Load project metadata
     api.projects.get(token, projectId).then((p) => setProjectName(p.name));
@@ -73,14 +73,13 @@ export default function ProjectViewerPage() {
     // Load estimate
     api.estimates
       .getLatest(token, projectId)
-      .then((est) => setEstimate(est as Record<string, unknown>))
+      .then((est) => setEstimate(est as unknown as Record<string, unknown>))
       .catch(() => {});
   }, [token, projectId, setGraphData, setEstimate]);
 
   // ── Local edit handler ─────────────────────────────────────────────────
   const handleEditObject = useCallback(
     async (objectId: string, prompt: string) => {
-      if (!token) return;
       setEditLoading(true);
       try {
         const result = await api.generation.edit(token, projectId, {
@@ -91,7 +90,7 @@ export default function ProjectViewerPage() {
           result.graph_data as Record<string, unknown>,
           result.version,
         );
-        setEstimate(result.estimate as Record<string, unknown>);
+        setEstimate(result.estimate as unknown as Record<string, unknown>);
       } catch {
         /* handle error */
       } finally {
@@ -104,7 +103,6 @@ export default function ProjectViewerPage() {
   // ── Theme switch handler ───────────────────────────────────────────────
   const handleThemeSwitch = useCallback(
     async (newStyle: string) => {
-      if (!token) return;
       setGenerating(true);
       try {
         const result = await api.generation.switchTheme(token, projectId, {
@@ -114,7 +112,7 @@ export default function ProjectViewerPage() {
           result.graph_data as Record<string, unknown>,
           result.version,
         );
-        setEstimate(result.estimate as Record<string, unknown>);
+        setEstimate(result.estimate as unknown as Record<string, unknown>);
       } catch {
         /* handle error */
       }
@@ -125,14 +123,13 @@ export default function ProjectViewerPage() {
   // ── Load specific version ──────────────────────────────────────────────
   const handleVersionSelect = useCallback(
     async (ver: number) => {
-      if (!token) return;
       try {
         const res = await api.generation.getVersion(token, projectId, ver);
         const data = res as { graph_data: Record<string, unknown>; version: number };
         setGraphData(data.graph_data, data.version);
 
         const est = await api.estimates.getForVersion(token, projectId, ver);
-        setEstimate(est as Record<string, unknown>);
+        setEstimate(est as unknown as Record<string, unknown>);
       } catch {
         /* handle error */
       }

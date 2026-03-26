@@ -1,5 +1,5 @@
 {
-  "extends": "../../tsconfig.base.json",
+  "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "plugins": [
       {
@@ -17,4 +17,3 @@
     "node_modules"
   ]
 }
-

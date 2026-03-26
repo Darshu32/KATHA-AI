@@ -1,11 +1,14 @@
-"""KATHA AI — FastAPI application entry point."""
+"""KATHA AI FastAPI application entry point."""
 
 import logging
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
+from app.database import Base, engine
+from app.models import orm  # noqa: F401
 from app.routes import all_routers
 
 settings = get_settings()
@@ -15,15 +18,24 @@ logging.basicConfig(
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
 )
 
+
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    # Dev-friendly bootstrap until Alembic migrations are added.
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+
+
 app = FastAPI(
     title="KATHA AI API",
     version="0.2.0",
     description="Backend for the KATHA AI architecture & interior design platform.",
     docs_url="/docs",
     redoc_url="/redoc",
+    lifespan=lifespan,
 )
 
-# ── CORS ─────────────────────────────────────────────────────────────────────
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
@@ -32,7 +44,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ── Routes ───────────────────────────────────────────────────────────────────
 for router in all_routers:
     app.include_router(router, prefix="/api/v1")
 

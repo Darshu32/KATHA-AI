@@ -32,6 +32,8 @@ export default function ObjectInspector({
 
   const dims = selectedObj.dimensions as Record<string, number> | undefined;
   const pos = selectedObj.position as Record<string, number> | undefined;
+  const color =
+    typeof selectedObj.color === "string" ? selectedObj.color : undefined;
 
   const handleEdit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -82,17 +84,15 @@ export default function ObjectInspector({
             </p>
           </div>
         )}
-        {selectedObj.color && (
+        {color && (
           <div className="rounded-lg bg-sand/50 px-2 py-1.5">
             <span className="text-ink/50">Color</span>
             <div className="mt-1 flex items-center gap-1.5">
               <div
                 className="h-4 w-4 rounded-full border border-black/10"
-                style={{ backgroundColor: selectedObj.color as string }}
+                style={{ backgroundColor: color }}
               />
-              <span className="font-medium text-ink">
-                {selectedObj.color as string}
-              </span>
+              <span className="font-medium text-ink">{color}</span>
             </div>
           </div>
         )}

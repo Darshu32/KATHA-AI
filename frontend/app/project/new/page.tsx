@@ -4,11 +4,10 @@ import { useState } from "react";
 import { useRouter } from "next/navigation";
 import PromptInput from "../../../components/prompt-input";
 import api from "../../../lib/api-client";
-import { useAuthStore, useProjectStore } from "../../../lib/store";
+import { useProjectStore } from "../../../lib/store";
 
 export default function NewProjectPage() {
   const router = useRouter();
-  const token = useAuthStore((s) => s.token);
   const addProject = useProjectStore((s) => s.addProject);
   const [isLoading, setIsLoading] = useState(false);
   const [projectName, setProjectName] = useState("");
@@ -19,18 +18,13 @@ export default function NewProjectPage() {
     roomType: string;
     style: string;
   }) => {
-    if (!token) {
-      setError("Please sign in first.");
-      return;
-    }
-
     const name = projectName.trim() || `${data.style} ${data.roomType}`.replace(/_/g, " ");
     setIsLoading(true);
     setError(null);
 
     try {
       // Step 1: Create project
-      const project = await api.projects.create(token, {
+      const project = await api.projects.create(undefined, {
         name,
         prompt: data.prompt,
         room_type: data.roomType,
@@ -48,7 +42,7 @@ export default function NewProjectPage() {
       });
 
       // Step 2: Trigger generation
-      await api.generation.generate(token, project.id, {
+      await api.generation.generate(undefined, project.id, {
         prompt: data.prompt,
         room_type: data.roomType,
         style: data.style,

@@ -68,7 +68,7 @@ export const auth = {
   login: (email: string, password: string) =>
     request<TokenResponse>("/auth/login", "POST", { email, password }),
 
-  me: (token: string) => request<UserResponse>("/auth/me", "GET", undefined, token),
+  me: (token?: string) => request<UserResponse>("/auth/me", "GET", undefined, token),
 };
 
 // ── Projects ────────────────────────────────────────────────────────────────
@@ -89,7 +89,7 @@ export interface ProjectListResponse {
 }
 
 export const projects = {
-  list: (token: string, offset = 0, limit = 50) =>
+  list: (token?: string, offset = 0, limit = 50) =>
     request<ProjectListResponse>(
       `/projects?offset=${offset}&limit=${limit}`,
       "GET",
@@ -97,15 +97,15 @@ export const projects = {
       token,
     ),
 
-  get: (token: string, projectId: string) =>
+  get: (token: string | undefined, projectId: string) =>
     request<ProjectResponse>(`/projects/${projectId}`, "GET", undefined, token),
 
   create: (
-    token: string,
+    token: string | undefined,
     data: { name: string; description?: string; prompt: string; room_type?: string; style?: string },
   ) => request<ProjectResponse>("/projects", "POST", data, token),
 
-  update: (token: string, projectId: string, data: Record<string, unknown>) =>
+  update: (token: string | undefined, projectId: string, data: Record<string, unknown>) =>
     request<ProjectResponse>(`/projects/${projectId}`, "PATCH", data, token),
 };
 
@@ -122,30 +122,30 @@ export interface GenerationResult {
 
 export const generation = {
   generate: (
-    token: string,
+    token: string | undefined,
     projectId: string,
     data: { prompt: string; room_type?: string; style?: string },
   ) => request<GenerationResult>(`/projects/${projectId}/generate`, "POST", data, token),
 
   edit: (
-    token: string,
+    token: string | undefined,
     projectId: string,
     data: { object_id: string; prompt: string },
   ) => request<GenerationResult>(`/projects/${projectId}/edit`, "POST", data, token),
 
   switchTheme: (
-    token: string,
+    token: string | undefined,
     projectId: string,
     data: { new_style: string; preserve_layout?: boolean },
   ) => request<GenerationResult>(`/projects/${projectId}/theme`, "POST", data, token),
 
-  getLatest: (token: string, projectId: string) =>
+  getLatest: (token: string | undefined, projectId: string) =>
     request<Record<string, unknown>>(`/projects/${projectId}/latest`, "GET", undefined, token),
 
-  listVersions: (token: string, projectId: string) =>
+  listVersions: (token: string | undefined, projectId: string) =>
     request<Record<string, unknown>>(`/projects/${projectId}/versions`, "GET", undefined, token),
 
-  getVersion: (token: string, projectId: string, version: number) =>
+  getVersion: (token: string | undefined, projectId: string, version: number) =>
     request<Record<string, unknown>>(
       `/projects/${projectId}/versions/${version}`,
       "GET",
@@ -178,10 +178,10 @@ export interface EstimateResult {
 }
 
 export const estimates = {
-  getLatest: (token: string, projectId: string) =>
+  getLatest: (token: string | undefined, projectId: string) =>
     request<EstimateResult>(`/projects/${projectId}/estimates`, "GET", undefined, token),
 
-  getForVersion: (token: string, projectId: string, version: number) =>
+  getForVersion: (token: string | undefined, projectId: string, version: number) =>
     request<EstimateResult>(
       `/projects/${projectId}/estimates/version/${version}`,
       "GET",

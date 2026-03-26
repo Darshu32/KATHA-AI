@@ -60,6 +60,26 @@ async def create_user(
     return user
 
 
+async def get_or_create_dev_user(
+    db: AsyncSession,
+    email: str = "demo@katha.local",
+    display_name: str = "KATHA Demo",
+) -> User:
+    user = await get_user_by_email(db, email)
+    if user is not None:
+        return user
+    user = User(
+        email=email,
+        # Auth is disabled in local MVP mode, so this value is never used
+        # for login verification.
+        hashed_password="auth-disabled",
+        display_name=display_name,
+    )
+    db.add(user)
+    await db.flush()
+    return user
+
+
 async def authenticate_user(
     db: AsyncSession,
     email: str,

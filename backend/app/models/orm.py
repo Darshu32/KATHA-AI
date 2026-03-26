@@ -141,6 +141,10 @@ class GeneratedAsset(Base, UUIDMixin, TimestampMixin):
     mime_type: Mapped[str] = mapped_column(String(64), default="image/png")
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
 
+    graph_version: Mapped["DesignGraphVersion"] = relationship(
+        back_populates="assets"
+    )
+
 
 # ── Knowledge Base ───────────────────────────────────────────────────────────
 

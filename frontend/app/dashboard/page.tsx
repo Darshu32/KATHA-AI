@@ -3,23 +3,17 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import api, { type ProjectResponse } from "../../lib/api-client";
-import { useAuthStore, useProjectStore } from "../../lib/store";
+import { useProjectStore } from "../../lib/store";
 
 export default function DashboardPage() {
-  const token = useAuthStore((s) => s.token);
   const projects = useProjectStore((s) => s.projects);
   const setProjects = useProjectStore((s) => s.setProjects);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!token) {
-      setLoading(false);
-      return;
-    }
-
     api.projects
-      .list(token)
+      .list()
       .then((res) => {
         setProjects(
           res.projects.map((p: ProjectResponse) => ({
@@ -35,18 +29,7 @@ export default function DashboardPage() {
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
-  }, [token, setProjects]);
-
-  if (!token) {
-    return (
-      <main className="mx-auto max-w-4xl px-6 py-16 text-center">
-        <h1 className="font-display text-3xl text-ink">Sign in to view your projects</h1>
-        <p className="mt-2 text-ink/60">
-          Authentication will be connected once the backend is running.
-        </p>
-      </main>
-    );
-  }
+  }, [setProjects]);
 
   return (
     <main className="mx-auto max-w-7xl px-6 py-10">
