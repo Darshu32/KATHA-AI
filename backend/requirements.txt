@@ -1,0 +1,32 @@
+# ── Core ─────────────────────────────────────────────
+fastapi==0.115.12
+uvicorn[standard]==0.34.0
+pydantic==2.11.2
+pydantic-settings==2.8.1
+
+# ── Database ─────────────────────────────────────────
+sqlalchemy[asyncio]==2.0.38
+asyncpg==0.30.0
+alembic==1.14.1
+
+# ── Auth ─────────────────────────────────────────────
+passlib[bcrypt]==1.7.4
+PyJWT==2.10.1
+
+# ── AI ───────────────────────────────────────────────
+openai==1.68.0
+
+# ── Background Jobs ─────────────────────────────────
+celery[redis]==5.4.0
+redis==5.2.1
+
+# ── Storage (S3/R2 compatible) ───────────────────────
+boto3==1.36.14
+
+# ── Vector search ───────────────────────────────────
+pgvector==0.3.6
+
+# ── Dev / Testing ───────────────────────────────────
+httpx==0.28.1
+pytest==8.3.4
+pytest-asyncio==0.25.3

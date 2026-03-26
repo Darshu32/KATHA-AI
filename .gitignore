@@ -9,4 +9,8 @@ build/
 .env
 .env.local
 .DS_Store
-
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+pnpm-lock.yaml
+package-lock.json

@@ -4,8 +4,8 @@ KATHA AI is an architecture and interior design platform built around a shared d
 
 ## Workspace layout
 
-- `apps/web` contains the Next.js frontend shell.
-- `apps/api` contains the FastAPI backend shell.
+- `frontend` contains the Next.js frontend shell.
+- `backend` contains the FastAPI backend shell.
 - `packages/design-graph` contains shared TypeScript models for the canonical design graph.
 - `docs` contains product and implementation notes.
 
@@ -22,7 +22,7 @@ The core principle is simple:
 ### Frontend
 
 ```bash
-cd apps/web
+cd frontend
 npm install
 npm run dev
 ```
@@ -30,7 +30,7 @@ npm run dev
 ### Backend
 
 ```bash
-cd apps/api
+cd backend
 python -m venv .venv
 .venv\Scripts\activate
 pip install -r requirements.txt
@@ -45,3 +45,12 @@ uvicorn app.main:app --reload
 - Version-aware project dashboard
 - Material and estimate panels
 
+## Prompt contracts
+
+The first backend AI contract is stored in
+`backend/app/prompts/design_graph.py`.
+
+It defines the system prompt that instructs the model to return a practical,
+buildable design graph in JSON only. The API exposes this contract at
+`GET /prompts/design-graph` so the frontend or orchestration layer can consume
+one shared version.

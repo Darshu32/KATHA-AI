@@ -3,12 +3,12 @@
   "private": true,
   "version": "0.1.0",
   "workspaces": [
-    "apps/*",
+    "frontend",
+    "backend",
     "packages/*"
   ],
   "scripts": {
-    "dev:web": "npm --workspace @katha/web run dev",
-    "build:web": "npm --workspace @katha/web run build"
+    "dev:frontend": "npm --workspace @katha/frontend run dev",
+    "build:frontend": "npm --workspace @katha/frontend run build"
   }
 }
-

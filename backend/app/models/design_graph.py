@@ -18,6 +18,8 @@ class AssetBundle(BaseModel):
     render_2d: list[str] = Field(default_factory=list)
     scene_3d: list[str] = Field(default_factory=list)
     masks: list[str] = Field(default_factory=list)
+    render_prompt_2d: str = ""
+    render_prompt_3d: str = ""
 
 
 class DesignGraph(BaseModel):
