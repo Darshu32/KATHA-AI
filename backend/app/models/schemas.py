@@ -2,8 +2,14 @@
 
 from datetime import datetime
 from enum import Enum
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+from app.services.design_intake import (
+    parse_dimensions_input,
+    validate_requirements_text,
+)
 
 
 # ── Enums ────────────────────────────────────────────────────────────────────
@@ -29,6 +35,26 @@ class ChangeType(str, Enum):
     MANUAL_EDIT = "manual_edit"
     THEME_SWITCH = "theme_switch"
     MATERIAL_CHANGE = "material_change"
+
+
+class ThemeEnum(str, Enum):
+    MODERN = "modern"
+    CONTEMPORARY = "contemporary"
+    MINIMALIST = "minimalist"
+    TRADITIONAL = "traditional"
+    RUSTIC = "rustic"
+    INDUSTRIAL = "industrial"
+    SCANDINAVIAN = "scandinavian"
+    BOHEMIAN = "bohemian"
+    LUXURY = "luxury"
+    COASTAL = "coastal"
+
+
+class DesignStatus(str, Enum):
+    ACCEPTED = "accepted"
+    PROCESSING = "processing"
+    COMPLETED = "completed"
+    FAILED = "failed"
 
 
 # ── Project Schemas ──────────────────────────────────────────────────────────
@@ -163,6 +189,110 @@ class GenerationResponse(BaseModel):
     version: int
     status: GenerationStatus
     task_id: str | None = None
+
+
+class DesignDimensions(BaseModel):
+    length: float = Field(gt=0)
+    width: float = Field(gt=0)
+    unit: str
+
+    @field_validator("unit", mode="before")
+    @classmethod
+    def normalize_unit(cls, value: str) -> str:
+        normalized = str(value).strip().lower()
+        if normalized in {"ft", "feet"}:
+            return "ft"
+        if normalized in {"m", "meter", "meters"}:
+            return "m"
+        raise ValueError("Dimensions unit must be 'ft' or 'm'")
+
+
+class DesignRequest(BaseModel):
+    roomType: str
+    theme: ThemeEnum
+    dimensions: DesignDimensions | str
+    requirements: str
+    budget: float | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def normalize_payload(cls, data: object):
+        if not isinstance(data, dict):
+            return data
+
+        normalized: dict[str, Any] = dict(data)
+        for field_name in ("roomType", "theme", "requirements"):
+            value = normalized.get(field_name)
+            if isinstance(value, str):
+                normalized[field_name] = value.strip()
+
+        if isinstance(normalized.get("roomType"), str):
+            normalized["roomType"] = normalized["roomType"].lower().replace("-", "_").replace(" ", "_")
+
+        if isinstance(normalized.get("theme"), str):
+            normalized["theme"] = normalized["theme"].lower()
+
+        dimensions = normalized.get("dimensions")
+        if isinstance(dimensions, (str, dict)):
+            normalized["dimensions"] = parse_dimensions_input(dimensions)
+
+        return normalized
+
+    @field_validator("dimensions", mode="before")
+    @classmethod
+    def validate_dimensions(cls, value: DesignDimensions | str | dict[str, Any]) -> DesignDimensions:
+        return parse_dimensions_input(value)
+
+    @field_validator("roomType")
+    @classmethod
+    def validate_room_type(cls, value: str) -> str:
+        if not value.strip():
+            raise ValueError("Room type must be provided")
+        return value
+
+    @field_validator("requirements")
+    @classmethod
+    def validate_requirements(cls, value: str) -> str:
+        validate_requirements_text(value)
+        return value
+
+    @field_validator("budget")
+    @classmethod
+    def validate_budget(cls, value: float | None) -> float | None:
+        if value is not None and value < 0:
+            raise ValueError("Budget must be greater than or equal to 0")
+        return value
+
+
+class DesignResponse(BaseModel):
+    designId: str
+    status: DesignStatus
+    message: str
+    createdAt: datetime
+
+
+class DesignOut(BaseModel):
+    id: str
+    room_type: str
+    theme: ThemeEnum
+    dimensions: DesignDimensions
+    requirements: str
+    budget: float | None
+    status: DesignStatus
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class ErrorDetail(BaseModel):
+    field: str | None = None
+    message: str
+
+
+class ErrorResponse(BaseModel):
+    error: str
+    message: str
+    details: list[ErrorDetail] = Field(default_factory=list)
 
 
 # ── Estimate Schemas ─────────────────────────────────────────────────────────

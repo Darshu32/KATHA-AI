@@ -44,6 +44,20 @@ def generate_design_task(self, project_id: str, prompt: str, room_type: str, sty
     return _run_async(_run())
 
 
+@celery_app.task(bind=True, name="app.workers.tasks.run_design_pipeline_task")
+def run_design_pipeline_task(self, design_id: str, start_stage: str | None = None):
+    """Background task: run the design-intake orchestrator for a stored design."""
+    from app.services.ai_orchestrator import run_pipeline
+
+    logger.info(
+        "Task %s: running design pipeline for design %s from stage %s",
+        self.request.id,
+        design_id,
+        start_stage or "theme",
+    )
+    return _run_async(run_pipeline(design_id, start_stage=start_stage))
+
+
 @celery_app.task(bind=True, name="app.workers.tasks.compute_estimate_task")
 def compute_estimate_task(self, graph_data: dict):
     """Background task: compute material/cost estimate from a design graph."""

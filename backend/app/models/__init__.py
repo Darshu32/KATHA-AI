@@ -7,6 +7,7 @@ from app.models.architecture import (
     ArchitectureSnapshot,
 )
 from app.models.orm import (
+    Design,
     DesignGraphVersion,
     EstimateLineItem,
     EstimateSnapshot,
@@ -24,8 +25,11 @@ from app.models.design_graph import (
     build_starter_graph,
 )
 from app.models.schemas import (
+    DesignOut,
+    DesignStatus,
     DesignGraphOut,
     EstimateOut,
+    ThemeEnum,
     ProjectCreate,
     ProjectOut,
     ProjectUpdate,
@@ -40,6 +44,7 @@ __all__ = [
     "ArchitectureFileFact",
     # ORM
     "User",
+    "Design",
     "Project",
     "DesignGraphVersion",
     "EstimateSnapshot",
@@ -58,6 +63,9 @@ __all__ = [
     "ProjectUpdate",
     "ProjectOut",
     "PromptRequest",
+    "ThemeEnum",
+    "DesignStatus",
+    "DesignOut",
     "DesignGraphOut",
     "EstimateOut",
     "GenerationStatus",

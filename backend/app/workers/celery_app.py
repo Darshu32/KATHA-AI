@@ -23,6 +23,7 @@ celery_app.conf.update(
     worker_prefetch_multiplier=1,
     task_routes={
         "app.workers.tasks.generate_design_task": {"queue": "generation"},
+        "app.workers.tasks.run_design_pipeline_task": {"queue": "generation"},
         "app.workers.tasks.compute_estimate_task": {"queue": "estimation"},
         "app.workers.tasks.render_2d_task": {"queue": "rendering"},
         "app.workers.tasks.build_3d_scene_task": {"queue": "rendering"},

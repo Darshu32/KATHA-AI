@@ -6,7 +6,7 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v
 
 type Method = "GET" | "POST" | "PATCH" | "DELETE";
 
-class ApiError extends Error {
+export class ApiError extends Error {
   constructor(
     public status: number,
     public body: unknown,
@@ -152,6 +152,51 @@ export const generation = {
       undefined,
       token,
     ),
+};
+
+export interface DesignGenerationRequest {
+  roomType: string;
+  theme:
+    | "modern"
+    | "contemporary"
+    | "minimalist"
+    | "traditional"
+    | "rustic"
+    | "industrial"
+    | "scandinavian"
+    | "bohemian"
+    | "luxury"
+    | "coastal";
+  dimensions:
+    | string
+    | {
+        length: number;
+        width: number;
+        unit: "ft" | "m";
+      };
+  requirements: string;
+  budget: number | null;
+}
+
+export interface DesignGenerationResponse {
+  designId: string;
+  status: "accepted" | "processing" | "completed" | "failed";
+  message: string;
+  createdAt: string;
+}
+
+export interface ApiErrorResponse {
+  error: string;
+  message: string;
+  details?: Array<{
+    field?: string | null;
+    message: string;
+  }>;
+}
+
+export const design = {
+  generate: (data: DesignGenerationRequest) =>
+    request<DesignGenerationResponse>("/design/generate", "POST", data),
 };
 
 // ── Estimates ───────────────────────────────────────────────────────────────
@@ -357,5 +402,5 @@ export const architecture = {
     request<ArchitectureRefreshResponse>("/architecture/refresh", "POST", { force }, token),
 };
 
-const api = { auth, projects, generation, estimates, architecture };
+const api = { auth, projects, generation, estimates, architecture, design };
 export default api;

@@ -39,6 +39,15 @@ FIXTURE_RATES: dict[str, dict] = {
 }
 
 
+def process(layout: dict) -> dict:
+    """
+    Pipeline-facing estimation entry point. The orchestrator depends on this stable
+    interface so the underlying estimation logic can evolve independently.
+    """
+    logger.info("Estimation engine: computing estimate from layout")
+    return compute_estimate(layout)
+
+
 def compute_estimate(graph_data: dict) -> dict:
     """
     Read the design graph and produce a full estimate breakdown.

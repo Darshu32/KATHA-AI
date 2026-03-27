@@ -50,6 +50,28 @@ class Project(Base, UUIDMixin, TimestampMixin):
     )
 
 
+class Design(Base, UUIDMixin, TimestampMixin):
+    __tablename__ = "designs"
+
+    room_type: Mapped[str] = mapped_column(String(64), index=True)
+    theme: Mapped[str] = mapped_column(String(32), index=True)
+    dimensions: Mapped[dict] = mapped_column(JSONB, default=dict)
+    requirements: Mapped[str] = mapped_column(Text)
+    budget: Mapped[float | None] = mapped_column(Float, nullable=True)
+    status: Mapped[str] = mapped_column(
+        String(32), default="accepted", index=True
+    )  # accepted | processing | completed | failed
+    theme_config: Mapped[dict] = mapped_column(JSONB, default=dict)
+    concept_data: Mapped[dict] = mapped_column(JSONB, default=dict)
+    layout_data: Mapped[dict] = mapped_column(JSONB, default=dict)
+    drawing_data: Mapped[dict] = mapped_column(JSONB, default=dict)
+    render_data: Mapped[dict] = mapped_column(JSONB, default=dict)
+    estimate_data: Mapped[dict] = mapped_column(JSONB, default=dict)
+    pipeline_state: Mapped[dict] = mapped_column(JSONB, default=dict)
+    pipeline_metadata: Mapped[dict] = mapped_column(JSONB, default=dict)
+    error_message: Mapped[str] = mapped_column(Text, default="")
+
+
 # ── Design Graph Versions ────────────────────────────────────────────────────
 
 
