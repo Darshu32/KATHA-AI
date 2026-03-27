@@ -1,6 +1,6 @@
 FROM python:3.13-slim
 
-WORKDIR /app
+WORKDIR /app/backend
 
 # System deps
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -8,11 +8,14 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 # Python deps
-COPY requirements.txt .
+COPY backend/requirements.txt ./requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# App code
-COPY . .
+# App code + monorepo context needed for architecture indexing
+COPY backend /app/backend
+COPY frontend /app/frontend
+COPY packages /app/packages
+COPY docs /app/docs
 
 EXPOSE 8000
 

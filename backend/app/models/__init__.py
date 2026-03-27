@@ -1,5 +1,11 @@
 """Re-export all ORM and schema models for convenient imports."""
 
+from app.models.architecture import (
+    ArchitectureEdge,
+    ArchitectureFileFact,
+    ArchitectureNode,
+    ArchitectureSnapshot,
+)
 from app.models.orm import (
     DesignGraphVersion,
     EstimateLineItem,
@@ -28,6 +34,10 @@ from app.models.schemas import (
 )
 
 __all__ = [
+    "ArchitectureSnapshot",
+    "ArchitectureNode",
+    "ArchitectureEdge",
+    "ArchitectureFileFact",
     # ORM
     "User",
     "Project",

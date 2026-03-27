@@ -18,6 +18,9 @@ function Nav() {
           <Link href="/dashboard" className="text-ink/60 transition-colors hover:text-ink">
             Dashboard
           </Link>
+          <Link href="/architecture" className="text-ink/60 transition-colors hover:text-ink">
+            Architecture
+          </Link>
           <Link
             href="/project/new"
             className="rounded-lg bg-ink px-4 py-1.5 text-white transition-colors hover:bg-ink/90"

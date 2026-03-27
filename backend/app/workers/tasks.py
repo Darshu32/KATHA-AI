@@ -154,6 +154,27 @@ def ingest_document_task(self, document_id: str, storage_key: str):
     }
 
 
+@celery_app.task(bind=True, name="app.workers.tasks.refresh_architecture_task")
+def refresh_architecture_task(self, force: bool = False):
+    """Background task: refresh the architecture graph snapshot."""
+    from app.database import async_session_factory
+    from app.services.architecture_query_service import refresh_architecture
+
+    logger.info("Task %s: refreshing architecture graph", self.request.id)
+
+    async def _run():
+        async with async_session_factory() as db:
+            try:
+                result = await refresh_architecture(db, force=force)
+                await db.commit()
+                return result
+            except Exception:
+                await db.rollback()
+                raise
+
+    return _run_async(_run())
+
+
 def _map_to_geometry_type(obj_type: str) -> str:
     """Map design object types to Three.js geometry types."""
     mapping = {

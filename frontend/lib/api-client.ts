@@ -190,5 +190,172 @@ export const estimates = {
     ),
 };
 
-const api = { auth, projects, generation, estimates };
+export interface ArchitectureSummaryResponse {
+  status: string;
+  snapshot: {
+    id: string;
+    repo_name: string;
+    commit_hash: string;
+    created_at: string;
+  };
+  freshness: {
+    status: string;
+    current_commit_hash: string;
+    indexed_commit_hash: string;
+  };
+  overview: {
+    modules: string[];
+    file_count: number;
+    node_count: number;
+    top_node_types: Record<string, number>;
+  };
+  drift: {
+    has_drift: boolean;
+    commit_changed: boolean;
+    changed_file_count: number;
+    new_file_count: number;
+    deleted_file_count: number;
+    changed_files: string[];
+    new_files: string[];
+    deleted_files: string[];
+  };
+  quality: {
+    score: number;
+    issue_count: number;
+    issues: Array<{
+      type: string;
+      severity: string;
+      message: string;
+      file_path: string;
+    }>;
+    recommendations: string[];
+  };
+  files: Array<{
+    file_path: string;
+    summary: string;
+    file_type: string;
+  }>;
+}
+
+export interface ArchitectureFeatureFlowResponse {
+  status: string;
+  feature: string;
+  snapshot_id: string;
+  steps: Array<{
+    step: number;
+    title: string;
+    description: string;
+    file_path: string;
+    file_summary: string;
+  }>;
+  available_features?: string[];
+}
+
+export interface ArchitectureDependencyResponse {
+  status: string;
+  query: string;
+  message?: string;
+  focus?: {
+    id: string;
+    name: string;
+    node_type: string;
+    file_path: string;
+    symbol_path: string;
+  };
+  incoming?: Array<{
+    edge_type: string;
+    id: string;
+    name: string;
+    node_type: string;
+    file_path: string;
+    symbol_path: string;
+  }>;
+  outgoing?: Array<{
+    edge_type: string;
+    id: string;
+    name: string;
+    node_type: string;
+    file_path: string;
+    symbol_path: string;
+  }>;
+}
+
+export interface ArchitectureAskResponse {
+  status: string;
+  question: string;
+  answer: string;
+  citations: string[];
+  mode: string;
+}
+
+export interface ArchitectureStatusResponse {
+  status: string;
+  snapshot_id: string;
+  repo_name: string;
+  indexed_commit_hash: string;
+  current_commit_hash: string;
+  freshness: string;
+  drift: ArchitectureSummaryResponse["drift"];
+  quality: ArchitectureSummaryResponse["quality"];
+}
+
+export interface ArchitectureQualityResponse {
+  status: string;
+  snapshot_id: string;
+  freshness: string;
+  score: number;
+  issue_count: number;
+  issues: Array<{
+    type: string;
+    severity: string;
+    message: string;
+    file_path: string;
+  }>;
+  recommendations: string[];
+}
+
+export interface ArchitectureRefreshResponse {
+  status: string;
+  mode: string;
+  task_id?: string;
+  snapshot_id?: string;
+}
+
+export const architecture = {
+  index: (token?: string) =>
+    request<Record<string, unknown>>("/architecture/index", "POST", undefined, token),
+
+  summary: (token?: string) =>
+    request<ArchitectureSummaryResponse>("/architecture/summary", "GET", undefined, token),
+
+  status: (token?: string) =>
+    request<ArchitectureStatusResponse>("/architecture/status", "GET", undefined, token),
+
+  quality: (token?: string) =>
+    request<ArchitectureQualityResponse>("/architecture/quality", "GET", undefined, token),
+
+  featureFlow: (token: string | undefined, featureName: string) =>
+    request<ArchitectureFeatureFlowResponse>(
+      `/architecture/feature-flow/${featureName}`,
+      "GET",
+      undefined,
+      token,
+    ),
+
+  dependencies: (token: string | undefined, query: string) =>
+    request<ArchitectureDependencyResponse>(
+      `/architecture/dependencies?query=${encodeURIComponent(query)}`,
+      "GET",
+      undefined,
+      token,
+    ),
+
+  ask: (token: string | undefined, question: string) =>
+    request<ArchitectureAskResponse>("/architecture/ask", "POST", { question }, token),
+
+  refresh: (token: string | undefined, force = false) =>
+    request<ArchitectureRefreshResponse>("/architecture/refresh", "POST", { force }, token),
+};
+
+const api = { auth, projects, generation, estimates, architecture };
 export default api;
