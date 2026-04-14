@@ -6,8 +6,8 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
-from app.models.schemas import DesignRequest, DesignResponse, ErrorDetail, ErrorResponse
-from app.services.design_service import create_design
+from app.models.schemas import DesignOut, DesignRequest, DesignResponse, ErrorDetail, ErrorResponse
+from app.services.design_service import create_design, get_design_by_id
 
 logger = logging.getLogger(__name__)
 
@@ -64,3 +64,27 @@ async def generate_design_request(
                 message="Unable to start design generation",
             ).model_dump(),
         ) from exc
+
+
+@router.get(
+    "/{design_id}",
+    response_model=DesignOut,
+    responses={
+        404: {"model": ErrorResponse, "description": "Design not found"},
+    },
+)
+async def get_design_request(
+    design_id: str,
+    db: AsyncSession = Depends(get_db),
+) -> DesignOut:
+    design = await get_design_by_id(db, design_id)
+    if design is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ErrorResponse(
+                error="not_found",
+                message="Design not found",
+            ).model_dump(),
+        )
+
+    return DesignOut.model_validate(design)

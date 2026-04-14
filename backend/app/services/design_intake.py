@@ -4,7 +4,7 @@ import re
 from typing import Any
 
 DIMENSIONS_PATTERN = re.compile(
-    r"^\s*(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*(ft|feet|m|meter|meters)\s*$",
+    r"^\s*(\d+(?:\.\d+)?)\s*x\s*(\d+(?:\.\d+)?)\s*(ft|feet|m|meter|meters)?\s*$",
     re.IGNORECASE,
 )
 
@@ -23,7 +23,7 @@ def parse_dimensions_input(value: Any) -> dict[str, Any]:
         return {
             "length": float(length),
             "width": float(width),
-            "unit": "ft" if unit.lower() in {"ft", "feet"} else "m",
+            "unit": "ft" if unit is None or unit.lower() in {"ft", "feet"} else "m",
         }
 
     if isinstance(value, dict):

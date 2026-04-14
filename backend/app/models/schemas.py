@@ -312,13 +312,184 @@ class EstimateLineItemOut(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class EstimateSectionOut(BaseModel):
+    total_cost: float
+    currency: str
+
+
+class BreakdownItemOut(BaseModel):
+    item: str
+    category: str
+    subcategory: str
+    unit_cost: float
+    quantity: float
+    total_cost: float
+    currency: str
+    unit: str
+    material: str
+    quality: str
+    style: str
+    price_factors: dict[str, float] = Field(default_factory=dict)
+    source: str
+
+
+class AreaEstimateOut(BaseModel):
+    total_sqft: float
+    cost_per_sqft: float
+
+
+class RegionEstimateOut(BaseModel):
+    city: str
+    price_index: float
+
+
+class PricingAdjustmentsOut(BaseModel):
+    tax: float
+    tax_amount: float
+    discount: float
+    discount_amount: float
+    final_total: float
+
+
+class ConfidenceOut(BaseModel):
+    score: float
+    level: str
+    factors: dict[str, float] = Field(default_factory=dict)
+    weighted: bool = True
+    weights: dict[str, float] = Field(default_factory=dict)
+
+
+class ExportReadinessOut(BaseModel):
+    pdf_ready: bool
+    invoice_ready: bool
+    excel_ready: bool
+    erp_ready: bool
+
+
+class CurrencySystemOut(BaseModel):
+    base_currency: str
+    supported_currencies: list[str]
+    conversion_rates: dict[str, float] = Field(default_factory=dict)
+
+
+class CatalogMetaOut(BaseModel):
+    version: str
+    last_updated: str
+
+
+class FallbackConfigOut(BaseModel):
+    enabled: bool
+    triggered: bool
+    default_cost_per_sqft: float
+
+
+class FxServiceOut(BaseModel):
+    provider: str
+    refresh_interval: str
+    cache_enabled: bool
+
+
+class FxFallbackOut(BaseModel):
+    enabled: bool
+    last_known_rate: bool
+    used: bool
+
+
+class ScenarioEngineOut(BaseModel):
+    based_on: list[str] = Field(default_factory=list)
+    auto_generate: bool
+
+
+class HistoryStorageOut(BaseModel):
+    type: str
+    linked_to: str
+
+
+class PricingControlOut(BaseModel):
+    source: str
+    editable: bool
+    versioned: bool
+    version: str
+
+
+class AuditEntryOut(BaseModel):
+    event: str
+    status: str | None = None
+    final_total: float | None = None
+    reason: str | None = None
+    pricing_version: str | None = None
+
+
+class AuditOut(BaseModel):
+    enabled: bool
+    logs: list[str] = Field(default_factory=list)
+    entries: list[AuditEntryOut] = Field(default_factory=list)
+
+
+class ApiMetaOut(BaseModel):
+    version: str
+    backward_compatible: bool
+
+
+class PrecisionOut(BaseModel):
+    rounding: str
+    mode: str
+
+
+class EstimateHistoryOut(BaseModel):
+    timestamp: str
+    total: float
+
+
+class ScenarioOut(BaseModel):
+    name: str
+    total: float
+    currency: str
+    converted_totals: dict[str, float] = Field(default_factory=dict)
+
+
+class SuggestionOut(BaseModel):
+    type: str
+    message: str
+
+
+class EstimateValidationOut(BaseModel):
+    is_valid: bool
+    errors: list[str] = Field(default_factory=list)
+
+
 class EstimateOut(BaseModel):
-    id: str
     status: str
+    errors: list[str] = Field(default_factory=list)
+    estimate_version: str
     total_low: float
     total_high: float
     currency: str
-    assumptions: dict
+    estimate: dict[str, EstimateSectionOut]
+    breakdown: list[BreakdownItemOut]
+    area: AreaEstimateOut
+    region: RegionEstimateOut
+    pricing_adjustments: PricingAdjustmentsOut
+    confidence: ConfidenceOut
+    export: ExportReadinessOut
+    assumptions: list[str]
+    validation: EstimateValidationOut
+    currency_system: CurrencySystemOut
+    converted_totals: dict[str, dict[str, float]] = Field(default_factory=dict)
+    pricing_config: dict = Field(default_factory=dict)
+    catalog: CatalogMetaOut
+    fallback: FallbackConfigOut
+    fx_service: FxServiceOut
+    fx_fallback: FxFallbackOut
+    scenario_engine: ScenarioEngineOut
+    history_storage: HistoryStorageOut
+    pricing_control: PricingControlOut
+    audit: AuditOut
+    api: ApiMetaOut
+    precision: PrecisionOut
+    history: list[EstimateHistoryOut] = Field(default_factory=list)
+    scenarios: list[ScenarioOut] = Field(default_factory=list)
+    suggestions: list[SuggestionOut] = Field(default_factory=list)
     line_items: list[EstimateLineItemOut]
 
     model_config = {"from_attributes": True}

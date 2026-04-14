@@ -21,10 +21,20 @@ class Settings(BaseSettings):
     celery_broker_url: str = "redis://localhost:6379/1"
     celery_result_backend: str = "redis://localhost:6379/2"
 
-    # ── OpenAI ───────────────────────────────────────────
+    # ── OpenAI / LLM Provider ───────────────────────────
     openai_api_key: str = ""
+    openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4o"
     openai_embedding_model: str = "text-embedding-3-small"
+
+    # ── Google Gemini (Nano Banana image generation) ────
+    gemini_api_key: str = ""
+
+    # ── YouTube Data API v3 ─────────────────────────────
+    youtube_api_key: str = ""
+
+    # ── Feature Flags ───────────────────────────────────
+    sora_enabled: bool = False
 
     # ── Storage (Cloudflare R2 / S3-compat) ──────────────
     s3_endpoint: str = ""

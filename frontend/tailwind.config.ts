@@ -7,24 +7,37 @@ const config: Config = {
   ],
   theme: {
     extend: {
-      colors: {
-        sand: "#f5f0e8",
-        clay: "#be7b52",
-        ink: "#1b1a18",
-        sage: "#87957a",
-        mist: "#e4e0d8"
-      },
       fontFamily: {
-        display: ["Georgia", "serif"],
-        body: ["Trebuchet MS", "sans-serif"]
+        sans: ["Inter", "system-ui", "-apple-system", "sans-serif"],
+      },
+      maxWidth: {
+        chat: "48rem",
       },
       boxShadow: {
-        panel: "0 24px 60px rgba(27, 26, 24, 0.12)"
-      }
-    }
+        subtle: "0 1px 3px rgba(0, 0, 0, 0.04)",
+      },
+      keyframes: {
+        fadeIn: {
+          "0%": { opacity: "0" },
+          "100%": { opacity: "1" },
+        },
+        slideUp: {
+          "0%": { opacity: "0", transform: "translateY(8px)" },
+          "100%": { opacity: "1", transform: "translateY(0)" },
+        },
+        bounce: {
+          "0%, 100%": { transform: "translateY(0)" },
+          "50%": { transform: "translateY(-4px)" },
+        },
+      },
+      animation: {
+        "fade-in": "fadeIn 0.3s ease-out",
+        "slide-up": "slideUp 0.3s ease-out",
+        "bounce-dot": "bounce 1.2s infinite",
+      },
+    },
   },
-  plugins: []
+  plugins: [],
 };
 
 export default config;
-
