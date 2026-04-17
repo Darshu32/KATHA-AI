@@ -30,17 +30,40 @@ export default function ChatMessage({ message }: ChatMessageProps) {
       className={`flex gap-3 ${isUser ? "justify-end" : "justify-start"}`}
     >
       {!isUser && (
-        <div className="flex-shrink-0 w-8 h-8 rounded-full bg-gray-100 flex items-center justify-center mt-1">
-          <Bot size={16} className="text-gray-500" />
+        <div
+          className="flex-shrink-0 w-7 h-7 rounded-full flex items-center justify-center mt-1"
+          style={{
+            backgroundColor: "var(--accent-soft)",
+            color: "var(--accent-2)",
+            border: "1px solid var(--rule)",
+            fontFamily: "var(--mono)",
+            fontSize: 10,
+            fontWeight: 600,
+            letterSpacing: "0.04em",
+          }}
+        >
+          K
         </div>
       )}
 
       <div className={`max-w-[75%] ${isUser ? "order-first" : ""}`}>
         <div
-          className={
+          className="px-4 py-3"
+          style={
             isUser
-              ? "bg-slate-900 text-white rounded-2xl rounded-br-md px-4 py-3"
-              : "bg-gray-50 border border-gray-100 text-gray-900 rounded-2xl rounded-bl-md px-4 py-3"
+              ? {
+                  backgroundColor: "var(--ink)",
+                  color: "var(--paper)",
+                  borderRadius: "18px 18px 6px 18px",
+                  fontFamily: "var(--sans)",
+                  letterSpacing: "-0.005em",
+                }
+              : {
+                  backgroundColor: "transparent",
+                  color: "var(--ink)",
+                  borderRadius: "18px 18px 18px 6px",
+                  fontFamily: "var(--sans)",
+                }
           }
         >
           {isUser ? (

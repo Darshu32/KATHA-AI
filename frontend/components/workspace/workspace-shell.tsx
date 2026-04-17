@@ -1,13 +1,16 @@
 "use client";
 
 import { useMemo, useCallback, useRef, useEffect } from "react";
-import { useChatStore, useWorkspaceStore } from "@/lib/store";
+import { useChatStore, useWorkspaceStore, useNotesStore } from "@/lib/store";
 import { chat } from "@/lib/api-client";
+import { parseDeepModeToNotes } from "@/lib/notes-parser";
 import type { Message } from "@/lib/types";
 import Sidebar from "../sidebar/sidebar";
 import ChatHeader from "../chat/chat-header";
 import ChatArea from "../chat/chat-area";
 import PromptInput from "../chat/prompt-input";
+import ChatEmptyHero from "../chat/chat-empty-hero";
+import NotesSidebar from "../notes/notes-sidebar";
 import ImageWorkspaceShell from "./image-workspace-shell";
 
 export default function WorkspaceShell() {
@@ -27,6 +30,8 @@ export default function WorkspaceShell() {
   } = useChatStore();
 
   const activeWorkspace = useWorkspaceStore((s) => s.activeWorkspace);
+  const notesPanelOpen = useNotesStore((s) => s.notesPanelOpen);
+  const setNotesPanelOpen = useNotesStore((s) => s.setNotesPanelOpen);
   const abortRef = useRef<AbortController | null>(null);
 
   const activeConversation = useMemo(
@@ -166,6 +171,12 @@ export default function WorkspaceShell() {
                 mode: data.mode as Message["mode"],
               });
               setStreaming(false);
+
+              // Auto-generate notes from deep mode responses
+              if (data.mode === "deep" && finalContent) {
+                const section = parseDeepModeToNotes(finalContent, assistantMessage.id, capturedConvId);
+                useNotesStore.getState().addSection(section);
+              }
             },
             onError: (error) => {
               updateLastMessageFull(capturedConvId, {
@@ -229,19 +240,35 @@ export default function WorkspaceShell() {
       <Sidebar isOpen={sidebarOpen} onToggle={toggleSidebar} />
 
       {activeWorkspace === "knowledge-chat" ? (
-        <div className="flex-1 flex flex-col min-w-0 relative">
-          <ChatHeader
-            conversationTitle={activeConversation?.title}
-            sidebarOpen={sidebarOpen}
-            onToggleSidebar={toggleSidebar}
-            onClearChat={handleClearChat}
+        <div className="flex-1 flex min-w-0">
+          <div className="flex-1 flex flex-col min-w-0 relative">
+            <ChatHeader
+              conversationTitle={activeConversation?.title}
+              sidebarOpen={sidebarOpen}
+              onToggleSidebar={toggleSidebar}
+              onClearChat={handleClearChat}
+            />
+            {(activeConversation?.messages.length ?? 0) === 0 && !isStreaming ? (
+              <ChatEmptyHero
+                onSend={handleSend}
+                onSuggestionSelect={handleSuggestionSelect}
+                disabled={isStreaming}
+              />
+            ) : (
+              <>
+                <ChatArea
+                  messages={activeConversation?.messages ?? []}
+                  isStreaming={isStreaming}
+                  onSuggestionSelect={handleSuggestionSelect}
+                />
+                <PromptInput onSend={handleSend} disabled={isStreaming} />
+              </>
+            )}
+          </div>
+          <NotesSidebar
+            isOpen={notesPanelOpen}
+            onClose={() => setNotesPanelOpen(false)}
           />
-          <ChatArea
-            messages={activeConversation?.messages ?? []}
-            isStreaming={isStreaming}
-            onSuggestionSelect={handleSuggestionSelect}
-          />
-          <PromptInput onSend={handleSend} disabled={isStreaming} />
         </div>
       ) : (
         <ImageWorkspaceShell />

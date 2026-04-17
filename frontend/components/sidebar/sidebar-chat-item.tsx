@@ -19,10 +19,7 @@ function timeAgo(dateStr: string): string {
   if (hrs < 24) return `${hrs}h`;
   const days = Math.floor(hrs / 24);
   if (days < 7) return `${days}d`;
-  return new Date(dateStr).toLocaleDateString(undefined, {
-    month: "short",
-    day: "numeric",
-  });
+  return new Date(dateStr).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
 export default function SidebarChatItem({
@@ -31,30 +28,43 @@ export default function SidebarChatItem({
   onSelect,
   onDelete,
 }: SidebarChatItemProps) {
-  const lastMessage = conversation.messages[conversation.messages.length - 1];
-  const preview = lastMessage
-    ? lastMessage.content.slice(0, 50) + (lastMessage.content.length > 50 ? "..." : "")
-    : "Empty conversation";
-
   return (
     <div
       role="button"
       tabIndex={0}
       onClick={onSelect}
-      onKeyDown={(e) => { if (e.key === "Enter") onSelect(); }}
-      className={`w-full text-left px-3 py-2.5 rounded-lg group transition-colors relative cursor-pointer ${
-        isActive ? "bg-gray-100" : "hover:bg-gray-50"
-      }`}
+      onKeyDown={(e) => {
+        if (e.key === "Enter") onSelect();
+      }}
+      className="w-full text-left px-3 py-2 rounded-lg group transition-colors relative cursor-pointer"
+      style={{
+        backgroundColor: isActive ? "var(--paper-2)" : "transparent",
+        fontFamily: "var(--sans)",
+      }}
+      onMouseEnter={(e) => {
+        if (!isActive) e.currentTarget.style.backgroundColor = "var(--paper-2)";
+      }}
+      onMouseLeave={(e) => {
+        if (!isActive) e.currentTarget.style.backgroundColor = "transparent";
+      }}
     >
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-gray-800 truncate">
-            {conversation.title}
-          </p>
-          <p className="text-xs text-gray-400 truncate mt-0.5">{preview}</p>
-        </div>
+      <div className="flex items-center justify-between gap-2">
+        <p
+          className="truncate flex-1"
+          style={{
+            fontSize: 13,
+            fontWeight: isActive ? 600 : 500,
+            color: isActive ? "var(--ink)" : "var(--ink-2)",
+            letterSpacing: "-0.005em",
+          }}
+        >
+          {conversation.title}
+        </p>
         <div className="flex items-center gap-1 flex-shrink-0">
-          <span className="text-xs text-gray-400 group-hover:hidden">
+          <span
+            className="group-hover:hidden"
+            style={{ fontSize: 10.5, color: "var(--ink-3)", fontFamily: "var(--mono)", letterSpacing: "0.04em" }}
+          >
             {timeAgo(conversation.updatedAt)}
           </span>
           <button
@@ -62,9 +72,18 @@ export default function SidebarChatItem({
               e.stopPropagation();
               onDelete();
             }}
-            className="hidden group-hover:flex items-center justify-center w-6 h-6 rounded-md text-gray-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+            className="hidden group-hover:flex items-center justify-center w-6 h-6 rounded-md transition-colors"
+            style={{ color: "var(--ink-3)" }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = "var(--accent)";
+              e.currentTarget.style.backgroundColor = "var(--accent-soft)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = "var(--ink-3)";
+              e.currentTarget.style.backgroundColor = "transparent";
+            }}
           >
-            <Trash2 size={14} />
+            <Trash2 size={13} />
           </button>
         </div>
       </div>

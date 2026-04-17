@@ -223,7 +223,46 @@ export const chat = {
     ),
 };
 
+// ── Design (Generation & Editing) ────────────────────────────────────────
+
+export const design = {
+  generate: (token: string, projectId: string, body: { prompt: string; room_type: string; style: string; dimensions?: { length: number; width: number } }) =>
+    request<{ project_id: string; version: number; graph_data: unknown; estimate: unknown; status: string }>(
+      `/projects/${projectId}/generate`, "POST", body, token,
+    ),
+
+  editObject: (token: string, projectId: string, body: { object_id: string; prompt: string }) =>
+    request<{ project_id: string; version: number; graph_data: unknown; estimate: unknown; status: string }>(
+      `/projects/${projectId}/edit`, "POST", body, token,
+    ),
+
+  switchTheme: (token: string, projectId: string, body: { new_style: string; preserve_layout: boolean }) =>
+    request<{ project_id: string; version: number; graph_data: unknown; estimate: unknown; status: string }>(
+      `/projects/${projectId}/theme`, "POST", body, token,
+    ),
+
+  getFloorPlan: (token: string, projectId: string, version?: number) =>
+    request<{ drawing_type: string; floor_plan: unknown; drawing: unknown; preview_svg: string; summary: string }>(
+      `/projects/${projectId}/drawings/floor-plan${version ? `?version=${version}` : ""}`, "GET", undefined, token,
+    ),
+
+  getLatest: (token: string, projectId: string) =>
+    request<{ version: number; graph_data: unknown }>(
+      `/projects/${projectId}/latest`, "GET", undefined, token,
+    ),
+
+  updatePosition: (token: string, projectId: string, objectId: string, position: { x: number; y: number; z: number }) =>
+    request<{ status: string }>(
+      `/projects/${projectId}/objects/${objectId}/position`, "PATCH", { position }, token,
+    ),
+
+  updateMaterial: (token: string, projectId: string, objectId: string, material: string, color: string) =>
+    request<{ status: string }>(
+      `/projects/${projectId}/objects/${objectId}/material`, "PATCH", { material, color }, token,
+    ),
+};
+
 // ── Default export ─────────────────────────────────────────────────────────
 
-const api = { auth, architecture, chat };
+const api = { auth, architecture, chat, design };
 export default api;

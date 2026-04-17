@@ -121,3 +121,137 @@ export interface ImageGeneration {
   images: GeneratedImage[];
   createdAt: string;
 }
+
+// ── Design Graph Types (mirrors backend DesignObjectSchema) ───────────────
+
+export interface Vec3 {
+  x: number;
+  y: number;
+  z: number;
+}
+
+export interface Dimensions3D {
+  length: number;
+  width: number;
+  height: number;
+}
+
+export interface DesignObject {
+  id: string;
+  type: string;
+  name: string;
+  position: Vec3;
+  rotation: Vec3;
+  dimensions: Dimensions3D;
+  material: string;
+  color: string;
+}
+
+export interface MaterialEntry {
+  id: string;
+  name: string;
+  category: string;
+  color: string;
+}
+
+export interface LightEntry {
+  id: string;
+  type: "ambient" | "point" | "directional" | "spot";
+  position: Vec3;
+  intensity: number;
+  color: string;
+}
+
+export interface DesignRoom {
+  type: string;
+  dimensions: {
+    length: number;
+    width: number;
+    height: number;
+    unit?: string;
+  };
+}
+
+export interface DesignStyle {
+  primary: string;
+  secondary: string[];
+  color_palette?: string[];
+  materials?: string[];
+}
+
+export interface DesignGraph {
+  room: DesignRoom;
+  style: DesignStyle;
+  objects: DesignObject[];
+  materials: MaterialEntry[];
+  lighting: LightEntry[];
+  render_prompt_2d?: string;
+  render_prompt_3d?: string;
+}
+
+export interface LayoutPreset {
+  id: string;
+  label: string;
+  roomType: string;
+  sqftRange: string;
+  rooms: string;
+  description: string;
+  dims: { length: number; width: number };
+}
+
+export interface GenerationResult {
+  project_id: string;
+  version: number;
+  graph_data: DesignGraph;
+  estimate: Record<string, unknown> | null;
+  status: string;
+}
+
+export interface FloorPlanResult {
+  drawing_type: string;
+  floor_plan: Record<string, unknown>;
+  drawing: Record<string, unknown>;
+  preview_svg: string;
+  summary: string;
+}
+
+// ── Notes Types (Block-based Notebook) ────────────────────────────────────
+
+export type NoteBlockType =
+  | "heading-1"
+  | "heading-2"
+  | "heading-3"
+  | "paragraph"
+  | "bullet-list"
+  | "numbered-list"
+  | "toggle"
+  | "callout"
+  | "divider";
+
+export type CalloutVariant = "info" | "tip" | "warning" | "important";
+
+export interface NoteBlock {
+  id: string;
+  type: NoteBlockType;
+  content: string;
+  children?: NoteBlock[];
+  collapsed?: boolean;
+  calloutVariant?: CalloutVariant;
+  indent: number;
+  createdAt: string;
+}
+
+export interface NoteSection {
+  id: string;
+  title: string;
+  date: string;
+  sourceMessageId: string;
+  sourceConversationId: string;
+  blocks: NoteBlock[];
+}
+
+export interface Notebook {
+  id: string;
+  sections: NoteSection[];
+  updatedAt: string;
+}

@@ -7,11 +7,13 @@ import {
   PanelLeftClose,
   Sparkles,
   RefreshCw,
-  Send,
 } from "lucide-react";
-import { useImageGenStore, useChatStore } from "@/lib/store";
-import type { GeneratedImage, ImageGeneration } from "@/lib/types";
+import { useImageGenStore, useChatStore, useDesignStore } from "@/lib/store";
+import { design as designApi } from "@/lib/api-client";
+import { MOCK_LIVING_ROOM, MOCK_2BHK, getMockGraphForPreset } from "@/lib/mock-design-graph";
+import type { DesignGraph } from "@/lib/types";
 import OutputCanvas from "../image/output-canvas";
+import ImageEmptyHero from "../image/image-empty-hero";
 import RightControlSidebar from "../controls/right-control-sidebar";
 import EstimationTerminalShell from "../terminal/estimation-terminal-shell";
 
@@ -20,8 +22,6 @@ export default function ImageWorkspaceShell() {
     prompt,
     theme,
     drawingType,
-    ratio,
-    quality,
     rightSidebarOpen,
     terminalOpen,
     isGenerating,
@@ -29,9 +29,9 @@ export default function ImageWorkspaceShell() {
     setRightSidebarOpen,
     toggleTerminal,
     setIsGenerating,
-    addGeneration,
   } = useImageGenStore();
   const { sidebarOpen, toggleSidebar } = useChatStore();
+  const { setActiveGraph, setLoading, activeGraph } = useDesignStore();
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -44,39 +44,37 @@ export default function ImageWorkspaceShell() {
 
   useEffect(() => { resize(); }, [prompt, resize]);
 
-  const handleGenerate = useCallback(() => {
+  const handleGenerate = useCallback(async () => {
     if (!prompt.trim() || isGenerating) return;
 
     setIsGenerating(true);
+    setLoading(true);
 
-    const images: GeneratedImage[] = Array.from({ length: 4 }, () => ({
-      id: crypto.randomUUID(),
-      prompt,
-      theme,
-      drawingType,
-      ratio,
-      quality,
-      status: "completed" as const,
-      createdAt: new Date().toISOString(),
-    }));
-
-    const generation: ImageGeneration = {
-      id: crypto.randomUUID(),
-      prompt,
-      negativePrompt: "",
-      theme,
-      drawingType,
-      ratio,
-      quality,
-      images,
-      createdAt: new Date().toISOString(),
-    };
-
-    setTimeout(() => {
-      addGeneration(generation);
+    try {
+      // Try backend first
+      const result = await designApi.generate("", "demo", {
+        prompt,
+        room_type: drawingType === "floor-plan" ? "living_room" : "living_room",
+        style: theme,
+      });
+      if (result?.graph_data) {
+        setActiveGraph(result.graph_data as unknown as DesignGraph);
+      } else {
+        throw new Error("No graph data");
+      }
+    } catch {
+      // Fallback to mock data
+      const lowerPrompt = prompt.toLowerCase();
+      if (lowerPrompt.includes("2bhk") || lowerPrompt.includes("2 bhk") || lowerPrompt.includes("2-bhk")) {
+        setActiveGraph(MOCK_2BHK);
+      } else {
+        setActiveGraph(MOCK_LIVING_ROOM);
+      }
+    } finally {
       setIsGenerating(false);
-    }, 2000);
-  }, [prompt, theme, drawingType, ratio, quality, isGenerating, setIsGenerating, addGeneration]);
+      setLoading(false);
+    }
+  }, [prompt, theme, drawingType, isGenerating, setIsGenerating, setActiveGraph, setLoading]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
@@ -88,27 +86,56 @@ export default function ImageWorkspaceShell() {
   return (
     <div className="flex-1 flex flex-col min-w-0">
       {/* Header */}
-      <header className="h-14 flex items-center justify-between px-4 border-b border-gray-100 bg-white flex-shrink-0">
-        <div className="flex items-center gap-3">
+      <header
+        className="h-12 flex items-center justify-between px-3"
+        style={{
+          backgroundColor: "var(--paper)",
+          borderBottom: "1px solid var(--rule)",
+          fontFamily: "var(--sans)",
+          flexShrink: 0,
+        }}
+      >
+        <div className="flex items-center gap-2 min-w-0">
           <button
             onClick={toggleSidebar}
-            className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-50 transition-colors"
+            className="p-1.5 rounded-md transition-colors"
+            style={{ color: "var(--ink-3)" }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.color = "var(--ink)";
+              e.currentTarget.style.backgroundColor = "var(--paper-2)";
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.color = "var(--ink-3)";
+              e.currentTarget.style.backgroundColor = "transparent";
+            }}
           >
-            {sidebarOpen ? <PanelLeftClose size={18} /> : <PanelLeftOpen size={18} />}
+            {sidebarOpen ? <PanelLeftClose size={16} /> : <PanelLeftOpen size={16} />}
           </button>
-          <span className="text-sm font-semibold tracking-wide text-gray-800">
-            KATHA<span className="text-gray-400">.AI</span>
+          <span className="mx-1" style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--mono)", letterSpacing: "0.1em" }}>
+            /
           </span>
-          <span className="text-xs bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full font-medium">
-            Image Studio
+          <span style={{ fontSize: 13, color: "var(--ink-2)", fontWeight: 500, letterSpacing: "-0.005em" }}>
+            Studio
           </span>
+          {activeGraph && (
+            <span
+              className="ml-2"
+              style={{ fontSize: 11, color: "var(--ink-3)", fontFamily: "var(--mono)", letterSpacing: "0.04em" }}
+            >
+              {activeGraph.room.type.replace(/_/g, " ")} · {activeGraph.room.dimensions.length}'×{activeGraph.room.dimensions.width}'
+            </span>
+          )}
         </div>
         {!rightSidebarOpen && (
           <button
             onClick={() => setRightSidebarOpen(true)}
-            className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-50 transition-colors"
+            className="inline-flex items-center gap-1.5 px-2.5 h-8 rounded-md transition-colors"
+            style={{ fontSize: 12, color: "var(--ink-2)", fontWeight: 500 }}
+            onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--paper-2)")}
+            onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
           >
-            <PanelRightOpen size={18} />
+            <PanelRightOpen size={14} />
+            Parameters
           </button>
         )}
       </header>
@@ -117,40 +144,62 @@ export default function ImageWorkspaceShell() {
       <div className="flex-1 flex min-h-0">
         {/* Center: Prompt + Canvas */}
         <div className="flex-1 flex flex-col min-w-0">
-          {/* Prompt input bar */}
-          <div className="border-b border-gray-100 bg-white px-4 py-3">
-            <div className="mx-auto max-w-4xl">
-              <div className="relative flex items-end gap-2">
-                <textarea
-                  ref={textareaRef}
-                  value={prompt}
-                  onChange={(e) => setPrompt(e.target.value)}
-                  onKeyDown={handleKeyDown}
-                  placeholder="Describe the architecture visual you want to generate..."
-                  rows={1}
-                  className="flex-1 resize-none rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 pr-12 text-[0.938rem] text-gray-900 placeholder:text-gray-400 focus:border-gray-300 focus:bg-white focus:outline-none focus:ring-1 focus:ring-gray-200 transition-colors"
-                />
-                <button
-                  onClick={handleGenerate}
-                  disabled={!prompt.trim() || isGenerating}
-                  className="flex-shrink-0 flex items-center gap-2 px-5 py-3 bg-slate-900 text-white rounded-2xl text-sm font-medium hover:bg-slate-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                >
-                  {isGenerating ? (
-                    <RefreshCw size={16} className="animate-spin" />
-                  ) : (
-                    <Sparkles size={16} />
-                  )}
-                  {isGenerating ? "Generating" : "Generate"}
-                </button>
+          {!activeGraph && !isGenerating ? (
+            <ImageEmptyHero onGenerate={handleGenerate} disabled={isGenerating} />
+          ) : (
+            <>
+              {/* Prompt input bar */}
+              <div className="px-4 py-3" style={{ backgroundColor: "var(--paper)", borderBottom: "1px solid var(--rule)" }}>
+                <div className="mx-auto" style={{ maxWidth: 860 }}>
+                  <div
+                    className="relative flex items-center gap-2 rounded-[18px] bg-white px-4 py-2"
+                    style={{
+                      border: "1px solid var(--rule)",
+                      boxShadow: "0 1px 2px rgba(17,17,16,0.04)",
+                    }}
+                  >
+                    <textarea
+                      ref={textareaRef}
+                      value={prompt}
+                      onChange={(e) => setPrompt(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      placeholder="Refine the design — add courtyard, change facade, adjust layout…"
+                      rows={1}
+                      className="flex-1 resize-none bg-transparent py-1.5 focus:outline-none"
+                      style={{
+                        fontFamily: "var(--sans)",
+                        fontSize: 14.5,
+                        lineHeight: 1.55,
+                        color: "var(--ink)",
+                        letterSpacing: "-0.005em",
+                      }}
+                    />
+                    <button
+                      onClick={handleGenerate}
+                      disabled={!prompt.trim() || isGenerating}
+                      className="flex-shrink-0 inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                      style={{
+                        backgroundColor: "var(--ink)",
+                        color: "var(--paper)",
+                        fontFamily: "var(--sans)",
+                        fontSize: 12.5,
+                        fontWeight: 500,
+                      }}
+                    >
+                      {isGenerating ? <RefreshCw size={13} className="animate-spin" /> : <Sparkles size={13} />}
+                      {isGenerating ? "Drafting" : "Generate"}
+                    </button>
+                  </div>
+                </div>
               </div>
-            </div>
-          </div>
 
-          {/* Output canvas */}
-          <OutputCanvas />
+              {/* Output canvas */}
+              <OutputCanvas />
 
-          {/* Bottom terminal */}
-          <EstimationTerminalShell isOpen={terminalOpen} onToggle={toggleTerminal} />
+              {/* Bottom terminal */}
+              <EstimationTerminalShell isOpen={terminalOpen} onToggle={toggleTerminal} />
+            </>
+          )}
         </div>
 
         {/* Right sidebar */}

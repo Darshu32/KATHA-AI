@@ -15,6 +15,12 @@ import type {
   ImageQuality,
   ImageGeneration,
   GeneratedImage,
+  DesignGraph,
+  DesignObject,
+  Vec3,
+  NoteBlock,
+  NoteSection,
+  Notebook,
 } from "./types";
 
 // ── Auth Store ──────────────────────────────────────────────────────────────
@@ -235,7 +241,7 @@ export const useImageGenStore = create<ImageGenState>()(
       styleEnhance: true,
       generations: [],
       isGenerating: false,
-      rightSidebarOpen: true,
+      rightSidebarOpen: false,
       terminalOpen: false,
       viewMode: "2d",
 
@@ -264,6 +270,266 @@ export const useImageGenStore = create<ImageGenState>()(
         generations: state.generations,
         rightSidebarOpen: state.rightSidebarOpen,
         viewMode: state.viewMode,
+      }),
+    },
+  ),
+);
+
+// ── Design Store ──────────────────────────────────────────────────────────
+
+interface LayerVisibility {
+  furniture: boolean;
+  dimensions: boolean;
+  grid: boolean;
+  wireframe: boolean;
+  materials: boolean;
+  lighting: boolean;
+}
+
+interface DesignState {
+  activeGraph: DesignGraph | null;
+  selectedObjectId: string | null;
+  hoveredObjectId: string | null;
+  isDragging: boolean;
+  dragObjectId: string | null;
+  undoStack: DesignGraph[];
+  layerVisibility: LayerVisibility;
+  isLoading: boolean;
+  showDimensions: boolean;
+  showGrid: boolean;
+  snapToGrid: boolean;
+  gridUnit: number;
+  zoom: number;
+  panOffset: { x: number; y: number };
+
+  setActiveGraph: (g: DesignGraph) => void;
+  selectObject: (id: string | null) => void;
+  hoverObject: (id: string | null) => void;
+  updateObjectPosition: (id: string, pos: Vec3) => void;
+  updateObjectDimensions: (id: string, dims: { length: number; width: number; height: number }) => void;
+  updateObjectMaterial: (id: string, materialId: string, color: string) => void;
+  setDragging: (dragging: boolean, objectId?: string | null) => void;
+  pushUndo: () => void;
+  undo: () => void;
+  setLayerVisibility: (layer: keyof LayerVisibility, visible: boolean) => void;
+  setLoading: (v: boolean) => void;
+  setShowDimensions: (v: boolean) => void;
+  setShowGrid: (v: boolean) => void;
+  setSnapToGrid: (v: boolean) => void;
+  setZoom: (v: number) => void;
+  setPanOffset: (offset: { x: number; y: number }) => void;
+}
+
+export const useDesignStore = create<DesignState>()((set, get) => ({
+  activeGraph: null,
+  selectedObjectId: null,
+  hoveredObjectId: null,
+  isDragging: false,
+  dragObjectId: null,
+  undoStack: [],
+  layerVisibility: {
+    furniture: true,
+    dimensions: true,
+    grid: true,
+    wireframe: false,
+    materials: true,
+    lighting: true,
+  },
+  isLoading: false,
+  showDimensions: true,
+  showGrid: true,
+  snapToGrid: true,
+  gridUnit: 0.5,
+  zoom: 1,
+  panOffset: { x: 0, y: 0 },
+
+  setActiveGraph: (g) => set({ activeGraph: g, selectedObjectId: null, undoStack: [] }),
+
+  selectObject: (id) => set({ selectedObjectId: id }),
+
+  hoverObject: (id) => set({ hoveredObjectId: id }),
+
+  updateObjectPosition: (id, pos) =>
+    set((state) => {
+      if (!state.activeGraph) return state;
+      const objects = state.activeGraph.objects.map((obj) =>
+        obj.id === id ? { ...obj, position: pos } : obj,
+      );
+      return { activeGraph: { ...state.activeGraph, objects } };
+    }),
+
+  updateObjectDimensions: (id, dims) =>
+    set((state) => {
+      if (!state.activeGraph) return state;
+      const objects = state.activeGraph.objects.map((obj) =>
+        obj.id === id ? { ...obj, dimensions: dims } : obj,
+      );
+      return { activeGraph: { ...state.activeGraph, objects } };
+    }),
+
+  updateObjectMaterial: (id, materialId, color) =>
+    set((state) => {
+      if (!state.activeGraph) return state;
+      const objects = state.activeGraph.objects.map((obj) =>
+        obj.id === id ? { ...obj, material: materialId, color } : obj,
+      );
+      return { activeGraph: { ...state.activeGraph, objects } };
+    }),
+
+  setDragging: (dragging, objectId) =>
+    set({ isDragging: dragging, dragObjectId: objectId ?? null }),
+
+  pushUndo: () =>
+    set((state) => {
+      if (!state.activeGraph) return state;
+      return { undoStack: [...state.undoStack.slice(-19), state.activeGraph] };
+    }),
+
+  undo: () =>
+    set((state) => {
+      if (state.undoStack.length === 0) return state;
+      const prev = state.undoStack[state.undoStack.length - 1];
+      return {
+        activeGraph: prev,
+        undoStack: state.undoStack.slice(0, -1),
+      };
+    }),
+
+  setLayerVisibility: (layer, visible) =>
+    set((state) => ({
+      layerVisibility: { ...state.layerVisibility, [layer]: visible },
+    })),
+
+  setLoading: (v) => set({ isLoading: v }),
+  setShowDimensions: (v) => set({ showDimensions: v }),
+  setShowGrid: (v) => set({ showGrid: v }),
+  setSnapToGrid: (v) => set({ snapToGrid: v }),
+  setZoom: (v) => set({ zoom: Math.max(0.25, Math.min(4, v)) }),
+  setPanOffset: (offset) => set({ panOffset: offset }),
+}));
+
+// ── Notes Store ───────────────────────────────────────────────────────────
+
+interface NotesState {
+  notebook: Notebook;
+  notesPanelOpen: boolean;
+  activeBlockId: string | null;
+  searchQuery: string;
+
+  toggleNotesPanel: () => void;
+  setNotesPanelOpen: (v: boolean) => void;
+
+  addSection: (section: NoteSection) => void;
+  deleteSection: (sectionId: string) => void;
+
+  updateBlock: (sectionId: string, blockId: string, updates: Partial<NoteBlock>) => void;
+  addBlock: (sectionId: string, afterBlockId: string | null, block: NoteBlock) => void;
+  deleteBlock: (sectionId: string, blockId: string) => void;
+  moveBlock: (sectionId: string, fromIndex: number, toIndex: number) => void;
+
+  setActiveBlock: (blockId: string | null) => void;
+  setSearchQuery: (q: string) => void;
+}
+
+export const useNotesStore = create<NotesState>()(
+  persist(
+    (set) => ({
+      notebook: { id: "default", sections: [], updatedAt: new Date().toISOString() },
+      notesPanelOpen: false,
+      activeBlockId: null,
+      searchQuery: "",
+
+      toggleNotesPanel: () => set((s) => ({ notesPanelOpen: !s.notesPanelOpen })),
+      setNotesPanelOpen: (v) => set({ notesPanelOpen: v }),
+
+      addSection: (section) =>
+        set((s) => ({
+          notebook: {
+            ...s.notebook,
+            sections: [section, ...s.notebook.sections].slice(0, 50),
+            updatedAt: new Date().toISOString(),
+          },
+        })),
+
+      deleteSection: (sectionId) =>
+        set((s) => ({
+          notebook: {
+            ...s.notebook,
+            sections: s.notebook.sections.filter((sec) => sec.id !== sectionId),
+            updatedAt: new Date().toISOString(),
+          },
+        })),
+
+      updateBlock: (sectionId, blockId, updates) =>
+        set((s) => ({
+          notebook: {
+            ...s.notebook,
+            sections: s.notebook.sections.map((sec) =>
+              sec.id !== sectionId
+                ? sec
+                : {
+                    ...sec,
+                    blocks: sec.blocks.map((b) =>
+                      b.id !== blockId ? b : { ...b, ...updates },
+                    ),
+                  },
+            ),
+            updatedAt: new Date().toISOString(),
+          },
+        })),
+
+      addBlock: (sectionId, afterBlockId, block) =>
+        set((s) => ({
+          notebook: {
+            ...s.notebook,
+            sections: s.notebook.sections.map((sec) => {
+              if (sec.id !== sectionId) return sec;
+              if (!afterBlockId) return { ...sec, blocks: [block, ...sec.blocks] };
+              const idx = sec.blocks.findIndex((b) => b.id === afterBlockId);
+              const blocks = [...sec.blocks];
+              blocks.splice(idx + 1, 0, block);
+              return { ...sec, blocks };
+            }),
+            updatedAt: new Date().toISOString(),
+          },
+        })),
+
+      deleteBlock: (sectionId, blockId) =>
+        set((s) => ({
+          notebook: {
+            ...s.notebook,
+            sections: s.notebook.sections.map((sec) =>
+              sec.id !== sectionId
+                ? sec
+                : { ...sec, blocks: sec.blocks.filter((b) => b.id !== blockId) },
+            ),
+            updatedAt: new Date().toISOString(),
+          },
+        })),
+
+      moveBlock: (sectionId, fromIndex, toIndex) =>
+        set((s) => ({
+          notebook: {
+            ...s.notebook,
+            sections: s.notebook.sections.map((sec) => {
+              if (sec.id !== sectionId) return sec;
+              const blocks = [...sec.blocks];
+              const [moved] = blocks.splice(fromIndex, 1);
+              blocks.splice(toIndex, 0, moved);
+              return { ...sec, blocks };
+            }),
+            updatedAt: new Date().toISOString(),
+          },
+        })),
+
+      setActiveBlock: (blockId) => set({ activeBlockId: blockId }),
+      setSearchQuery: (q) => set({ searchQuery: q }),
+    }),
+    {
+      name: "katha-notes",
+      partialize: (s) => ({
+        notebook: s.notebook,
+        notesPanelOpen: s.notesPanelOpen,
       }),
     },
   ),

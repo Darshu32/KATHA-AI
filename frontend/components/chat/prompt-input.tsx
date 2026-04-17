@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useRef, useCallback, useEffect } from "react";
-import { Send, Paperclip, Mic, ImageIcon } from "lucide-react";
+import { ArrowUp, Paperclip, Mic, ImageIcon } from "lucide-react";
 
 interface PromptInputProps {
   onSend: (text: string) => void;
@@ -12,7 +12,7 @@ interface PromptInputProps {
 export default function PromptInput({
   onSend,
   disabled = false,
-  placeholder = "Ask about architecture concepts, materials, planning, facade ideas...",
+  placeholder = "Ask about materials, planning, facades…",
 }: PromptInputProps) {
   const [value, setValue] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -44,9 +44,16 @@ export default function PromptInput({
   };
 
   return (
-    <div className="border-t border-gray-100 bg-white px-4 py-4">
-      <div className="mx-auto max-w-chat">
-        <div className="relative">
+    <div className="px-4 pb-5 pt-3" style={{ backgroundColor: "var(--paper)" }}>
+      <div className="mx-auto" style={{ maxWidth: 760 }}>
+        <div
+          className="relative rounded-[22px] bg-white"
+          style={{
+            border: "1px solid var(--rule)",
+            boxShadow:
+              "0 1px 0 rgba(255,255,255,0.6) inset, 0 1px 2px rgba(17,17,16,0.04), 0 12px 28px -20px rgba(17,17,16,0.2)",
+          }}
+        >
           <textarea
             ref={textareaRef}
             value={value}
@@ -55,42 +62,59 @@ export default function PromptInput({
             placeholder={placeholder}
             disabled={disabled}
             rows={1}
-            className="w-full resize-none rounded-2xl border border-gray-200 bg-gray-50 px-4 py-3 pr-12 text-[0.938rem] text-gray-900 placeholder:text-gray-400 focus:border-gray-300 focus:bg-white focus:outline-none focus:ring-1 focus:ring-gray-200 transition-colors disabled:opacity-50"
+            className="w-full resize-none bg-transparent px-5 pt-4 pb-2 focus:outline-none disabled:opacity-60"
+            style={{
+              fontFamily: "var(--sans)",
+              fontSize: 15,
+              lineHeight: 1.55,
+              color: "var(--ink)",
+              letterSpacing: "-0.005em",
+            }}
           />
-          <button
-            onClick={handleSend}
-            disabled={!value.trim() || disabled}
-            className="absolute right-2 bottom-2 w-8 h-8 flex items-center justify-center rounded-xl bg-slate-900 text-white hover:bg-slate-800 disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-          >
-            <Send size={15} />
-          </button>
-        </div>
 
-        {/* Action buttons */}
-        <div className="flex items-center gap-1 mt-2 px-1">
-          <button
-            className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-50 transition-colors"
-            title="Attach file"
-          >
-            <Paperclip size={16} />
-          </button>
-          <button
-            className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-50 transition-colors"
-            title="Image reference"
-          >
-            <ImageIcon size={16} />
-          </button>
-          <button
-            className="p-2 text-gray-400 hover:text-gray-600 rounded-lg hover:bg-gray-50 transition-colors"
-            title="Voice input"
-          >
-            <Mic size={16} />
-          </button>
-          <span className="ml-auto text-xs text-gray-300">
-            Shift+Enter for new line
-          </span>
+          <div className="flex items-center justify-between px-3 pb-3">
+            <div className="flex items-center gap-0.5">
+              <IconBtn label="Attach"><Paperclip size={14} /></IconBtn>
+              <IconBtn label="Image reference"><ImageIcon size={14} /></IconBtn>
+              <IconBtn label="Voice"><Mic size={14} /></IconBtn>
+            </div>
+
+            <button
+              onClick={handleSend}
+              disabled={!value.trim() || disabled}
+              className="w-8 h-8 rounded-full flex items-center justify-center transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+              style={{
+                backgroundColor: value.trim() && !disabled ? "var(--ink)" : "var(--paper-2)",
+                color: value.trim() && !disabled ? "var(--paper)" : "var(--ink-3)",
+              }}
+              aria-label="Send"
+            >
+              <ArrowUp size={15} strokeWidth={2.4} />
+            </button>
+          </div>
         </div>
       </div>
     </div>
+  );
+}
+
+function IconBtn({ children, label }: { children: React.ReactNode; label: string }) {
+  return (
+    <button
+      title={label}
+      aria-label={label}
+      className="w-8 h-8 rounded-full flex items-center justify-center transition-colors"
+      style={{ color: "var(--ink-3)" }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.color = "var(--ink)";
+        e.currentTarget.style.backgroundColor = "var(--paper-2)";
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.color = "var(--ink-3)";
+        e.currentTarget.style.backgroundColor = "transparent";
+      }}
+    >
+      {children}
+    </button>
   );
 }
