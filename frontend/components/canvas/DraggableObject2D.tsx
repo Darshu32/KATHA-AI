@@ -9,6 +9,7 @@ interface Props {
   scale: number;
   roomLength: number;
   roomWidth: number;
+  wireframe?: boolean;
 }
 
 const TYPE_ICONS: Record<string, string> = {
@@ -28,7 +29,7 @@ const TYPE_ICONS: Record<string, string> = {
   wall_art: "🖼️",
 };
 
-export default function DraggableObject2D({ object, scale, roomLength, roomWidth }: Props) {
+export default function DraggableObject2D({ object, scale, roomLength, roomWidth, wireframe }: Props) {
   const {
     selectedObjectId,
     hoveredObjectId,
@@ -129,10 +130,10 @@ export default function DraggableObject2D({ object, scale, roomLength, roomWidth
         height={h}
         rx={2}
         ry={2}
-        fill={object.color}
-        fillOpacity={0.6}
-        stroke={isSelected ? "#3b82f6" : isHovered ? "#6b7280" : "#9ca3af"}
-        strokeWidth={isSelected ? 2 : 1}
+        fill={wireframe ? "none" : object.color}
+        fillOpacity={wireframe ? 0 : 0.6}
+        stroke={isSelected ? "#3b82f6" : isHovered ? "#6b7280" : wireframe ? "#374151" : "#9ca3af"}
+        strokeWidth={isSelected ? 2 : wireframe ? 1.5 : 1}
         strokeDasharray={isSelected ? "4 2" : "none"}
       />
       <text

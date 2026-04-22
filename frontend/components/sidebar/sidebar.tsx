@@ -106,58 +106,27 @@ export default function Sidebar({ isOpen }: SidebarProps) {
             </div>
           </div>
 
-          {/* Workspace pill toggle */}
-          <div className="px-4 pb-3">
-            <div
-              className="flex items-center p-[3px] rounded-full"
-              style={{ backgroundColor: "var(--paper-2)", border: "1px solid var(--rule)" }}
-            >
-              {WORKSPACES.map((ws) => {
-                const Icon = ws.icon;
-                const active = activeWorkspace === ws.id;
-                return (
-                  <button
-                    key={ws.id}
-                    onClick={() => setActiveWorkspace(ws.id)}
-                    className="flex-1 inline-flex items-center justify-center gap-1.5 py-1.5 rounded-full transition-all"
-                    style={{
-                      backgroundColor: active ? "#fff" : "transparent",
-                      color: active ? "var(--ink)" : "var(--ink-3)",
-                      fontSize: 12,
-                      fontWeight: active ? 600 : 500,
-                      boxShadow: active ? "0 1px 2px rgba(17,17,16,0.08)" : "none",
-                    }}
-                  >
-                    <Icon size={12.5} />
-                    {ws.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
           {/* New chat + search */}
-          <div className="px-4 space-y-2">
+          <div className="px-3 space-y-1">
             <button
               onClick={() => createConversation()}
-              className="w-full flex items-center gap-2 px-3 py-2.5 rounded-xl transition-colors"
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors"
               style={{
-                backgroundColor: "var(--ink)",
-                color: "var(--paper)",
+                backgroundColor: "transparent",
+                border: "1px solid var(--rule)",
+                color: "var(--ink)",
                 fontSize: 13,
                 fontWeight: 500,
                 letterSpacing: "-0.005em",
               }}
+              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--paper-2)")}
+              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
             >
-              <Plus size={14} strokeWidth={2.4} />
+              <Plus size={14} strokeWidth={2.2} />
               New chat
               <span
-                className="ml-auto px-1.5 py-0.5 rounded border text-[9px] tracking-widest"
-                style={{
-                  borderColor: "rgba(247,244,237,0.3)",
-                  color: "rgba(247,244,237,0.6)",
-                  fontFamily: "var(--mono)",
-                }}
+                className="ml-auto px-1.5 py-0.5 rounded text-[10px] tracking-wider"
+                style={{ color: "var(--ink-3)", fontFamily: "var(--mono)" }}
               >
                 ⌘K
               </span>
@@ -165,7 +134,7 @@ export default function Sidebar({ isOpen }: SidebarProps) {
 
             <div className="relative">
               <Search
-                size={13}
+                size={14}
                 className="absolute left-3 top-1/2 -translate-y-1/2"
                 style={{ color: "var(--ink-3)" }}
               />
@@ -173,19 +142,51 @@ export default function Sidebar({ isOpen }: SidebarProps) {
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search chats"
-                className="w-full rounded-lg pl-8 pr-3 py-2 focus:outline-none transition-colors"
+                placeholder="Search"
+                className="w-full rounded-lg pl-9 pr-3 py-2 focus:outline-none transition-colors"
                 style={{
                   backgroundColor: "transparent",
-                  border: "1px solid var(--rule)",
+                  border: "1px solid transparent",
                   fontSize: 13,
                   color: "var(--ink)",
                   fontFamily: "var(--sans)",
                 }}
-                onFocus={(e) => (e.currentTarget.style.borderColor = "var(--ink-2)")}
-                onBlur={(e) => (e.currentTarget.style.borderColor = "var(--rule)")}
+                onFocus={(e) => (e.currentTarget.style.borderColor = "var(--rule)")}
+                onBlur={(e) => (e.currentTarget.style.borderColor = "transparent")}
+                onMouseEnter={(e) => {
+                  if (document.activeElement !== e.currentTarget)
+                    e.currentTarget.style.backgroundColor = "var(--paper-2)";
+                }}
+                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
               />
             </div>
+
+            {WORKSPACES.map((ws) => {
+              const Icon = ws.icon;
+              const active = activeWorkspace === ws.id;
+              return (
+                <button
+                  key={ws.id}
+                  onClick={() => setActiveWorkspace(ws.id)}
+                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-colors"
+                  style={{
+                    backgroundColor: active ? "var(--paper-2)" : "transparent",
+                    color: "var(--ink)",
+                    fontSize: 13,
+                    fontWeight: active ? 600 : 500,
+                  }}
+                  onMouseEnter={(e) => {
+                    if (!active) e.currentTarget.style.backgroundColor = "var(--paper-2)";
+                  }}
+                  onMouseLeave={(e) => {
+                    if (!active) e.currentTarget.style.backgroundColor = "transparent";
+                  }}
+                >
+                  <Icon size={15} strokeWidth={1.8} />
+                  {ws.label}
+                </button>
+              );
+            })}
           </div>
 
           {/* Conversation list */}

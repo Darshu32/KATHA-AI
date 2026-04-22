@@ -22,6 +22,11 @@ export default function ImageWorkspaceShell() {
     prompt,
     theme,
     drawingType,
+    ratio,
+    quality,
+    camera,
+    lighting,
+    viewMode,
     rightSidebarOpen,
     terminalOpen,
     isGenerating,
@@ -31,7 +36,7 @@ export default function ImageWorkspaceShell() {
     setIsGenerating,
   } = useImageGenStore();
   const { sidebarOpen, toggleSidebar } = useChatStore();
-  const { setActiveGraph, setLoading, activeGraph } = useDesignStore();
+  const { setActiveGraph, setLoading, activeGraph, setEstimate } = useDesignStore();
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -56,9 +61,16 @@ export default function ImageWorkspaceShell() {
         prompt,
         room_type: drawingType === "floor-plan" ? "living_room" : "living_room",
         style: theme,
+        camera,
+        lighting,
+        view_mode: viewMode,
+        ratio,
+        quality,
+        drawing_type: drawingType,
       });
       if (result?.graph_data) {
         setActiveGraph(result.graph_data as unknown as DesignGraph);
+        setEstimate((result as { estimate?: unknown }).estimate as never);
       } else {
         throw new Error("No graph data");
       }
@@ -70,11 +82,12 @@ export default function ImageWorkspaceShell() {
       } else {
         setActiveGraph(MOCK_LIVING_ROOM);
       }
+      setEstimate(null);
     } finally {
       setIsGenerating(false);
       setLoading(false);
     }
-  }, [prompt, theme, drawingType, isGenerating, setIsGenerating, setActiveGraph, setLoading]);
+  }, [prompt, theme, drawingType, ratio, quality, camera, lighting, viewMode, isGenerating, setIsGenerating, setActiveGraph, setEstimate, setLoading]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {

@@ -51,6 +51,12 @@ async def generate_design(
         prompt=payload.prompt,
         room_type=payload.room_type,
         style=payload.style,
+        camera=payload.camera,
+        lighting=payload.lighting,
+        view_mode=payload.view_mode,
+        ratio=payload.ratio,
+        quality=payload.quality,
+        drawing_type=payload.drawing_type,
     )
     return result
 

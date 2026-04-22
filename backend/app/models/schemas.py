@@ -172,6 +172,12 @@ class PromptRequest(BaseModel):
     room_type: str = Field(default="living_room")
     style: str = Field(default="modern")
     dimensions: Dimensions | None = None
+    camera: str | None = None
+    lighting: str | None = None
+    view_mode: str | None = None
+    ratio: str | None = None
+    quality: str | None = None
+    drawing_type: str | None = None
 
 
 class LocalEditRequest(BaseModel):

@@ -97,6 +97,8 @@ export type DrawingType =
 
 export type ImageRatio = "1:1" | "16:9" | "4:3" | "3:4" | "9:16";
 export type ImageQuality = "draft" | "standard" | "high" | "ultra";
+export type CameraMode = "front" | "aerial" | "interior" | "eye-level";
+export type LightingMode = "daylight" | "golden-hour" | "night" | "overcast";
 
 export interface GeneratedImage {
   id: string;

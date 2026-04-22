@@ -13,6 +13,8 @@ import type {
   DrawingType,
   ImageRatio,
   ImageQuality,
+  CameraMode,
+  LightingMode,
   ImageGeneration,
   GeneratedImage,
   DesignGraph,
@@ -209,6 +211,8 @@ interface ImageGenState {
   ratio: ImageRatio;
   quality: ImageQuality;
   styleEnhance: boolean;
+  camera: CameraMode;
+  lighting: LightingMode;
   generations: ImageGeneration[];
   isGenerating: boolean;
   rightSidebarOpen: boolean;
@@ -222,6 +226,8 @@ interface ImageGenState {
   setRatio: (v: ImageRatio) => void;
   setQuality: (v: ImageQuality) => void;
   setStyleEnhance: (v: boolean) => void;
+  setCamera: (v: CameraMode) => void;
+  setLighting: (v: LightingMode) => void;
   setIsGenerating: (v: boolean) => void;
   addGeneration: (gen: ImageGeneration) => void;
   setRightSidebarOpen: (v: boolean) => void;
@@ -239,6 +245,8 @@ export const useImageGenStore = create<ImageGenState>()(
       ratio: "16:9",
       quality: "standard",
       styleEnhance: true,
+      camera: "front",
+      lighting: "daylight",
       generations: [],
       isGenerating: false,
       rightSidebarOpen: false,
@@ -252,6 +260,8 @@ export const useImageGenStore = create<ImageGenState>()(
       setRatio: (v) => set({ ratio: v }),
       setQuality: (v) => set({ quality: v }),
       setStyleEnhance: (v) => set({ styleEnhance: v }),
+      setCamera: (v) => set({ camera: v }),
+      setLighting: (v) => set({ lighting: v }),
       setIsGenerating: (v) => set({ isGenerating: v }),
       addGeneration: (gen) =>
         set((state) => ({ generations: [gen, ...state.generations] })),
@@ -267,6 +277,8 @@ export const useImageGenStore = create<ImageGenState>()(
         ratio: state.ratio,
         quality: state.quality,
         styleEnhance: state.styleEnhance,
+        camera: state.camera,
+        lighting: state.lighting,
         generations: state.generations,
         rightSidebarOpen: state.rightSidebarOpen,
         viewMode: state.viewMode,
@@ -286,8 +298,26 @@ interface LayerVisibility {
   lighting: boolean;
 }
 
+export interface BackendEstimate {
+  status?: string;
+  currency?: string;
+  estimate?: Record<string, { total_cost: number; currency: string }>;
+  breakdown?: Array<{ category: string; item: string; total: number; unit?: string; quantity?: number; unit_cost?: number }>;
+  area?: { total_sqft: number; cost_per_sqft: number };
+  region?: { city: string; price_index: number };
+  pricing_adjustments?: { tax: number; tax_amount: number; discount: number; discount_amount: number; final_total: number };
+  confidence?: { score: number; level: string; factors?: string[] };
+  line_items?: Array<{ item: string; total: number; total_low?: number; total_high?: number; category?: string }>;
+  total_low?: number;
+  total_high?: number;
+  scenarios?: Array<{ name: string; total: number; currency?: string }>;
+  assumptions?: string[];
+  [k: string]: unknown;
+}
+
 interface DesignState {
   activeGraph: DesignGraph | null;
+  estimate: BackendEstimate | null;
   selectedObjectId: string | null;
   hoveredObjectId: string | null;
   isDragging: boolean;
@@ -303,6 +333,7 @@ interface DesignState {
   panOffset: { x: number; y: number };
 
   setActiveGraph: (g: DesignGraph) => void;
+  setEstimate: (e: BackendEstimate | null) => void;
   selectObject: (id: string | null) => void;
   hoverObject: (id: string | null) => void;
   updateObjectPosition: (id: string, pos: Vec3) => void;
@@ -322,6 +353,7 @@ interface DesignState {
 
 export const useDesignStore = create<DesignState>()((set, get) => ({
   activeGraph: null,
+  estimate: null,
   selectedObjectId: null,
   hoveredObjectId: null,
   isDragging: false,
@@ -344,6 +376,8 @@ export const useDesignStore = create<DesignState>()((set, get) => ({
   panOffset: { x: 0, y: 0 },
 
   setActiveGraph: (g) => set({ activeGraph: g, selectedObjectId: null, undoStack: [] }),
+
+  setEstimate: (e) => set({ estimate: e }),
 
   selectObject: (id) => set({ selectedObjectId: id }),
 

@@ -226,7 +226,22 @@ export const chat = {
 // ── Design (Generation & Editing) ────────────────────────────────────────
 
 export const design = {
-  generate: (token: string, projectId: string, body: { prompt: string; room_type: string; style: string; dimensions?: { length: number; width: number } }) =>
+  generate: (
+    token: string,
+    projectId: string,
+    body: {
+      prompt: string;
+      room_type: string;
+      style: string;
+      dimensions?: { length: number; width: number };
+      camera?: string;
+      lighting?: string;
+      view_mode?: string;
+      ratio?: string;
+      quality?: string;
+      drawing_type?: string;
+    },
+  ) =>
     request<{ project_id: string; version: number; graph_data: unknown; estimate: unknown; status: string }>(
       `/projects/${projectId}/generate`, "POST", body, token,
     ),

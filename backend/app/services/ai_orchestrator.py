@@ -179,6 +179,12 @@ async def generate_design_graph(
     room_type: str = "living_room",
     style: str = "modern",
     project_id: str = "proj_new",
+    camera: str | None = None,
+    lighting: str | None = None,
+    view_mode: str | None = None,
+    ratio: str | None = None,
+    quality: str | None = None,
+    drawing_type: str | None = None,
 ) -> DesignGraph:
     if not _has_openai_config():
         logger.warning(
@@ -192,11 +198,55 @@ async def generate_design_graph(
         )
 
     client = _get_client()
+
+    # Resolve rich theme rules (colors, materials, lighting, dos/donts) so
+    # the LLM's output is meaningfully different per theme, not just a label.
+    from app.services import theme_engine as _theme_engine
+
+    try:
+        theme_rules = _theme_engine.process({"theme": style, "room_type": room_type})
+    except Exception:  # pragma: no cover - defensive
+        theme_rules = None
+
+    theme_block = ""
+    if theme_rules:
+        theme_block = (
+            "\nTheme rules (MUST follow):\n"
+            f"- Palette: {', '.join(theme_rules.get('palette', []))}\n"
+            f"- Materials: {', '.join(theme_rules.get('materials', []))}\n"
+            f"- Textures: {', '.join(theme_rules.get('textures', []))}\n"
+            f"- Furniture style: {theme_rules.get('furniture_style')}\n"
+            f"- Lighting: {theme_rules.get('lighting_style')}\n"
+            f"- Decor: {', '.join(theme_rules.get('decor', []))}\n"
+            f"- Do: {'; '.join(theme_rules.get('dos', []))}\n"
+            f"- Don't: {'; '.join(theme_rules.get('donts', []))}\n"
+        )
+
+    extras = []
+    if drawing_type:
+        extras.append(f"Drawing type: {drawing_type}")
+    if view_mode:
+        extras.append(f"View mode: {view_mode}")
+    if camera:
+        extras.append(f"Camera: {camera}")
+    if lighting:
+        extras.append(f"Lighting: {lighting}")
+    if ratio:
+        extras.append(f"Aspect ratio: {ratio}")
+    if quality:
+        extras.append(f"Quality: {quality}")
+    extras_block = ("\n" + "\n".join(extras)) if extras else ""
+
     user_message = (
         f"Design prompt: {prompt}\n"
         f"Room type: {room_type}\n"
-        f"Style/theme: {style}\n\n"
-        "Generate the full structured design graph JSON."
+        f"Style/theme: {style}"
+        f"{theme_block}"
+        f"{extras_block}\n\n"
+        "Generate the full structured design graph JSON. "
+        "Apply the theme rules to materials, color palette, furniture and "
+        "the render_prompt_2d and render_prompt_3d wording. "
+        "Also respect the camera, lighting, drawing type and view mode."
     )
 
     response = await client.chat.completions.create(
@@ -350,9 +400,29 @@ async def switch_theme(
 
     client = _get_client()
 
+    from app.services import theme_engine as _theme_engine
+
+    try:
+        theme_rules = _theme_engine.process({"theme": new_style})
+    except Exception:
+        theme_rules = None
+
+    theme_block = ""
+    if theme_rules:
+        theme_block = (
+            "\nTarget theme rules:\n"
+            f"- Palette: {', '.join(theme_rules.get('palette', []))}\n"
+            f"- Materials: {', '.join(theme_rules.get('materials', []))}\n"
+            f"- Textures: {', '.join(theme_rules.get('textures', []))}\n"
+            f"- Lighting: {theme_rules.get('lighting_style')}\n"
+            f"- Do: {'; '.join(theme_rules.get('dos', []))}\n"
+            f"- Don't: {'; '.join(theme_rules.get('donts', []))}\n\n"
+        )
+
     instruction = (
         f"Current design graph:\n{json.dumps(current_graph, indent=2)}\n\n"
         f"Switch the theme/style to: {new_style}\n"
+        f"{theme_block}"
     )
     if preserve_layout:
         instruction += (

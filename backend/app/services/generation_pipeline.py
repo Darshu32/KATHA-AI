@@ -24,6 +24,12 @@ async def run_initial_generation(
     prompt: str,
     room_type: str = "living_room",
     style: str = "modern",
+    camera: str | None = None,
+    lighting: str | None = None,
+    view_mode: str | None = None,
+    ratio: str | None = None,
+    quality: str | None = None,
+    drawing_type: str | None = None,
 ) -> dict:
     """
     Full pipeline for initial design:
@@ -40,6 +46,12 @@ async def run_initial_generation(
         room_type=room_type,
         style=style,
         project_id=project_id,
+        camera=camera,
+        lighting=lighting,
+        view_mode=view_mode,
+        ratio=ratio,
+        quality=quality,
+        drawing_type=drawing_type,
     )
     graph_data = design_graph.model_dump()
 

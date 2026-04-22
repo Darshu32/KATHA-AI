@@ -15,7 +15,9 @@ import {
 } from "lucide-react";
 import { useImageGenStore, useDesignStore } from "@/lib/store";
 import { LAYOUT_PRESETS, getMockGraphForPreset } from "@/lib/mock-design-graph";
-import type { ArchTheme } from "@/lib/types";
+import { design as designApi } from "@/lib/api-client";
+import { exportActiveView, type ExportFormat } from "@/lib/canvas-export";
+import type { ArchTheme, CameraMode, DesignGraph, LightingMode } from "@/lib/types";
 import ModeSwitcher2D3D from "./mode-switcher-2d3d";
 
 interface RightControlSidebarProps {
@@ -34,20 +36,82 @@ const THEMES: { id: ArchTheme; label: string; swatch: string }[] = [
   { id: "luxury", label: "Luxury", swatch: "#C9A96E" },
 ];
 
+const CAMERAS: { id: CameraMode; label: string }[] = [
+  { id: "front", label: "Front" },
+  { id: "aerial", label: "Aerial" },
+  { id: "interior", label: "Interior" },
+  { id: "eye-level", label: "Eye-level" },
+];
+
+const LIGHTINGS: { id: LightingMode; label: string }[] = [
+  { id: "daylight", label: "Daylight" },
+  { id: "golden-hour", label: "Golden hour" },
+  { id: "night", label: "Night" },
+  { id: "overcast", label: "Overcast" },
+];
+
 export default function RightControlSidebar({ isOpen, onClose }: RightControlSidebarProps) {
-  const { theme, setTheme } = useImageGenStore();
-  const { activeGraph, setActiveGraph, setLoading, layerVisibility, setLayerVisibility } = useDesignStore();
+  const { theme, setTheme, camera, setCamera, lighting, setLighting, prompt, viewMode, ratio, quality, drawingType, setPrompt } = useImageGenStore();
+  const { activeGraph, setActiveGraph, setLoading, setEstimate, layerVisibility, setLayerVisibility } = useDesignStore();
   const [advancedOpen, setAdvancedOpen] = useState(false);
   const [themeOpen, setThemeOpen] = useState(false);
+  const [activeLayoutId, setActiveLayoutId] = useState<string | null>(null);
+  const [exporting, setExporting] = useState<ExportFormat | null>(null);
+  const [exportMsg, setExportMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const handleExport = async (fmt: ExportFormat) => {
+    if (exporting) return;
+    if (!activeGraph) {
+      setExportMsg({ ok: false, text: "Generate a design first." });
+      setTimeout(() => setExportMsg(null), 2500);
+      return;
+    }
+    setExporting(fmt);
+    const res = await exportActiveView(fmt);
+    setExportMsg(res.ok ? { ok: true, text: `${fmt} downloaded` } : { ok: false, text: res.reason || `${fmt} failed` });
+    setTimeout(() => setExportMsg(null), 2800);
+    setExporting(null);
+  };
 
   const currentTheme = THEMES.find((t) => t.id === theme) ?? THEMES[0];
 
-  const handleLayoutPreset = (presetId: string) => {
+  const handleLayoutPreset = async (presetId: string) => {
+    const preset = LAYOUT_PRESETS.find((p) => p.id === presetId);
+    if (!preset) return;
+    setActiveLayoutId(presetId);
     setLoading(true);
-    setTimeout(() => {
+
+    const basePrompt = prompt.trim() ||
+      `${preset.description}. ${preset.rooms}. Target area ${preset.sqftRange} sqft.`;
+
+    // Seed the prompt input so the user sees what was sent.
+    if (!prompt.trim()) setPrompt(basePrompt);
+
+    try {
+      const result = await designApi.generate("", "demo", {
+        prompt: basePrompt,
+        room_type: preset.roomType,
+        style: theme,
+        camera,
+        lighting,
+        view_mode: viewMode,
+        ratio,
+        quality,
+        drawing_type: drawingType,
+        dimensions: { length: preset.dims.length, width: preset.dims.width },
+      });
+      if (result?.graph_data) {
+        setActiveGraph(result.graph_data as unknown as DesignGraph);
+        setEstimate((result as { estimate?: unknown }).estimate as never);
+      } else {
+        throw new Error("No graph data");
+      }
+    } catch {
       setActiveGraph(getMockGraphForPreset(presetId));
+      setEstimate(null);
+    } finally {
       setLoading(false);
-    }, 500);
+    }
   };
 
   return (
@@ -167,7 +231,7 @@ export default function RightControlSidebar({ isOpen, onClose }: RightControlSid
             <Field label="Layout">
               <div className="flex flex-wrap gap-1.5">
                 {LAYOUT_PRESETS.slice(0, 4).map((p) => {
-                  const active = activeGraph?.room.type === p.roomType;
+                  const active = activeLayoutId === p.id || activeGraph?.room.type === p.roomType;
                   return (
                     <button
                       key={p.id}
@@ -180,6 +244,7 @@ export default function RightControlSidebar({ isOpen, onClose }: RightControlSid
                         color: active ? "var(--paper)" : "var(--ink-2)",
                         border: active ? "1px solid var(--ink)" : "1px solid var(--rule)",
                       }}
+                      title={`${p.rooms} · ${p.sqftRange} sqft · ${p.dims.length}×${p.dims.width}`}
                     >
                       {p.label}
                     </button>
@@ -260,9 +325,9 @@ export default function RightControlSidebar({ isOpen, onClose }: RightControlSid
 
                       <Field label="Camera" icon={Camera}>
                         <div className="flex flex-wrap gap-1.5">
-                          {["Front", "Aerial", "Interior", "Eye-level"].map((c, i) => (
-                            <Chip key={c} active={i === 0}>
-                              {c}
+                          {CAMERAS.map((c) => (
+                            <Chip key={c.id} active={camera === c.id} onClick={() => setCamera(c.id)}>
+                              {c.label}
                             </Chip>
                           ))}
                         </div>
@@ -270,9 +335,9 @@ export default function RightControlSidebar({ isOpen, onClose }: RightControlSid
 
                       <Field label="Lighting" icon={Sun}>
                         <div className="flex flex-wrap gap-1.5">
-                          {["Daylight", "Golden hour", "Night", "Overcast"].map((c, i) => (
-                            <Chip key={c} active={i === 0}>
-                              {c}
+                          {LIGHTINGS.map((l) => (
+                            <Chip key={l.id} active={lighting === l.id} onClick={() => setLighting(l.id)}>
+                              {l.label}
                             </Chip>
                           ))}
                         </div>
@@ -280,32 +345,51 @@ export default function RightControlSidebar({ isOpen, onClose }: RightControlSid
 
                       <Field label="Export" icon={Download}>
                         <div className="grid grid-cols-2 gap-1.5">
-                          {["PNG", "JPEG", "SVG", "PDF"].map((f) => (
-                            <button
-                              key={f}
-                              className="py-1.5 rounded-md transition-colors"
-                              style={{
-                                fontSize: 11.5,
-                                fontWeight: 500,
-                                color: "var(--ink-2)",
-                                border: "1px solid var(--rule)",
-                                backgroundColor: "transparent",
-                                fontFamily: "var(--mono)",
-                                letterSpacing: "0.04em",
-                              }}
-                              onMouseEnter={(e) => {
-                                e.currentTarget.style.backgroundColor = "var(--paper-2)";
-                                e.currentTarget.style.borderColor = "var(--ink-2)";
-                              }}
-                              onMouseLeave={(e) => {
-                                e.currentTarget.style.backgroundColor = "transparent";
-                                e.currentTarget.style.borderColor = "var(--rule)";
-                              }}
-                            >
-                              {f}
-                            </button>
-                          ))}
+                          {(["PNG", "JPEG", "SVG", "PDF"] as ExportFormat[]).map((f) => {
+                            const isExporting = exporting === f;
+                            return (
+                              <button
+                                key={f}
+                                onClick={() => handleExport(f)}
+                                disabled={!!exporting}
+                                className="py-1.5 rounded-md transition-colors disabled:opacity-50"
+                                style={{
+                                  fontSize: 11.5,
+                                  fontWeight: 500,
+                                  color: "var(--ink-2)",
+                                  border: "1px solid var(--rule)",
+                                  backgroundColor: "transparent",
+                                  fontFamily: "var(--mono)",
+                                  letterSpacing: "0.04em",
+                                }}
+                                onMouseEnter={(e) => {
+                                  if (exporting) return;
+                                  e.currentTarget.style.backgroundColor = "var(--paper-2)";
+                                  e.currentTarget.style.borderColor = "var(--ink-2)";
+                                }}
+                                onMouseLeave={(e) => {
+                                  e.currentTarget.style.backgroundColor = "transparent";
+                                  e.currentTarget.style.borderColor = "var(--rule)";
+                                }}
+                              >
+                                {isExporting ? "…" : f}
+                              </button>
+                            );
+                          })}
                         </div>
+                        {exportMsg && (
+                          <p
+                            className="mt-2"
+                            style={{
+                              fontSize: 10.5,
+                              fontFamily: "var(--mono)",
+                              letterSpacing: "0.04em",
+                              color: exportMsg.ok ? "#15803d" : "#b45309",
+                            }}
+                          >
+                            {exportMsg.text}
+                          </p>
+                        )}
                       </Field>
                     </div>
                   </motion.div>
@@ -349,9 +433,18 @@ function Field({
   );
 }
 
-function Chip({ children, active }: { children: React.ReactNode; active?: boolean }) {
+function Chip({
+  children,
+  active,
+  onClick,
+}: {
+  children: React.ReactNode;
+  active?: boolean;
+  onClick?: () => void;
+}) {
   return (
     <button
+      onClick={onClick}
       className="px-2.5 py-1.5 rounded-md transition-colors"
       style={{
         fontSize: 11.5,

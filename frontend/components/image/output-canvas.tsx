@@ -1,8 +1,10 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { ImageIcon, RefreshCw } from "lucide-react";
+import { useEffect, useState } from "react";
+import { ImageIcon, RefreshCw, Eye, X } from "lucide-react";
 import { useImageGenStore, useDesignStore } from "@/lib/store";
+import { chat as chatApi } from "@/lib/api-client";
 
 const FloorPlanCanvas2D = dynamic(
   () => import("@/components/canvas/FloorPlanCanvas2D"),
@@ -14,8 +16,47 @@ const Scene3DCanvas = dynamic(
 );
 
 export default function OutputCanvas() {
-  const { viewMode, isGenerating } = useImageGenStore();
+  const { viewMode, isGenerating, camera, lighting } = useImageGenStore();
   const { activeGraph, isLoading } = useDesignStore();
+  const [renderUrl, setRenderUrl] = useState<string | null>(null);
+  const [rendering, setRendering] = useState(false);
+  const [renderError, setRenderError] = useState<string | null>(null);
+  const [renderVisible, setRenderVisible] = useState(false);
+
+  // Reset the photoreal overlay whenever the graph changes.
+  useEffect(() => {
+    setRenderUrl(null);
+    setRenderError(null);
+    setRenderVisible(false);
+  }, [activeGraph]);
+
+  const renderPrompt = activeGraph
+    ? (viewMode === "3d" ? activeGraph.render_prompt_3d : activeGraph.render_prompt_2d) ||
+      [
+        activeGraph.render_prompt_2d,
+        activeGraph.render_prompt_3d,
+      ].find(Boolean)
+    : undefined;
+
+  const handleRenderPhoto = async () => {
+    if (!renderPrompt || rendering) return;
+    setRendering(true);
+    setRenderError(null);
+    try {
+      const fullPrompt = `${renderPrompt}. Camera: ${camera}. Lighting: ${lighting}. View: ${viewMode.toUpperCase()}.`;
+      const res = await chatApi.generateImage(fullPrompt);
+      if (res?.image?.url) {
+        setRenderUrl(res.image.url);
+        setRenderVisible(true);
+      } else {
+        setRenderError("No image returned — check OPENAI_API_KEY / NANO_BANANA config.");
+      }
+    } catch (err) {
+      setRenderError(err instanceof Error ? err.message : "Render failed");
+    } finally {
+      setRendering(false);
+    }
+  };
 
   if (isLoading || isGenerating) {
     return (
@@ -56,11 +97,58 @@ export default function OutputCanvas() {
   }
 
   return (
-    <div className="flex-1 min-h-0">
+    <div className="flex-1 min-h-0 relative">
       {viewMode === "2d" ? (
         <FloorPlanCanvas2D graph={activeGraph} />
       ) : (
         <Scene3DCanvas graph={activeGraph} />
+      )}
+
+      {renderPrompt && (
+        <button
+          onClick={handleRenderPhoto}
+          disabled={rendering}
+          className="absolute top-3 right-3 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-medium disabled:opacity-50"
+          style={{
+            backgroundColor: "var(--ink)",
+            color: "var(--paper)",
+            boxShadow: "0 1px 2px rgba(17,17,16,0.1)",
+          }}
+          title={rendering ? "Rendering…" : "Generate a photoreal render from this view's prompt"}
+        >
+          {rendering ? <RefreshCw size={13} className="animate-spin" /> : <Eye size={13} />}
+          {rendering ? "Rendering…" : "Photoreal"}
+        </button>
+      )}
+
+      {renderError && (
+        <div
+          className="absolute top-14 right-3 max-w-xs px-3 py-2 rounded-md text-[11px]"
+          style={{ backgroundColor: "var(--paper-2)", border: "1px solid var(--rule)", color: "var(--ink-2)" }}
+        >
+          {renderError}
+        </div>
+      )}
+
+      {renderUrl && renderVisible && (
+        <div className="absolute inset-0 bg-black/40 flex items-center justify-center p-8 z-10">
+          <div className="relative max-w-4xl max-h-full">
+            <button
+              onClick={() => setRenderVisible(false)}
+              className="absolute -top-10 right-0 inline-flex items-center gap-1.5 text-white text-[12px]"
+            >
+              <X size={14} /> Close
+            </button>
+            <img
+              src={renderUrl}
+              alt="Photoreal render"
+              className="max-w-full max-h-[80vh] rounded-lg shadow-2xl"
+            />
+            <p className="mt-2 text-[11px] text-white/80 font-mono">
+              {viewMode.toUpperCase()} · {camera} · {lighting}
+            </p>
+          </div>
+        </div>
       )}
     </div>
   );

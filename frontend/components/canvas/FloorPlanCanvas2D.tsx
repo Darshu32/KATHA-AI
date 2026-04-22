@@ -15,7 +15,11 @@ const PADDING = 40;
 const BASE_SCALE = 32;
 
 export default function FloorPlanCanvas2D({ graph }: Props) {
-  const { zoom, showGrid, selectObject, setZoom } = useDesignStore();
+  const { zoom, showGrid, selectObject, setZoom, layerVisibility } = useDesignStore();
+  const showGridLayer = showGrid && layerVisibility.grid;
+  const showFurniture = layerVisibility.furniture;
+  const showDimensions = layerVisibility.dimensions;
+  const wireframeOnly = layerVisibility.wireframe;
   const svgRef = useRef<SVGSVGElement>(null);
 
   const rL = graph.room.dimensions.length;
@@ -76,7 +80,7 @@ export default function FloorPlanCanvas2D({ graph }: Props) {
         />
 
         {/* Grid */}
-        {showGrid && (
+        {showGridLayer && (
           <g opacity={0.15}>
             {Array.from({ length: Math.ceil(rL / 1) + 1 }, (_, i) => (
               <line
@@ -136,18 +140,21 @@ export default function FloorPlanCanvas2D({ graph }: Props) {
         ))}
 
         {/* Furniture objects */}
-        {floorObjects.map((obj) => (
+        {showFurniture && floorObjects.map((obj) => (
           <DraggableObject2D
             key={obj.id}
             object={obj}
             scale={scale}
             roomLength={rL}
             roomWidth={rW}
+            wireframe={wireframeOnly}
           />
         ))}
 
         {/* Dimension lines */}
-        <DimensionLines2D room={graph.room} objects={floorObjects} scale={scale} />
+        {showDimensions && (
+          <DimensionLines2D room={graph.room} objects={floorObjects} scale={scale} />
+        )}
 
         {/* Scale indicator */}
         <g transform={`translate(${rL * scale - 60}, ${rW * scale + 14})`}>
