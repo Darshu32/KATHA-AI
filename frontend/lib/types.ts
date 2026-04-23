@@ -189,7 +189,130 @@ export interface DesignGraph {
   lighting: LightEntry[];
   render_prompt_2d?: string;
   render_prompt_3d?: string;
+  constraints?: DesignConstraintEntry[];
 }
+
+// ── Constraint payloads surfaced on DesignGraph.constraints[] ───────────────
+
+export type ValidationSeverity = "error" | "warning" | "suggestion";
+
+export interface ValidationIssue {
+  code: string;
+  path: string;
+  message: string;
+}
+
+export interface ValidationReport {
+  ok: boolean;
+  summary: string;
+  errors: ValidationIssue[];
+  warnings: ValidationIssue[];
+  suggestions: ValidationIssue[];
+}
+
+export type RecommendationSeverity = "info" | "tip" | "nudge";
+
+export interface RecommendationItem {
+  id: string;
+  category: string;
+  severity: RecommendationSeverity;
+  title: string;
+  message: string;
+  evidence?: Record<string, unknown>;
+}
+
+export interface ThemeApplierChange {
+  path: string;
+  rule: string;
+  before: unknown;
+  after: unknown;
+  [k: string]: unknown;
+}
+
+export interface KnowledgeValidationConstraint extends ValidationReport {
+  id: string;
+  type: "knowledge_validation";
+}
+
+export interface ThemeChangesConstraint {
+  id: string;
+  type: "parametric_theme_changes";
+  count: number;
+  changes: ThemeApplierChange[];
+}
+
+export interface RecommendationsConstraint {
+  id: string;
+  type: "ai_recommendations";
+  count: number;
+  items: RecommendationItem[];
+}
+
+export type DesignConstraintEntry =
+  | KnowledgeValidationConstraint
+  | ThemeChangesConstraint
+  | RecommendationsConstraint
+  | { id?: string; type?: string; [k: string]: unknown };
+
+// ── Diagram + Spec types ───────────────────────────────────────────────────
+
+export interface DiagramPayload {
+  id: string;
+  name: string;
+  format: "svg" | string;
+  svg?: string;
+  meta?: Record<string, unknown>;
+  error?: string;
+}
+
+export interface MaterialSpecRow {
+  name: string;
+  grade: string;
+  finish: string;
+  color: string;
+  supplier: string;
+  lead_time_weeks: [number, number] | null;
+  cost_inr: [number, number] | null;
+  unit: string;
+  properties?: Record<string, unknown>;
+}
+
+export interface SpecBundle {
+  meta: {
+    project_name: string;
+    generated_at: string;
+    room_type: string;
+    theme: string;
+    dimensions_m: { length?: number; width?: number; height?: number };
+  };
+  material: {
+    primary_structure: MaterialSpecRow[];
+    secondary_materials: MaterialSpecRow[];
+    hardware: MaterialSpecRow[];
+    upholstery: MaterialSpecRow[];
+    finishing: MaterialSpecRow[];
+    total_notes?: Record<string, unknown>;
+  };
+  manufacturing: Record<string, Record<string, unknown>>;
+  mep: {
+    hvac: Record<string, unknown>;
+    electrical: Record<string, unknown>;
+    plumbing: Record<string, unknown>;
+  };
+  cost: {
+    status: string;
+    currency: string;
+    line_items: Array<Record<string, unknown>>;
+    totals: { low?: number; high?: number; base?: number };
+    assumptions: string[];
+  };
+  objects_count?: number;
+}
+
+export type ExportFormat =
+  | "pdf" | "docx" | "xlsx"
+  | "dxf" | "obj" | "gltf"
+  | "ifc" | "step" | "gcode";
 
 export interface LayoutPreset {
   id: string;

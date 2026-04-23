@@ -1,6 +1,6 @@
 """Generation routes — initial design, local edit, theme switch, version history."""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -22,6 +22,15 @@ from app.services.generation_pipeline import (
     run_local_edit,
     run_theme_switch,
 )
+from app.services.diagrams import (
+    generate_all as generate_all_diagrams,
+    generate_one as generate_one_diagram,
+    list_available as list_available_diagrams,
+)
+from app.services.exporters import available_formats, export as export_bundle
+from app.services.knowledge_validator import validate_design_graph
+from app.services.recommendations import recommend as build_recommendations
+from app.services.specs import build_spec_bundle
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["generation"])
 
@@ -168,3 +177,139 @@ async def get_latest_route(
         "version": version.version,
         "graph_data": version.graph_data,
     }
+
+
+@router.post("/validate")
+async def validate_route(
+    project_id: str,
+    version_num: int | None = None,
+    segment: str = "residential",
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Run knowledge validator + recommendations on a stored graph version.
+
+    If `version_num` is omitted, the latest version is used.
+    """
+    project = await get_project(db, project_id)
+    _check_owner(project, user)
+
+    version = (
+        await get_version(db, project_id, version_num)
+        if version_num is not None
+        else await get_latest_version(db, project_id)
+    )
+    if version is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
+
+    graph = version.graph_data or {}
+    report = validate_design_graph(graph, segment=segment)
+    recommendations = build_recommendations(graph)
+    return {
+        "version": version.version,
+        "validation": report,
+        "recommendations": recommendations,
+    }
+
+
+@router.get("/diagrams/available")
+async def diagrams_available_route(
+    project_id: str,
+    user: User = Depends(get_current_user),
+):
+    """List diagram types supported by the platform."""
+    return {"diagrams": list_available_diagrams()}
+
+
+@router.post("/diagrams")
+async def diagrams_route(
+    project_id: str,
+    version_num: int | None = None,
+    diagram_id: str | None = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Generate auto-diagrams for a stored graph version.
+
+    - If `diagram_id` is given, returns only that diagram.
+    - Otherwise returns every ready diagram for the version.
+    """
+    project = await get_project(db, project_id)
+    _check_owner(project, user)
+
+    version = (
+        await get_version(db, project_id, version_num)
+        if version_num is not None
+        else await get_latest_version(db, project_id)
+    )
+    if version is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
+
+    graph = version.graph_data or {}
+    if diagram_id:
+        single = generate_one_diagram(graph, diagram_id)
+        if single is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown diagram '{diagram_id}'")
+        return {"version": version.version, "diagrams": [single]}
+    return {"version": version.version, "diagrams": generate_all_diagrams(graph)}
+
+
+@router.get("/specs")
+async def specs_route(
+    project_id: str,
+    version_num: int | None = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Return the structured spec bundle (material + manufacturing + MEP + cost)."""
+    project = await get_project(db, project_id)
+    _check_owner(project, user)
+    version = (
+        await get_version(db, project_id, version_num)
+        if version_num is not None
+        else await get_latest_version(db, project_id)
+    )
+    if version is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
+
+    graph = version.graph_data or {}
+    bundle = build_spec_bundle(graph, project_name=project.name or "KATHA Project")
+    return {"version": version.version, "spec_bundle": bundle}
+
+
+@router.get("/export/formats")
+async def export_formats_route(
+    project_id: str,
+    user: User = Depends(get_current_user),
+):
+    return {"formats": available_formats()}
+
+
+@router.post("/export")
+async def export_route(
+    project_id: str,
+    format: str,
+    version_num: int | None = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Export the latest (or specified) version as pdf / docx / xlsx."""
+    project = await get_project(db, project_id)
+    _check_owner(project, user)
+    version = (
+        await get_version(db, project_id, version_num)
+        if version_num is not None
+        else await get_latest_version(db, project_id)
+    )
+    if version is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
+
+    graph = version.graph_data or {}
+    bundle = build_spec_bundle(graph, project_name=project.name or "KATHA Project")
+    try:
+        result = export_bundle(format, bundle, graph)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+    headers = {"Content-Disposition": f'attachment; filename="{result["filename"]}"'}
+    return Response(content=result["bytes"], media_type=result["content_type"], headers=headers)

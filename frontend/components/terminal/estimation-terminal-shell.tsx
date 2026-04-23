@@ -1,28 +1,36 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import {
   Terminal,
   ChevronUp,
   ChevronDown,
   Calculator,
-  FileSpreadsheet,
-  BarChart3,
-  DollarSign,
+  ShieldCheck,
+  LayoutDashboard,
+  FileText,
+  Download,
 } from "lucide-react";
 import { useDesignStore } from "@/lib/store";
+import ValidationPanel from "./validation-panel";
+import DiagramsPanel from "./diagrams-panel";
+import SpecsPanel from "./specs-panel";
+import ExportPanel from "./export-panel";
 
 interface EstimationTerminalShellProps {
   isOpen: boolean;
   onToggle: () => void;
 }
 
-const TABS = [
+type TabId = "estimation" | "validation" | "diagrams" | "specs" | "export";
+
+const TABS: { id: TabId; label: string; icon: typeof Calculator }[] = [
   { id: "estimation", label: "Estimation", icon: Calculator },
-  { id: "boq", label: "BOQ", icon: FileSpreadsheet },
-  { id: "area", label: "Area Calc", icon: BarChart3 },
-  { id: "costing", label: "Costing", icon: DollarSign },
+  { id: "validation", label: "Validation", icon: ShieldCheck },
+  { id: "diagrams", label: "Diagrams", icon: LayoutDashboard },
+  { id: "specs", label: "Specs", icon: FileText },
+  { id: "export", label: "Export", icon: Download },
 ];
 
 function formatINR(n: number) {
@@ -34,6 +42,7 @@ export default function EstimationTerminalShell({
   onToggle,
 }: EstimationTerminalShellProps) {
   const { activeGraph, estimate: backendEstimate } = useDesignStore();
+  const [activeTab, setActiveTab] = useState<TabId>("estimation");
 
   const estimate = useMemo(() => {
     if (!activeGraph) return null;
@@ -124,22 +133,37 @@ export default function EstimationTerminalShell({
         {isOpen && (
           <motion.div
             initial={{ height: 0 }}
-            animate={{ height: 220 }}
+            animate={{ height: activeTab === "estimation" ? 220 : 420 }}
             exit={{ height: 0 }}
             transition={{ duration: 0.2, ease: "easeInOut" }}
-            className="bg-gray-950 overflow-hidden"
+            className="overflow-hidden"
+            style={{ backgroundColor: activeTab === "estimation" ? "#0a0a0a" : "var(--paper)" }}
           >
-            <div className="flex border-b border-gray-800">
-              {TABS.map((tab, i) => {
+            <div
+              className="flex"
+              style={{
+                borderBottom: activeTab === "estimation" ? "1px solid #1f1f1f" : "1px solid var(--rule)",
+                backgroundColor: activeTab === "estimation" ? "#0a0a0a" : "var(--paper-deep, #ece5d8)",
+              }}
+            >
+              {TABS.map((tab) => {
                 const Icon = tab.icon;
+                const isActive = tab.id === activeTab;
+                const onDark = activeTab === "estimation";
                 return (
                   <button
                     key={tab.id}
-                    className={`flex items-center gap-1.5 px-4 py-2 text-xs font-medium transition-colors ${
-                      i === 0
-                        ? "text-gray-200 border-b border-gray-400"
-                        : "text-gray-500 hover:text-gray-400"
-                    }`}
+                    onClick={() => setActiveTab(tab.id)}
+                    className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium transition-colors"
+                    style={{
+                      color: isActive
+                        ? (onDark ? "#e5e5e5" : "var(--ink)")
+                        : (onDark ? "#6b6b6b" : "var(--ink-3)"),
+                      borderBottom: isActive
+                        ? (onDark ? "1px solid #9ca3af" : "1px solid var(--ink)")
+                        : "1px solid transparent",
+                      fontWeight: isActive ? 600 : 500,
+                    }}
                   >
                     <Icon size={12} />
                     {tab.label}
@@ -148,6 +172,16 @@ export default function EstimationTerminalShell({
               })}
             </div>
 
+            {activeTab !== "estimation" && (
+              <div style={{ height: "calc(100% - 37px)" }}>
+                {activeTab === "validation" && <ValidationPanel />}
+                {activeTab === "diagrams" && <DiagramsPanel />}
+                {activeTab === "specs" && <SpecsPanel />}
+                {activeTab === "export" && <ExportPanel />}
+              </div>
+            )}
+
+            {activeTab === "estimation" && (
             <div className="p-4 font-mono text-xs text-gray-500 leading-relaxed overflow-y-auto" style={{ maxHeight: 170 }}>
               {!estimate ? (
                 <>
@@ -206,6 +240,7 @@ export default function EstimationTerminalShell({
                 <span className="animate-pulse">_</span>
               </p>
             </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>

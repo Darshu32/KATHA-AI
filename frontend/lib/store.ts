@@ -317,6 +317,7 @@ export interface BackendEstimate {
 
 interface DesignState {
   activeGraph: DesignGraph | null;
+  activeProjectId: string;
   estimate: BackendEstimate | null;
   selectedObjectId: string | null;
   hoveredObjectId: string | null;
@@ -333,6 +334,7 @@ interface DesignState {
   panOffset: { x: number; y: number };
 
   setActiveGraph: (g: DesignGraph) => void;
+  setActiveProjectId: (id: string) => void;
   setEstimate: (e: BackendEstimate | null) => void;
   selectObject: (id: string | null) => void;
   hoverObject: (id: string | null) => void;
@@ -353,6 +355,7 @@ interface DesignState {
 
 export const useDesignStore = create<DesignState>()((set, get) => ({
   activeGraph: null,
+  activeProjectId: "demo",
   estimate: null,
   selectedObjectId: null,
   hoveredObjectId: null,
@@ -376,6 +379,8 @@ export const useDesignStore = create<DesignState>()((set, get) => ({
   panOffset: { x: 0, y: 0 },
 
   setActiveGraph: (g) => set({ activeGraph: g, selectedObjectId: null, undoStack: [] }),
+
+  setActiveProjectId: (id) => set({ activeProjectId: id }),
 
   setEstimate: (e) => set({ estimate: e }),
 

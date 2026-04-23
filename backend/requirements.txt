@@ -26,6 +26,19 @@ boto3==1.36.14
 # ── Vector search ───────────────────────────────────
 pgvector==0.3.6
 
+# ── Document generation (Phase 1 Pass A exporters) ──
+reportlab==4.4.10
+python-docx==1.2.0
+openpyxl==3.1.5
+
+# ── CAD / 3D exporters (Phase 1 Pass B) ─────────────
+ezdxf==1.4.3
+# OBJ + GLTF written without extra deps (pure stdlib)
+
+# ── BIM / specialist exporters (Phase 1 Pass C) ─────
+ifcopenshell==0.8.4.post1
+# STEP + G-code written without extra deps (pure stdlib)
+
 # ── Dev / Testing ───────────────────────────────────
 httpx==0.28.1
 pytest==8.3.4

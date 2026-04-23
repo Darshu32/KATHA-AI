@@ -7,8 +7,12 @@ from copy import deepcopy
 from openai import AsyncOpenAI
 
 from app.config import get_settings
+from app.knowledge.summary import build_knowledge_brief
 from app.models.design_graph import DesignGraph
 from app.prompts.design_graph import DESIGN_GRAPH_SYSTEM_PROMPT
+from app.services.knowledge_validator import validate_design_graph
+from app.services.parametric_theme_applier import apply_theme as apply_parametric_theme
+from app.services.recommendations import recommend as build_recommendations
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -237,15 +241,30 @@ async def generate_design_graph(
         extras.append(f"Quality: {quality}")
     extras_block = ("\n" + "\n".join(extras)) if extras else ""
 
+    # Inject KATHA knowledge brief: space standards, ergonomics, clearances,
+    # NBC minima, theme parametric rules, material + tolerance hints.
+    try:
+        knowledge_brief = build_knowledge_brief(room_type=room_type, theme=style)
+    except Exception as exc:  # pragma: no cover - never block generation
+        logger.warning("knowledge_brief_failed", extra={"error": str(exc)})
+        knowledge_brief = ""
+    knowledge_block = (
+        "\n\nKATHA KNOWLEDGE BRIEF (hard rules — respect all ranges):\n"
+        f"{knowledge_brief}\n"
+    ) if knowledge_brief else ""
+
     user_message = (
         f"Design prompt: {prompt}\n"
         f"Room type: {room_type}\n"
         f"Style/theme: {style}"
         f"{theme_block}"
+        f"{knowledge_block}"
         f"{extras_block}\n\n"
         "Generate the full structured design graph JSON. "
         "Apply the theme rules to materials, color palette, furniture and "
         "the render_prompt_2d and render_prompt_3d wording. "
+        "Dimensions MUST respect the space standards, ergonomic ranges and "
+        "NBC minima in the knowledge brief. Keep dimensions in metres. "
         "Also respect the camera, lighting, drawing type and view mode."
     )
 
@@ -266,15 +285,73 @@ async def generate_design_graph(
     raw = response.choices[0].message.content
     data = json.loads(raw)
     logger.info("AI design graph generated for project %s", project_id)
-    return _ai_response_to_design_graph(data, project_id)
+
+    # Parametric theme refinement — snap materials, colours, ergonomics,
+    # and tag signature moves (plinth vs tapered legs vs cantilever) before
+    # the graph hits the validator.
+    applier_result = apply_parametric_theme(data, style)
+    data = applier_result["graph"]
+
+    return _ai_response_to_design_graph(
+        data,
+        project_id,
+        theme_changes=applier_result.get("changes", []),
+    )
 
 
-def _ai_response_to_design_graph(data: dict, project_id: str) -> DesignGraph:
+def _run_knowledge_validation(data: dict) -> dict | None:
+    """Non-blocking post-gen validation. Returns the report dict or None."""
+    try:
+        return validate_design_graph(data)
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("validator_failed", extra={"error": str(exc)})
+        return None
+
+
+def _ai_response_to_design_graph(
+    data: dict,
+    project_id: str,
+    theme_changes: list[dict] | None = None,
+) -> DesignGraph:
     from app.models.design_graph import AssetBundle, DesignGraph, SiteInfo, StyleProfile
 
     room = data.get("room", {})
     style_data = data.get("style", {})
     dims = room.get("dimensions", {})
+
+    # Knowledge validation — attached to constraints for downstream UI / UX.
+    report = _run_knowledge_validation(data)
+    try:
+        recommendations = build_recommendations(data)
+    except Exception as exc:  # pragma: no cover
+        logger.warning("recommendations_failed", extra={"error": str(exc)})
+        recommendations = []
+
+    constraints: list[dict] = []
+    if theme_changes:
+        constraints.append({
+            "id": "theme_applier_log",
+            "type": "parametric_theme_changes",
+            "count": len(theme_changes),
+            "changes": theme_changes,
+        })
+    if report:
+        constraints.append({
+            "id": "validation_report",
+            "type": "knowledge_validation",
+            "ok": report["ok"],
+            "summary": report["summary"],
+            "errors": report["errors"],
+            "warnings": report["warnings"],
+            "suggestions": report["suggestions"],
+        })
+    if recommendations:
+        constraints.append({
+            "id": "recommendations",
+            "type": "ai_recommendations",
+            "count": len(recommendations),
+            "items": recommendations,
+        })
 
     return DesignGraph(
         project_id=project_id,
@@ -298,7 +375,7 @@ def _ai_response_to_design_graph(data: dict, project_id: str) -> DesignGraph:
         objects=data.get("objects", []),
         materials=data.get("materials", []),
         lighting=data.get("lighting", []),
-        constraints=[],
+        constraints=constraints,
         estimation={
             "status": "pending",
             "assumptions": ["Quantities will be computed after geometry is validated."],
@@ -419,10 +496,23 @@ async def switch_theme(
             f"- Don't: {'; '.join(theme_rules.get('donts', []))}\n\n"
         )
 
+    # Include the parametric theme rules + material hints for the target style.
+    try:
+        parametric_brief = build_knowledge_brief(
+            room_type=(current_graph.get("room") or {}).get("type", "living_room"),
+            theme=new_style,
+        )
+    except Exception:  # pragma: no cover
+        parametric_brief = ""
+    parametric_block = (
+        f"\nKATHA parametric rules for '{new_style}':\n{parametric_brief}\n"
+    ) if parametric_brief else ""
+
     instruction = (
         f"Current design graph:\n{json.dumps(current_graph, indent=2)}\n\n"
         f"Switch the theme/style to: {new_style}\n"
         f"{theme_block}"
+        f"{parametric_block}"
     )
     if preserve_layout:
         instruction += (
@@ -454,7 +544,16 @@ async def switch_theme(
         max_tokens=4096,
     )
 
-    return json.loads(response.choices[0].message.content)
+    switched = json.loads(response.choices[0].message.content)
+    applier_result = apply_parametric_theme(switched, new_style)
+    refined = applier_result["graph"]
+    refined["_theme_applier"] = {
+        "theme": applier_result.get("theme"),
+        "theme_display": applier_result.get("theme_display"),
+        "change_count": len(applier_result.get("changes", [])),
+        "changes": applier_result.get("changes", []),
+    }
+    return refined
 
 
 def _build_local_design_graph(
@@ -582,22 +681,26 @@ def _build_local_design_graph(
         },
     ]
 
-    return _ai_response_to_design_graph(
-        {
-            "room": {"type": room_type, "dimensions": dims},
-            "style": {
-                "primary": style,
-                "secondary": ["local-fallback", "starter-layout"],
-                "color_palette": [material["color"] for material in materials],
-                "materials": [material["name"] for material in materials],
-            },
-            "objects": objects,
-            "materials": materials,
-            "lighting": lighting,
-            "render_prompt_2d": f"{style} {room_name} with warm, practical furniture based on prompt: {prompt}",
-            "render_prompt_3d": f"{style} {room_name} 3D scene with realistic spacing and circulation.",
+    fallback_data = {
+        "room": {"type": room_type, "dimensions": dims},
+        "style": {
+            "primary": style,
+            "secondary": ["local-fallback", "starter-layout"],
+            "color_palette": [material["color"] for material in materials],
+            "materials": [material["name"] for material in materials],
         },
+        "objects": objects,
+        "materials": materials,
+        "lighting": lighting,
+        "render_prompt_2d": f"{style} {room_name} with warm, practical furniture based on prompt: {prompt}",
+        "render_prompt_3d": f"{style} {room_name} 3D scene with realistic spacing and circulation.",
+    }
+
+    applier_result = apply_parametric_theme(fallback_data, style)
+    return _ai_response_to_design_graph(
+        applier_result["graph"],
         project_id=project_id,
+        theme_changes=applier_result.get("changes", []),
     )
 
 

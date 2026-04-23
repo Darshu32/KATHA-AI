@@ -275,6 +275,73 @@ export const design = {
     request<{ status: string }>(
       `/projects/${projectId}/objects/${objectId}/material`, "PATCH", { material, color }, token,
     ),
+
+  // ── Phase 1 Layer 6 — Validator + Recommendations ───────────────────────
+  validate: (token: string, projectId: string, versionNum?: number, segment: string = "residential") => {
+    const qs = new URLSearchParams();
+    if (versionNum !== undefined) qs.set("version_num", String(versionNum));
+    qs.set("segment", segment);
+    return request<{
+      version: number;
+      validation: import("./types").ValidationReport;
+      recommendations: import("./types").RecommendationItem[];
+    }>(`/projects/${projectId}/validate?${qs.toString()}`, "POST", undefined, token);
+  },
+
+  // ── Phase 1 Layer 2B — Auto-diagrams ────────────────────────────────────
+  listDiagramsAvailable: (token: string, projectId: string) =>
+    request<{ diagrams: Array<{ id: string; name: string; status: "ready" | "planned" }> }>(
+      `/projects/${projectId}/diagrams/available`, "GET", undefined, token,
+    ),
+
+  generateDiagrams: (token: string, projectId: string, versionNum?: number, diagramId?: string) => {
+    const qs = new URLSearchParams();
+    if (versionNum !== undefined) qs.set("version_num", String(versionNum));
+    if (diagramId) qs.set("diagram_id", diagramId);
+    return request<{
+      version: number;
+      diagrams: import("./types").DiagramPayload[];
+    }>(`/projects/${projectId}/diagrams?${qs.toString()}`, "POST", undefined, token);
+  },
+
+  // ── Phase 1 Layer 3 — Specs ─────────────────────────────────────────────
+  getSpecs: (token: string, projectId: string, versionNum?: number) => {
+    const qs = versionNum !== undefined ? `?version_num=${versionNum}` : "";
+    return request<{ version: number; spec_bundle: import("./types").SpecBundle }>(
+      `/projects/${projectId}/specs${qs}`, "GET", undefined, token,
+    );
+  },
+
+  // ── Phase 1 Layer 5 — Exporters ─────────────────────────────────────────
+  listExportFormats: (token: string, projectId: string) =>
+    request<{ formats: string[] }>(
+      `/projects/${projectId}/export/formats`, "GET", undefined, token,
+    ),
+
+  /** Download an export as a Blob (pdf/docx/xlsx/dxf/obj/gltf/ifc/step/gcode). */
+  exportFile: async (
+    token: string,
+    projectId: string,
+    format: import("./types").ExportFormat,
+    versionNum?: number,
+  ): Promise<{ blob: Blob; filename: string; contentType: string }> => {
+    const qs = new URLSearchParams({ format });
+    if (versionNum !== undefined) qs.set("version_num", String(versionNum));
+    const res = await fetch(`${API_BASE}/projects/${projectId}/export?${qs.toString()}`, {
+      method: "POST",
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new ApiError(res.status, body);
+    }
+    const contentType = res.headers.get("Content-Type") ?? "application/octet-stream";
+    const disposition = res.headers.get("Content-Disposition") ?? "";
+    const match = disposition.match(/filename="([^"]+)"/);
+    const filename = match?.[1] ?? `${projectId}.${format}`;
+    const blob = await res.blob();
+    return { blob, filename, contentType };
+  },
 };
 
 // ── Default export ─────────────────────────────────────────────────────────
