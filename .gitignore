@@ -1,3 +1,4 @@
+# ── Dependencies & build ────────────────────────────────────────────────────
 .next/
 node_modules/
 .venv/
@@ -6,11 +7,54 @@ __pycache__/
 dist/
 build/
 *.pyc
-.env
-.env.local
-.DS_Store
 *.egg-info/
 .mypy_cache/
 .ruff_cache/
 pnpm-lock.yaml
 package-lock.json
+
+# ── Environment & secrets ───────────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ── Editor / OS / local tooling ─────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ── Claude Code local settings (per-machine, not for repo) ──────────────────
+.claude/settings.local.json
+**/.claude/settings.local.json
+.claude/
+**/.claude/
+
+# ── Logs (runtime, may contain stack traces / secrets) ──────────────────────
+*.log
+logs/
+backend-start.log
+frontend-start.log
+frontend-error.log
+
+# ── Build caches & incremental artifacts ────────────────────────────────────
+*.tsbuildinfo
+frontend/tsconfig.tsbuildinfo
+.turbo/
+.cache/
+coverage/
+
+# ── Scratch / runtime output directories ────────────────────────────────────
+tmp/
+tmp_*/
+tmp_diagrams/
+tmp_exports/
+generated/
+uploads/
+
+# ── Database / local storage ────────────────────────────────────────────────
+*.sqlite
+*.sqlite3
+*.db
