@@ -78,11 +78,18 @@ THEMES: dict[str, dict] = {
             "finish": "polished or brushed",
         },
         "colour_palette": ["#6b4a2b", "#c19a6b", "#2a4d3a", "#c23b22", "#e8d9b0"],
+        "colour_strategy": "warm neutrals with deep tonal accents",     # BRD: warm neutrals, deep tones
+        "material_pattern": {
+            "grain_visibility": "visible, celebrated",                  # BRD: wood grain visible
+            "finish_character": "natural oil or thin lacquer",          # BRD: natural finish preferred
+            "tactile_notes": "warm hand-feel, lets species character through",
+        },
         "ergonomic_targets": {
             "seat_height_mm": (380, 430),
             "backrest_angle_deg": (100, 108),
             "lounge_depth_mm": (500, 600),
         },
+        "ergonomic_intent": "comfort-focused, lounge-style proportions",  # BRD: comfort, lounge-style
         "signature_moves": [
             "tapered splayed legs",
             "organic / kidney curves",
@@ -102,26 +109,35 @@ THEMES: dict[str, dict] = {
     "contemporary": {
         "display_name": "Contemporary",
         "era": "current",
+        # BRD 2A — Contemporary parametric guide
         "proportions": {
-            "form": "clean-line cubic or cylindrical",
+            "form": "clean-line cubic or cylindrical",         # BRD: cubic forms, geometric
+            "geometry_intent": "clean lines, cubic, geometric",
             "leg_style": "straight or plinth",
             "seat_height_mm": (420, 460),
         },
         "material_palette": {
-            "primary": ["teak", "engineered veneer", "lacquered MDF"],
+            "primary": ["teak", "engineered veneer", "lacquered MDF"],   # BRD: teak OR engineered finishes
             "secondary": ["brushed steel", "glass"],
             "upholstery": ["performance fabric", "leather"],
         },
         "hardware": {
-            "style": "minimal, integrated",
-            "material": "stainless steel, matched finish",
+            "style": "minimal, integrated",                     # BRD: minimalist
+            "material": "stainless steel, matched finish",      # BRD: matching finish
             "finish": "matte",
         },
         "colour_palette": ["#ffffff", "#d9d4cb", "#222322", "#b84a2b", "#2f5f7c"],
+        "colour_strategy": "neutral base + bold accent",       # BRD: neutral + bold accents
+        "material_pattern": {
+            "grain_visibility": "hidden",                       # BRD: hidden grain
+            "finish_character": "matte, flat sheen",            # BRD: matte finishes
+            "tactile_notes": "smooth uniform surfaces; engineered consistency over natural variation",
+        },
         "ergonomic_targets": {
             "seat_height_mm": (420, 460),
             "counter_height_mm": (850, 900),
         },
+        "ergonomic_intent": "functional, space-saving",         # BRD: functional, space-saving
         "signature_moves": [
             "flush integrated handles",
             "bold accent colour on a neutral field",
@@ -135,29 +151,40 @@ THEMES: dict[str, dict] = {
         "donts": [
             "avoid distressed finishes",
             "avoid ornamental turning or carving",
+            "avoid visible wood grain as a design feature",
         ],
     },
     "modern": {
         "display_name": "Modern",
         "era": "1920s-1950s international style",
+        # BRD 2A — Modern parametric guide
         "proportions": {
-            "form": "balanced modular",
+            "form": "balanced modular",                            # BRD: balanced, modular
+            "geometry_intent": "balanced, modular, repeatable",
             "leg_style": "slim straight or cantilever",
             "seat_height_mm": (420, 460),
         },
         "material_palette": {
-            "primary": ["oak", "steel", "glass"],
+            "primary": ["oak", "steel", "glass"],                  # BRD: oak + mixed materials
             "secondary": ["leather", "felt"],
+            "mixed_materials_intent": "express material change at the joint, not hidden by it",
         },
         "hardware": {
-            "style": "industrial honest",
+            "style": "industrial honest, visible",                  # BRD: industrial, visible
             "material": "blackened steel, chrome",
             "finish": "visible fasteners OK",
         },
         "colour_palette": ["#e8e4db", "#3b3b3b", "#8a8a8a", "#b5895f"],
+        "colour_strategy": "monochromatic, or warm/cool contrast with single warm-wood accent",  # BRD
+        "material_pattern": {
+            "grain_visibility": "selective — wood grain emphasised against smooth metal/glass",  # BRD: mixed textures
+            "finish_character": "honest finishes — bare oiled wood, raw or blackened steel, clear glass",
+            "tactile_notes": "layered surfaces; deliberate texture changes signal material transitions",  # BRD: layered appearance
+        },
         "ergonomic_targets": {
             "seat_height_mm": (420, 460),
         },
+        "ergonomic_intent": "practical, adaptable",                 # BRD: practical, adaptable
         "signature_moves": [
             "cantilever frames",
             "monochromatic palette with warm wood",
@@ -166,6 +193,7 @@ THEMES: dict[str, dict] = {
         "dos": [
             "let structure express itself",
             "use modular repetition",
+            "stack textures — wood next to steel next to glass",
         ],
         "donts": [
             "avoid ornamental mouldings",
@@ -174,14 +202,43 @@ THEMES: dict[str, dict] = {
     },
     "custom": {
         "display_name": "Custom",
-        "proportions": {"form": "user-defined"},
-        "material_palette": {"primary": [], "secondary": []},
-        "hardware": {"style": "user-defined"},
+        "era": "user-defined",
+        # BRD 2A — Custom theme: user supplies dimensions + materials + aesthetic;
+        # the LLM grounds itself on universal BRD envelopes (ergonomic, material,
+        # manufacturing, costing) instead of a preset palette.
+        "is_open_palette": True,
+        "proportions": {
+            "form": "user-defined",
+            "geometry_intent": "derived from custom_inputs.aesthetic + dimension_brief",
+        },
+        "material_palette": {
+            "primary": [],
+            "secondary": [],
+            "selection_rule": "use materials supplied by client; fall back to BRD wood/metal/upholstery envelopes when categories are unspecified",
+        },
+        "hardware": {
+            "style": "user-defined",
+            "selection_rule": "match the chosen aesthetic; if unspecified, default to minimal integrated to stay neutral",
+        },
         "colour_palette": [],
+        "colour_strategy": "derived from custom_inputs.aesthetic; pick 3–5 hex codes that read together",
+        "material_pattern": {
+            "grain_visibility": "follow client preference; default to honest (visible) when unstated",
+            "finish_character": "matte unless client requests gloss",
+            "tactile_notes": "consistent with the aesthetic descriptor in custom_inputs",
+        },
         "ergonomic_targets": {},
+        "ergonomic_intent": "honour the client's posture / use brief; otherwise apply standard ergonomic ranges",
         "signature_moves": [],
-        "dos": ["follow the user's brief exactly"],
-        "donts": [],
+        "dos": [
+            "follow the user's brief exactly — dimensions, materials, aesthetic",
+            "stay inside ergonomic_envelope and BRD material envelopes",
+            "name every assumption you make on behalf of the client",
+        ],
+        "donts": [
+            "do not invent materials or finishes the client did not authorise",
+            "do not exceed the ergonomic_envelope without flagging a deviation",
+        ],
     },
 }
 

@@ -12,6 +12,7 @@ from app.knowledge import (
     clearances,
     climate,
     codes,
+    costing,
     ergonomics,
     ibc,
     manufacturing,
@@ -21,6 +22,7 @@ from app.knowledge import (
     space_standards,
     structural,
     themes,
+    variations,
 )
 from app.knowledge.summary import build_knowledge_brief
 
@@ -28,6 +30,7 @@ __all__ = [
     "clearances",
     "climate",
     "codes",
+    "costing",
     "ergonomics",
     "ibc",
     "manufacturing",
@@ -37,5 +40,6 @@ __all__ = [
     "space_standards",
     "structural",
     "themes",
+    "variations",
     "build_knowledge_brief",
 ]
