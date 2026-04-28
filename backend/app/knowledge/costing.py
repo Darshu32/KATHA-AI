@@ -213,18 +213,50 @@ def labor_cost_breakdown(
 #   Profit margin:        40–60 % (luxury) | 30–40 % (mass market)
 #   Designer markup:      25–50 % (applied if studio is not the manufacturer)
 WORKSHOP_OVERHEAD_PCT_OF_DIRECT: tuple[float, float] = (30.0, 40.0)
+QC_PCT_OF_LABOR: tuple[float, float] = (5.0, 10.0)
 PACKAGING_LOGISTICS_PCT_OF_PRODUCT: tuple[float, float] = (10.0, 15.0)
 PROFIT_MARGIN_PCT: dict[str, tuple[float, float]] = {
     "luxury": (40.0, 60.0),
     "mass_market": (30.0, 40.0),
 }
 DESIGNER_MARKUP_PCT: tuple[float, float] = (25.0, 50.0)
+DESIGNER_MARGIN_PCT: tuple[float, float] = (25.0, 50.0)         # BRD 4B alias — same band, applied when studio outsources fabrication.
+
+# BRD 4B — Manufacturer margin band by production volume tier.
+# Lower volumes carry the higher margin; mass production amortises tooling
+# and labour across many units so the band tightens to the lower end.
+MANUFACTURER_MARGIN_PCT_BY_VOLUME: dict[str, tuple[float, float]] = {
+    "one_off":         (50.0, 60.0),  # bespoke, single-piece
+    "small_batch":     (40.0, 55.0),  # 5–25 units
+    "production":      (35.0, 45.0),  # 25–250 units
+    "mass_production": (30.0, 40.0),  # 250+ units
+}
+
+# BRD 4B — Retail markup applied when the studio sells direct to end-client
+# rather than through a trade channel.
+RETAIL_MARKUP_PCT: tuple[float, float] = (40.0, 100.0)
+
+# BRD 4B — Customization premium for non-catalogue work.
+CUSTOMIZATION_PREMIUM_PCT_BY_LEVEL: dict[str, tuple[float, float]] = {
+    "none":             (0.0,  0.0),
+    "light_finish":     (5.0, 10.0),   # bespoke colour/finish only
+    "moderate":        (10.0, 15.0),   # bespoke dimensions or material on a catalogue piece
+    "heavy":           (15.0, 20.0),   # bespoke joinery or hardware
+    "fully_bespoke":   (20.0, 25.0),   # one-of-one design
+}
+CUSTOMIZATION_PREMIUM_PCT: tuple[float, float] = (10.0, 25.0)
 
 OVERHEAD_MARGIN_BRD_SPEC: dict = {
     "workshop_overhead_pct_of_direct": WORKSHOP_OVERHEAD_PCT_OF_DIRECT,
+    "qc_pct_of_labor": QC_PCT_OF_LABOR,
     "packaging_logistics_pct_of_product": PACKAGING_LOGISTICS_PCT_OF_PRODUCT,
     "profit_margin_pct": PROFIT_MARGIN_PCT,
     "designer_markup_pct": DESIGNER_MARKUP_PCT,
+    "designer_margin_pct": DESIGNER_MARGIN_PCT,
+    "manufacturer_margin_pct_by_volume": MANUFACTURER_MARGIN_PCT_BY_VOLUME,
+    "retail_markup_pct": RETAIL_MARKUP_PCT,
+    "customization_premium_pct_by_level": CUSTOMIZATION_PREMIUM_PCT_BY_LEVEL,
+    "customization_premium_pct_band": CUSTOMIZATION_PREMIUM_PCT,
     "designer_markup_applies_when": "studio resells third-party manufacturing",
 }
 

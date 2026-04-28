@@ -9,6 +9,8 @@ from app.routes.diagrams import router as diagrams_router
 from app.routes.drawings import router as drawings_router
 from app.routes.estimates import router as estimates_router
 from app.routes.generation import router as generation_router
+from app.routes.imports import router as imports_router
+from app.routes.knowledge import router as knowledge_router
 from app.routes.parametric import router as parametric_router
 from app.routes.prompts import router as prompts_router
 from app.routes.projects import router as projects_router
@@ -26,6 +28,8 @@ all_routers = [
     projects_router,
     generation_router,
     estimates_router,
+    imports_router,
+    knowledge_router,
     parametric_router,
     prompts_router,
     specs_router,
