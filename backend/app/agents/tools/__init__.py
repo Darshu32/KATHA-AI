@@ -9,18 +9,71 @@ Adding a new tool? Two steps:
 
 That's it. The registry is global and the agent loop reads from it.
 
-Stage 2 ships exactly one tool: cost engine.
-Stage 4 will add ~30 more (drawings, specs, MEP, exports …).
+Tool catalogue
+--------------
+Stage 2  → cost (1 tool)
+Stage 4A → themes (2) + clearances (3) + codes (4) + manufacturing (4) + ergonomics (2)
+Stage 4B → mep_hvac (2) + mep_electrical (2) + mep_plumbing (3) + mep_cost (1)
+Stage 4C → cost_extensions (2 tools — sensitivity + scenario compare)
+Stage 4D → specs (3 tools — material / manufacturing / MEP, LLM-heavy)
+Stage 4E → drawings (5 tools — plan / elevation / section / detail / isometric)
+Stage 4F → diagrams (8 tools — concept / form / volumetric ×2 / process /
+           solid-void / spatial organism / hierarchy)
+Stage 4G → pipeline (5 tools — initial / theme / edit / list versions / validate)
+Stage 4H → io (8 tools — list/parse/export formats + recipients +
+           spec bundle + bytes export + import/export manifests)
+
+Total: 55 tools as of Stage 4H — Stage 4 complete.
 """
 
 from __future__ import annotations
 
-# Import side-effects register the tools.
-from app.agents.tools import cost as _cost  # noqa: F401
+# Import side-effects register the tools. Order doesn't matter — each
+# module is independent and each @tool registers itself.
+from app.agents.tools import (  # noqa: F401
+    clearances as _clearances,
+    codes as _codes,
+    cost as _cost,
+    cost_extensions as _cost_extensions,
+    diagrams as _diagrams,
+    drawings as _drawings,
+    ergonomics as _ergonomics,
+    io as _io,
+    manufacturing as _manufacturing,
+    mep_cost as _mep_cost,
+    mep_electrical as _mep_electrical,
+    mep_hvac as _mep_hvac,
+    mep_plumbing as _mep_plumbing,
+    pipeline as _pipeline,
+    specs as _specs,
+    themes as _themes,
+)
+
+
+_REGISTERED_MODULES = (
+    _clearances,
+    _codes,
+    _cost,
+    _cost_extensions,
+    _diagrams,
+    _drawings,
+    _ergonomics,
+    _io,
+    _manufacturing,
+    _mep_cost,
+    _mep_electrical,
+    _mep_hvac,
+    _mep_plumbing,
+    _pipeline,
+    _specs,
+    _themes,
+)
 
 
 def ensure_tools_registered() -> None:
     """Idempotent — calling this guarantees all built-in tools are in
     the registry. Safe to call from app startup or a test fixture.
     """
-    _ = _cost  # keep import alive if linters trim unused
+    # Touch each module so any aggressive linter / dead-code stripper
+    # doesn't remove them and skip the registration side-effects.
+    _ = _REGISTERED_MODULES
