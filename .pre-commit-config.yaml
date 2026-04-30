@@ -1,0 +1,45 @@
+# Pre-commit hooks for KATHA-AI.
+# Install once:
+#   pip install -r backend/requirements-dev.txt
+#   pre-commit install
+#
+# Run on demand:
+#   pre-commit run --all-files
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=2048"]
+      - id: check-merge-conflict
+      - id: detect-private-key
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
+
+  # Ruff = lint + format + import sort, all in one.
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.8.6
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+        files: ^backend/
+      - id: ruff-format
+        files: ^backend/
+
+  # Mypy runs on backend only — frontend has its own tsc check.
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.14.1
+    hooks:
+      - id: mypy
+        files: ^backend/app/
+        args: ["--config-file=backend/pyproject.toml"]
+        additional_dependencies:
+          - "pydantic>=2.11"
+          - "pydantic-settings>=2.8"
+          - "sqlalchemy>=2.0"
+          - "types-redis"

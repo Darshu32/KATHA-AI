@@ -1,6 +1,5 @@
 """KATHA AI FastAPI application entry point."""
 
-import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Request
@@ -9,25 +8,32 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
-from app.database import Base, engine
+from app.db import AuditEvent  # noqa: F401  (registers table on Base.metadata)
 from app.models import architecture  # noqa: F401
 from app.models import orm  # noqa: F401
 from app.models.schemas import ErrorResponse, ErrorDetail
+from app.observability.logging import configure_logging
+from app.observability.request_id import RequestIdMiddleware
 from app.routes import all_routers
 
 settings = get_settings()
-
-logging.basicConfig(
-    level=logging.DEBUG if settings.debug else logging.INFO,
-    format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-)
+configure_logging(debug=settings.debug)
+settings.assert_production_safe()
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Dev-friendly bootstrap until Alembic migrations are added.
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    """App lifespan hook.
+
+    Schema is owned by Alembic (see ``backend/alembic/versions/``).
+    Run migrations explicitly before starting the app::
+
+        alembic upgrade head
+
+    The previous ``Base.metadata.create_all`` bootstrap was removed in
+    Stage 0 — relying on it caused silent schema drift and broke
+    audit/versioning guarantees.
+    """
     yield
 
 
@@ -40,6 +46,7 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.add_middleware(RequestIdMiddleware)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,

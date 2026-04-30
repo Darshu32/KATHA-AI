@@ -1,0 +1,81 @@
+[project]
+name = "katha-backend"
+version = "0.2.0"
+description = "KATHA AI — backend (FastAPI + agentic architecture)"
+requires-python = ">=3.11"
+
+# Runtime deps live in requirements.txt for now (Docker pip-installs them).
+# Dev tooling lives in requirements-dev.txt.
+
+# ─────────────────────────────────────────────────────────────────────
+# Ruff — single tool for lint + formatting + import sort.
+# ─────────────────────────────────────────────────────────────────────
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+extend-exclude = [
+    "alembic/versions",
+    ".venv",
+    "build",
+    "dist",
+]
+
+[tool.ruff.lint]
+# Sensible defaults: pyflakes, pycodestyle, isort, bugbear, comprehensions, pyupgrade
+select = ["E", "F", "I", "B", "C4", "UP", "N", "W", "RUF"]
+ignore = [
+    "E501",  # line-too-long handled by formatter
+    "B008",  # FastAPI Depends() in defaults is idiomatic
+    "N818",  # exception suffix not enforced
+]
+
+[tool.ruff.lint.per-file-ignores]
+"alembic/env.py" = ["E402"]
+"tests/*" = ["S101"]  # asserts ok in tests
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ─────────────────────────────────────────────────────────────────────
+# Mypy — start lenient, tighten later.
+# ─────────────────────────────────────────────────────────────────────
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true
+disallow_untyped_defs = false  # tighten in later stages
+ignore_missing_imports = true
+exclude = ["alembic/versions"]
+
+# ─────────────────────────────────────────────────────────────────────
+# Pytest — async-aware test runner.
+# ─────────────────────────────────────────────────────────────────────
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = [
+    "-ra",
+    "--strict-markers",
+    "--tb=short",
+]
+markers = [
+    "integration: requires postgres + redis (skipped in unit runs)",
+    "slow: runs > 1s",
+]
+
+# ─────────────────────────────────────────────────────────────────────
+# Coverage — opt-in, not enforced yet.
+# ─────────────────────────────────────────────────────────────────────
+[tool.coverage.run]
+branch = true
+source = ["app"]
+omit = ["alembic/*", "tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true

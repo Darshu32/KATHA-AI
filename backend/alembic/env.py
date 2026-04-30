@@ -10,8 +10,12 @@ from sqlalchemy.ext.asyncio import async_engine_from_config
 from app.config import get_settings
 from app.database import Base
 
-# Import all models so Base.metadata is populated
-import app.models.orm  # noqa: F401
+# Import all models so Base.metadata is populated.
+# IMPORTANT: every module that defines an ORM model must be imported here,
+# otherwise Alembic autogenerate will silently miss its tables.
+import app.db.audit  # noqa: F401  (audit_events table)
+import app.models.architecture  # noqa: F401  (architecture_* tables)
+import app.models.orm  # noqa: F401  (users, projects, designs, …)
 
 config = context.config
 settings = get_settings()
