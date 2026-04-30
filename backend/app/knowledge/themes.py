@@ -1,5 +1,25 @@
 """Parametric theme rule packs (BRD Layer 2A).
 
+⚠️ STAGE 3A DEPRECATION NOTICE — April 2026
+--------------------------------------------
+The dicts in this file have been migrated to the ``themes`` DB table by
+the Stage 3A externalisation. The cost-engine + agent-tool path now
+reads themes via :mod:`app.services.themes` (async, DB-backed,
+versioned, audited).
+
+Why this file still exists
+  1. Source for the seed migration (``0005_stage3a_themes_seed``).
+  2. Sync fallback for the ~25 services that still import this module
+     directly (drawings, diagrams, specs, exporters …). Stage 4+
+     migrates them to the async accessor.
+  3. Reference shape — the LLM prompts encode this structure.
+
+DO NOT update theme rule packs here. Use the admin endpoints
+(``POST /admin/themes/<slug>``) so changes are versioned + audited and
+visible to the agent immediately.
+
+---
+
 Each theme is a structured rule set: proportions, material palette,
 hardware, colour, ergonomic targets, signature moves, do / don't lists.
 These are consumed at generation time to shape the LLM prompt and at

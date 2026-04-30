@@ -7,8 +7,10 @@ Each spec sheet follows the project contract:
 
 import logging
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import get_db
 from app.knowledge import themes
 from app.models.schemas import ErrorResponse
 from app.services.manufacturing_spec_service import (
@@ -321,10 +323,18 @@ async def mep_spec_endpoint(payload: MEPSpecRequest) -> dict:
 
 
 @router.post("/cost-engine/knowledge")
-async def cost_engine_knowledge(payload: CostEngineRequest) -> dict:
-    """Preview the BRD knowledge slice the cost-engine LLM stage will see."""
+async def cost_engine_knowledge(
+    payload: CostEngineRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Preview the BRD knowledge slice the cost-engine LLM stage will see.
+
+    Stage 1: knowledge is now built from versioned DB rows. Source
+    versions for every cited price are returned alongside under
+    ``knowledge.source_versions`` so callers can prove provenance.
+    """
     try:
-        knowledge = build_cost_engine_knowledge(payload)
+        knowledge = await build_cost_engine_knowledge(payload, session=db)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -338,10 +348,24 @@ async def cost_engine_knowledge(payload: CostEngineRequest) -> dict:
 
 
 @router.post("/cost-engine")
-async def cost_engine_endpoint(payload: CostEngineRequest) -> dict:
-    """Run the LLM cost-engine author + return the structured sheet."""
+async def cost_engine_endpoint(
+    payload: CostEngineRequest,
+    db: AsyncSession = Depends(get_db),
+    snapshot_id: str | None = None,
+) -> dict:
+    """Run the LLM cost-engine author + return the structured sheet.
+
+    Stage 1: every run records an immutable :class:`PricingSnapshot`
+    so the numbers reproduce forever. Pass ``?snapshot_id=...`` to
+    replay an earlier capture (eg. when re-fetching an old estimate
+    after admin price updates).
+    """
     try:
-        return await generate_cost_engine(payload)
+        return await generate_cost_engine(
+            payload,
+            session=db,
+            snapshot_id=snapshot_id,
+        )
     except CostEngineError as exc:
         msg = str(exc)
         if msg.startswith("Unknown complexity") or msg.startswith("Unknown market_segment"):

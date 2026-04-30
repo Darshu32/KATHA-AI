@@ -1,5 +1,13 @@
 """Route registry — import all routers here."""
 
+from app.routes.admin import (
+    pricing_admin_router,
+    standards_admin_router,
+    suggestions_admin_router,
+    themes_admin_router,
+)
+from app.routes.agent import router as agent_router
+from app.routes.suggestions import router as suggestions_router
 from app.routes.architecture import router as architecture_router
 from app.routes.auth import router as auth_router
 from app.routes.brief import router as brief_router
@@ -34,4 +42,15 @@ all_routers = [
     prompts_router,
     specs_router,
     working_drawings_router,
+    # Stage 1 admin endpoints (pricing)
+    pricing_admin_router,
+    # Stage 2 agentic chat (/v2/chat)
+    agent_router,
+    # Stage 3A admin endpoints (themes)
+    themes_admin_router,
+    # Stage 3B admin endpoints (building standards)
+    standards_admin_router,
+    # Stage 3F public + admin endpoints (chat suggestion chips)
+    suggestions_router,
+    suggestions_admin_router,
 ]

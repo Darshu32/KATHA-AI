@@ -11,6 +11,10 @@ from app.config import get_settings
 from app.db import AuditEvent  # noqa: F401  (registers table on Base.metadata)
 from app.models import architecture  # noqa: F401
 from app.models import orm  # noqa: F401
+from app.models import pricing  # noqa: F401  (Stage 1 pricing tables)
+from app.models import standards as standard_models  # noqa: F401  (Stage 3B building_standards table)
+from app.models import suggestions as suggestion_models  # noqa: F401  (Stage 3F suggestions table)
+from app.models import themes as theme_models  # noqa: F401  (Stage 3A themes table)
 from app.models.schemas import ErrorResponse, ErrorDetail
 from app.observability.logging import configure_logging
 from app.observability.request_id import RequestIdMiddleware

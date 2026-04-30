@@ -1,5 +1,21 @@
 """Space planning standards — minimum / typical areas per room or use.
 
+⚠️ STAGE 3B DEPRECATION NOTICE — April 2026
+--------------------------------------------
+Values migrated to the ``building_standards`` DB table
+(category=``space``). DB-backed accessors live in
+:mod:`app.services.standards` (``check_room_area``,
+``list_standards_by_category``, ``resolve_standard``).
+
+This file remains as:
+  1. Seed source for ``0007_stage3b_standards_seed``.
+  2. Sync fallback / reference shape — no service currently imports
+     it directly, but it documents the canonical room set.
+
+DO NOT update values here. Use ``POST /admin/standards/...``.
+
+---
+
 Sourced from BRD Layer 1B and Neufert/Indian practice. All dimensions in
 metres. Area in m^2.
 """

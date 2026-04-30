@@ -1,5 +1,28 @@
 """Cost modelling rules (BRD 1C — Cost Modeling).
 
+⚠️ STAGE 1 DEPRECATION NOTICE — April 2026
+-------------------------------------------
+The constants in this file have been **migrated to the database** by
+the Stage 1 pricing externalisation. The cost engine
+(``app.services.cost_engine_service``) now reads from versioned
+``cost_factors`` and ``labor_rates`` rows via
+``app.repositories.pricing``.
+
+These literals remain here as:
+  1. The **seed source** for ``alembic upgrade 0003_stage1_pricing_seed``.
+  2. A **dev-time fallback** when the DB has no rows yet.
+  3. A reference for the OTHER services
+     (``cost_breakdown_service``, ``manufacturing_spec_service``,
+     ``material_spec_service``, ``pricing_service``,
+     ``sensitivity_service``) that have **not yet** been migrated.
+     Stage 3 migrates them.
+
+DO NOT update these values directly. Update via the admin pricing
+endpoints (Stage 1) so the change is versioned + audited. Editing here
+silently diverges the DB and the legacy consumers.
+
+---
+
 This module centralises cost-computation factors used by estimation and
 by the architect-brief LLM when it reasons about budgets.
 

@@ -23,6 +23,20 @@ This is the LAYER-4A document — i.e. the COST ENGINE up to TOTAL
 MANUFACTURING COST. Margin / packaging-to-retail is layered later in
 4B. The engine prices a single piece (or a single room's worth of
 millwork) — multi-piece projects call this once per piece.
+
+Stage 1 (April 2026) — knowledge externalisation
+------------------------------------------------
+``build_cost_engine_knowledge`` and ``generate_cost_engine`` now:
+
+- Read every cost constant from versioned DB rows
+  (``app.repositories.pricing``) instead of hardcoded literals.
+- Record an immutable :class:`PricingSnapshot` per run so the
+  numbers reproduce forever, even after admin price updates.
+- Optionally **replay** a prior snapshot via ``snapshot_id`` for
+  re-fetching old estimates without drift.
+
+Both functions now require an ``AsyncSession`` (FastAPI dependency);
+callers update the route signature accordingly.
 """
 
 from __future__ import annotations
@@ -34,9 +48,16 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
-from app.knowledge import costing, manufacturing, materials, regional_materials, themes
+from app.knowledge import manufacturing
+from app.services.pricing import (
+    build_pricing_knowledge,
+    load_snapshot,
+    record_snapshot,
+)
+from app.services.themes import get_theme
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -55,20 +76,18 @@ def _client_instance() -> AsyncOpenAI:
 
 
 # ── Vocabularies ────────────────────────────────────────────────────────────
-LABOR_TRADES_IN_SCOPE = tuple(costing.LABOR_RATES_INR_PER_HOUR.keys())
+# Canonical BRD §1C labor trades. Hardcoded here intentionally — these are
+# stable taxonomy, not market-volatile data, so they belong in code.
+# The DB ``labor_rates`` table is keyed on these trade slugs.
+LABOR_TRADES_IN_SCOPE = (
+    "woodworking",
+    "welding_metal",
+    "upholstery",
+    "finishing",
+    "assembly",
+)
 COST_BASIS_IN_SCOPE = ("kg", "m2", "m3", "linear_m", "piece")
 COMPLEXITY_LEVELS_IN_SCOPE = ("simple", "moderate", "complex", "highly_complex")
-
-# Hours per trade by complexity — practice rule of thumb, ranges so the LLM
-# can argue about the actual number based on parametric_spec joinery
-# count, edge profiles, panel area, etc.
-TRADE_HOURS_BY_COMPLEXITY: dict[str, dict[str, tuple[float, float]]] = {
-    "woodworking":   {"simple": (4, 10),  "moderate": (10, 24), "complex": (24, 48), "highly_complex": (48, 96)},
-    "welding_metal": {"simple": (2,  6),  "moderate": (6, 16),  "complex": (16, 32), "highly_complex": (32, 60)},
-    "upholstery":    {"simple": (4,  8),  "moderate": (8, 20),  "complex": (20, 40), "highly_complex": (40, 80)},
-    "finishing":     {"simple": (3,  6),  "moderate": (6, 14),  "complex": (14, 28), "highly_complex": (28, 50)},
-    "assembly":      {"simple": (2,  5),  "moderate": (5, 10),  "complex": (10, 20), "highly_complex": (20, 36)},
-}
 
 
 # ── Request schema ──────────────────────────────────────────────────────────
@@ -99,71 +118,68 @@ class CostEngineRequest(BaseModel):
 # ── Knowledge slice ─────────────────────────────────────────────────────────
 
 
-def build_cost_engine_knowledge(req: CostEngineRequest) -> dict[str, Any]:
-    pack = themes.get(req.theme) if req.theme else None
-    city_index = regional_materials.price_index_for_city(req.city or None)
-    if not isinstance(city_index, (int, float)):
-        city_index = 1.0
+async def build_cost_engine_knowledge(
+    req: CostEngineRequest,
+    *,
+    session: AsyncSession,
+    when: datetime | None = None,
+) -> dict[str, Any]:
+    """Assemble the BRD knowledge slice the cost-engine LLM stage will see.
 
-    return {
-        "project": {
-            "name": req.project_name,
-            "piece_name": req.piece_name,
-            "theme": req.theme or None,
-            "city": req.city or None,
-            "city_price_index": city_index,
-            "market_segment": req.market_segment.lower(),
-            "complexity": req.complexity.lower(),
-            "hardware_piece_count": req.hardware_piece_count,
-            "overrides": [o.model_dump() for o in (req.overrides or [])],
-        },
-        "theme_rule_pack": (
-            {
-                "display_name": (pack or {}).get("display_name") or req.theme,
-                "material_palette": (pack or {}).get("material_palette", {}),
-                "hardware": (pack or {}).get("hardware", {}),
-            } if pack else None
-        ),
-        "parametric_spec": req.parametric_spec or {},
-        "material_spec": req.material_spec or {},
-        "manufacturing_spec": req.manufacturing_spec or {},
-        "cost_brd": {
-            "material_cost": dict(costing.MATERIAL_COST_BRD_SPEC),
-            "waste_factor_pct_band": list(costing.WASTE_FACTOR_PCT),
-            "finish_cost_pct_of_material": list(costing.FINISH_COST_PCT_OF_MATERIAL),
-            "hardware_inr_per_piece": list(costing.HARDWARE_INR_PER_PIECE),
-            "cost_basis_by_family": dict(costing.COST_BASIS_BY_FAMILY),
-            "labor_rates_inr_hour": {
-                k: list(v) for k, v in costing.LABOR_RATES_INR_PER_HOUR.items()
-            },
-            "labor_brd_spec": dict(costing.LABOR_COST_BRD_SPEC),
-            "overhead_margin": dict(costing.OVERHEAD_MARGIN_BRD_SPEC),
-            "workshop_overhead_pct_of_direct": list(costing.WORKSHOP_OVERHEAD_PCT_OF_DIRECT),
-            "qc_pct_of_labor": list(costing.QC_PCT_OF_LABOR),
-            "packaging_logistics_pct_of_product": list(costing.PACKAGING_LOGISTICS_PCT_OF_PRODUCT),
-            "trade_hours_by_complexity": {
-                trade: {lvl: list(band) for lvl, band in tab.items()}
-                for trade, tab in TRADE_HOURS_BY_COMPLEXITY.items()
-            },
-        },
-        "materials_kb": {
-            "wood_inr_kg": {
-                k: v.get("cost_inr_kg") for k, v in materials.WOODS.items()
-            } if hasattr(materials, "WOODS") else {},
-            "metals_inr_kg": {
-                k: v.get("cost_inr_kg") for k, v in materials.METALS.items()
-            } if hasattr(materials, "METALS") else {},
-        },
-        "manufacturing_brd": {
-            "lead_times_weeks": dict(manufacturing.LEAD_TIMES_WEEKS),
-            "moq_units": dict(manufacturing.MOQ),
-        },
-        "vocab": {
-            "labor_trades_in_scope": list(LABOR_TRADES_IN_SCOPE),
-            "cost_basis_in_scope": list(COST_BASIS_IN_SCOPE),
-            "complexity_levels_in_scope": list(COMPLEXITY_LEVELS_IN_SCOPE),
-        },
+    Stage 1 — DB-backed. ``cost_brd``, ``materials_kb`` and
+    ``city_price_index`` come from versioned ``app.repositories.pricing``
+    rows. The shape is preserved 1:1 with the legacy hardcoded path so
+    the system prompt + JSON schema below continue to work unchanged.
+
+    Pass ``when`` (UTC) to reproduce a historical knowledge slice — the
+    pricing repos honour ``effective_from / effective_to``.
+    """
+    # Stage 3A: theme rule pack now comes from the DB-backed
+    # ``themes`` table via ``app.services.themes.get_theme``. The
+    # accessor falls back to the legacy literal if the DB is empty
+    # (fresh-dev scenarios), so this remains safe in all envs.
+    pack = await get_theme(session, req.theme) if req.theme else None
+
+    # Pull the DB-backed core (cost factors, labor rates, trade hours,
+    # city index, materials KB, source_versions for transparency).
+    core = await build_pricing_knowledge(
+        session,
+        project_name=req.project_name,
+        piece_name=req.piece_name,
+        theme=req.theme,
+        city=req.city or None,
+        market_segment=req.market_segment,
+        complexity=req.complexity,
+        hardware_piece_count=req.hardware_piece_count,
+        parametric_spec=req.parametric_spec,
+        material_spec=req.material_spec,
+        manufacturing_spec=req.manufacturing_spec,
+        overrides=[o.model_dump() for o in (req.overrides or [])],
+        when=when,
+    )
+
+    # Layer in the non-pricing fields the cost-engine prompt expects.
+    # Manufacturing lead times + MOQ remain on the legacy module for
+    # now — Stage 3 migrates them.
+    core["theme_rule_pack"] = (
+        {
+            "display_name": (pack or {}).get("display_name") or req.theme,
+            "material_palette": (pack or {}).get("material_palette", {}),
+            "hardware": (pack or {}).get("hardware", {}),
+        }
+        if pack
+        else None
+    )
+    core["manufacturing_brd"] = {
+        "lead_times_weeks": dict(manufacturing.LEAD_TIMES_WEEKS),
+        "moq_units": dict(manufacturing.MOQ),
     }
+    core["vocab"] = {
+        "labor_trades_in_scope": list(LABOR_TRADES_IN_SCOPE),
+        "cost_basis_in_scope": list(COST_BASIS_IN_SCOPE),
+        "complexity_levels_in_scope": list(COMPLEXITY_LEVELS_IN_SCOPE),
+    }
+    return core
 
 
 # ── System prompt ───────────────────────────────────────────────────────────
@@ -867,7 +883,35 @@ class CostEngineError(RuntimeError):
     """Raised when the LLM cost engine stage cannot produce a grounded sheet."""
 
 
-async def generate_cost_engine(req: CostEngineRequest) -> dict[str, Any]:
+async def generate_cost_engine(
+    req: CostEngineRequest,
+    *,
+    session: AsyncSession,
+    snapshot_id: str | None = None,
+    actor_id: str | None = None,
+    project_id: str | None = None,
+) -> dict[str, Any]:
+    """Run the parametric cost-engine stage.
+
+    Stage 1 — DB-backed knowledge + immutable snapshots.
+
+    Modes
+    -----
+    - **Live** (default): builds knowledge from current DB rows and
+      records a fresh :class:`PricingSnapshot`. The returned dict
+      includes ``pricing_snapshot_id`` so callers can attach the
+      snapshot to their own artefact (estimate row, project log, …).
+    - **Replay**: pass ``snapshot_id`` to re-run the LLM against the
+      *exact* knowledge dict that was captured before. No new snapshot
+      is recorded; ``pricing_snapshot_id`` echoes the input id.
+
+    Args
+    ----
+    session: caller-managed transaction. The snapshot insert flushes
+        but does not commit; the route owns the commit.
+    snapshot_id: replay an existing capture instead of building fresh.
+    actor_id / project_id: provenance metadata for the snapshot row.
+    """
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise CostEngineError(
             "OpenAI API key is not configured. The cost engine stage requires "
@@ -885,7 +929,27 @@ async def generate_cost_engine(req: CostEngineRequest) -> dict[str, Any]:
             f"Pick 'mass_market' or 'luxury'."
         )
 
-    knowledge = build_cost_engine_knowledge(req)
+    # ── Knowledge: replay or build fresh ────────────────────────────
+    if snapshot_id is not None:
+        knowledge = await load_snapshot(session, snapshot_id)
+        if knowledge is None:
+            raise CostEngineError(
+                f"Pricing snapshot {snapshot_id!r} not found"
+            )
+        recorded_snapshot_id = snapshot_id
+    else:
+        knowledge = await build_cost_engine_knowledge(req, session=session)
+        snapshot = await record_snapshot(
+            session,
+            knowledge=knowledge,
+            target_type="cost_engine",
+            target_id=None,
+            project_id=project_id,
+            actor_id=actor_id,
+            actor_kind="user" if actor_id else "system",
+        )
+        recorded_snapshot_id = snapshot["id"]
+
     user_message = _user_message(req, knowledge)
     client = _client_instance()
 
@@ -923,4 +987,5 @@ async def generate_cost_engine(req: CostEngineRequest) -> dict[str, Any]:
         "knowledge": knowledge,
         "cost_engine": spec,
         "validation": validation,
+        "pricing_snapshot_id": recorded_snapshot_id,
     }

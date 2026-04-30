@@ -1,5 +1,24 @@
 """Ergonomic dimension ranges for furniture.
 
+⚠️ STAGE 3E DEPRECATION NOTICE — April 2026
+--------------------------------------------
+Values migrated to ``building_standards`` (category=``space``,
+subcategory=``furniture_ergonomics``, jurisdiction=``india_nbc``).
+DB-backed async accessors in :mod:`app.services.standards.ergonomics_lookup`
+(``get_ergonomics``, ``list_ergonomics_for_group``, ``check_range``,
+``bed_under_storage_band``).
+
+Why this file still exists
+  1. Source for ``0012_stage3e_ergonomics_seed``.
+  2. Sync fallback for the 5 services still importing this module
+     directly (``variations``, drawing services). Stage 4+ migrates
+     them to async.
+
+DO NOT update values here. Use ``POST /admin/standards/space/<slug>``
+where slug is e.g. ``ergonomics_chair_dining_chair``.
+
+---
+
 All values in millimetres unless otherwise noted. Ranges are (min, max).
 Sourced from BRD Layer 1C and Neufert.
 """

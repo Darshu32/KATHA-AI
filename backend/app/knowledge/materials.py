@@ -1,5 +1,23 @@
 """Material physical properties, cost, lead-time data.
 
+⚠️ STAGE 1 PARTIAL DEPRECATION NOTICE — April 2026
+---------------------------------------------------
+**Cost-related fields** (``cost_inr_kg``, ``cost_inr_m2``, ``cost_inr_m3``,
+``lead_time_weeks``) have been migrated to the ``material_prices`` DB
+table. The cost engine reads them via
+``app.repositories.pricing.MaterialPriceRepository`` and accepts admin
+updates through the Stage 1 pricing endpoints.
+
+**Physical properties** (density, MOR, MOE, finish_options, durability,
+colourfastness) remain authoritative HERE — they're not market-volatile.
+Stage 3 migrates the remaining cost-related consumers; physical-property
+consumers stay on this module.
+
+DO NOT update cost fields directly — go through the admin pricing
+endpoints so changes are versioned + audited.
+
+---
+
 Per BRD Layer 1C. Units noted per field. INR for costs (India context).
 """
 

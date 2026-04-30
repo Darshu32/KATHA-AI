@@ -1,5 +1,16 @@
 """Climate-zone design rules (BRD Phase 1 / Layer 1A).
 
+⚠️ STAGE 3E DEPRECATION NOTICE — April 2026
+--------------------------------------------
+The 5 climate zones have been migrated to ``building_standards``
+(category=``code``, subcategory=``climate``, jurisdiction=``india_nbc``).
+DB-backed async accessors in :mod:`app.services.standards.codes_lookup`
+(``get_climate_zone``, ``list_climate_zones``).
+
+DO NOT update zone packs here. Use ``POST /admin/standards/code/code_climate_<zone>``.
+
+---
+
 Climatic zones follow SP 41 / NBC India Part 11 classification, extended
 with practical design levers: solar orientation, glazing strategy, HVAC
 load basis, passive design priorities.

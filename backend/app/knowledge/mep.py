@@ -1,5 +1,31 @@
 """MEP sizing rules — HVAC, electrical, plumbing.
 
+⚠️ STAGE 3C DEPRECATION NOTICE — April 2026
+--------------------------------------------
+The dicts in this file have been migrated to the ``building_standards``
+DB table (category=``mep``) by the Stage 3C externalisation. Async
+DB-backed sizing helpers live in
+:mod:`app.services.standards.mep_sizing` (``hvac_cfm``, ``cooling_tr``,
+``equipment_shortlist``, ``ambient_fixture_count``,
+``pipe_size_for_dfu``, ``vent_size_for_dfu``, ``system_cost_estimate``,
+…).
+
+Why this file still exists
+  1. Source for the seed migration (``0008_stage3c_mep_seed``).
+  2. Sync fallback for the 3 services still importing this module
+     (``mep_spec_service``, ``import_advisor_service``,
+     ``specs.mep_spec``). Stage 4+ migrates them to the async helpers.
+
+Physics constants (``BTU_PER_TR``, ``KW_PER_TR``, ``GPM_TO_LPM``) and
+the helper formulas remain authoritative HERE — they're either
+non-volatile physics or pure formula. The DB-backed helpers reuse the
+same physics constants from ``app.services.standards.mep_sizing``.
+
+DO NOT update values here. Use ``POST /admin/standards/mep/<slug>`` so
+the change is versioned + audited and visible to the agent immediately.
+
+---
+
 Per BRD Layer 1B. References: ASHRAE 62.1, NEC / IS 732, NBC Part 9.
 """
 

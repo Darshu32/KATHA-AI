@@ -1,5 +1,20 @@
 """International Building Code (IBC) reference — for non-India projects.
 
+⚠️ STAGE 3E DEPRECATION NOTICE — April 2026
+--------------------------------------------
+Values migrated to ``building_standards`` (category=``code``,
+jurisdiction=``international_ibc``). DB-backed async lookups in
+:mod:`app.services.standards.codes_lookup` (``list_ibc_occupancy_groups``,
+``get_ibc_occupancy``, ``get_ibc_egress``, ``get_iecc_envelope``,
+``get_accessibility(jurisdiction='international_ibc')``).
+
+This file remains as seed source + sync fallback. Stage 4+ migrates
+the prompt-injecting consumers to async.
+
+DO NOT update values here. Use ``POST /admin/standards/code/<slug>?jurisdiction=international_ibc``.
+
+---
+
 Companion to `codes.py` (which covers NBC India + ECBC + accessibility).
 Used when the brief's regulatory context is outside India, or when the
 client explicitly requests international benchmarking.

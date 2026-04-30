@@ -1,5 +1,23 @@
 """Regional material availability, sourcing, and cost adjustment.
 
+⚠️ STAGE 1 DEPRECATION NOTICE — April 2026
+-------------------------------------------
+``CITY_PRICE_INDEX`` and ``MATERIAL_AVAILABILITY`` have been migrated
+to the ``city_price_indices`` and ``material_prices.available_in_cities``
+DB tables (Stage 1 pricing externalisation). The cost engine now reads
+through ``app.repositories.pricing.CityPriceIndexRepository`` and
+``MaterialPriceRepository``.
+
+These literals remain here for:
+  1. Seed-data source (used by 0003_stage1_pricing_seed).
+  2. Dev-time fallback if the DB is empty.
+  3. Other (not-yet-migrated) services that still import this module.
+
+DO NOT update directly. Use the admin endpoints so changes are
+versioned + audited.
+
+---
+
 Keeps the core material specs in `materials.py` universal; this module
 layers regional availability, typical lead-time adders, and a price
 index so cost/estimation stages can adapt dynamically.

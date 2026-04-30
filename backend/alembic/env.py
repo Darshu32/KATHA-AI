@@ -16,6 +16,10 @@ from app.database import Base
 import app.db.audit  # noqa: F401  (audit_events table)
 import app.models.architecture  # noqa: F401  (architecture_* tables)
 import app.models.orm  # noqa: F401  (users, projects, designs, …)
+import app.models.pricing  # noqa: F401  (Stage 1 pricing tables)
+import app.models.standards  # noqa: F401  (Stage 3B building_standards table)
+import app.models.suggestions  # noqa: F401  (Stage 3F suggestions table)
+import app.models.themes  # noqa: F401  (Stage 3A themes table)
 
 config = context.config
 settings = get_settings()

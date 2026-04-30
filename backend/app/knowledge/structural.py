@@ -1,5 +1,17 @@
 """Structural design guidelines — loads, spans, spacing.
 
+⚠️ STAGE 3E DEPRECATION NOTICE — April 2026
+--------------------------------------------
+Values migrated to ``building_standards`` (category=``code``,
+subcategory=``structural``, jurisdiction=``india_nbc``). DB-backed
+async lookups in :mod:`app.services.standards.codes_lookup`
+(``get_live_loads_is875``, ``get_seismic_zones``, ``get_span_limits``,
+``check_span``, ``get_foundation_by_soil``, ``get_material_strengths``).
+
+DO NOT update values here. Use ``POST /admin/standards/code/<slug>``.
+
+---
+
 Per BRD Layer 1B. All loads in kN/m^2, lengths in metres, stresses in MPa.
 Reference standards: IS 875 (loads), IS 456 (concrete), IS 800 (steel),
 IS 883 (timber).

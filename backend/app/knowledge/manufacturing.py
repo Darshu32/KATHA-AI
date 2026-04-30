@@ -1,5 +1,26 @@
 """Manufacturing constraints — tolerances, joinery, lead times, MOQs.
 
+⚠️ STAGE 3D DEPRECATION NOTICE — April 2026
+--------------------------------------------
+The dicts in this file have been migrated to the ``building_standards``
+DB table (category=``manufacturing``) by the Stage 3D externalisation.
+Async DB-backed lookups live in
+:mod:`app.services.standards.manufacturing_lookup` (``tolerance_for``,
+``lead_time_for``, ``moq_for``, ``joinery_lookup``, ``welding_lookup``,
+``list_qa_gates``, ``process_spec``, …).
+
+Why this file still exists
+  1. Source for the seed migration (``0010_stage3d_mfg_seed``).
+  2. Sync fallback for the 8 services still importing this module
+     directly. Stage 4+ migrates them to the async helpers as part of
+     wrapping each service as an agent tool.
+
+DO NOT update values here. Use ``POST /admin/standards/manufacturing/<slug>``
+so the change is versioned + audited and visible to the agent
+immediately.
+
+---
+
 Per BRD Layer 1C. Units in millimetres where applicable.
 """
 

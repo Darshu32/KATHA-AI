@@ -14,6 +14,9 @@ passlib[bcrypt]==1.7.4
 PyJWT==2.10.1
 
 # ── AI ───────────────────────────────────────────────
+# Anthropic Claude is the PRIMARY agent runtime (Stage 2+).
+# OpenAI is fallback + embeddings + legacy structured-output paths.
+anthropic==0.42.0
 openai==1.68.0
 
 # ── Background Jobs ─────────────────────────────────

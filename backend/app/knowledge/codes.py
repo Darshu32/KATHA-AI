@@ -1,5 +1,25 @@
 """Building codes — NBC India (Part references), ECBC, accessibility basics.
 
+⚠️ STAGE 3E DEPRECATION NOTICE — April 2026
+--------------------------------------------
+The dicts in this file have been migrated to the ``building_standards``
+DB table (category=``code``, jurisdiction=``india_nbc``). DB-backed
+async lookups live in :mod:`app.services.standards.codes_lookup`
+(``nbc_minimum_room_dimensions``, ``check_room_against_nbc``,
+``get_ecbc_targets``, ``get_accessibility``, ``get_fire_safety``).
+
+Why this file still exists
+  1. Source for ``0011_stage3e_codes_seed``.
+  2. Sync fallback for legacy consumers (notably ``summary.py`` which
+     still injects NBC clauses into LLM prompts directly). Stage 4+
+     migrates the prompt builder to async.
+
+DO NOT update values here. Use ``POST /admin/standards/code/<slug>``
+so the change is versioned + audited and visible to the agent
+immediately.
+
+---
+
 Not a legal substitute; summary of key rules relevant to design generation.
 """
 

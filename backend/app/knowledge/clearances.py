@@ -1,5 +1,24 @@
 """Clearances, circulation, and egress dimensions.
 
+⚠️ STAGE 3B DEPRECATION NOTICE — April 2026
+--------------------------------------------
+The dicts in this file have been migrated to the ``building_standards``
+DB table (category=``clearance``) by the Stage 3B externalisation. The
+DB-backed accessors live in :mod:`app.services.standards`.
+
+Why this file still exists
+  1. Source for the seed migration (``0007_stage3b_standards_seed``).
+  2. Sync fallback for the 4 services still importing this module
+     (``dxf_exporter``, ``spatial_organism_diagram_service``,
+     ``solid_void_diagram_service``, ``diagrams.spatial_organism``).
+  3. ``check_door`` / ``check_corridor`` helpers used by validators —
+     async equivalents now in :mod:`app.services.standards`.
+
+DO NOT update values here. Use ``POST /admin/standards/...`` so the
+change is versioned + audited and visible to the agent immediately.
+
+---
+
 Values in millimetres. Sourced from BRD Layer 1B, NBC India Part 4,
 and IBC Chapter 10.
 """
