@@ -372,33 +372,180 @@ class ProjectMemoryChunk(Base, UUIDMixin, TimestampMixin):
     extra: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
 
 
-# ── Knowledge Base ───────────────────────────────────────────────────────────
+# ── Uploaded assets (Stage 7 — multi-modal inputs) ───────────────────────────
+
+
+class UploadedAsset(Base, UUIDMixin, TimestampMixin):
+    """One uploaded binary asset — image, sketch, reference, etc.
+
+    The bytes themselves live in the storage backend (local disk or
+    S3 / R2). This row carries the metadata + storage key the agent
+    layer needs to resolve them later.
+
+    Lifecycle
+    ---------
+    1. Client POSTs to ``/v2/uploads`` (multipart form). Route
+       creates the row with ``status='uploading'``.
+    2. Storage backend writes the bytes; route flips ``status`` to
+       ``ready`` on success or ``error`` on failure.
+    3. Agent tools resolve assets by id, then call
+       ``StorageBackend.get_bytes(storage_key)``.
+
+    Why ``kind`` (not ``mime_type``) drives behaviour
+    --------------------------------------------------
+    A JPEG can be a site photo or a hand sketch — same MIME, very
+    different vision-prompt shape. The route layer accepts a free
+    ``kind`` slug that flows through to the agent's vision tools so
+    the LLM gets the right purpose-specific prompt.
+    """
+
+    __tablename__ = "uploaded_assets"
+    __table_args__ = (
+        Index(
+            "ix_uploaded_assets_owner_recent",
+            "owner_id",
+            "created_at",
+        ),
+    )
+
+    owner_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        String(32),
+        ForeignKey("projects.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+
+    # Free-form kind slug — image | site_photo | reference |
+    # mood_board | hand_sketch | existing_floor_plan | audio | other.
+    # Drives vision tool prompt selection.
+    kind: Mapped[str] = mapped_column(String(64), default="image")
+
+    storage_backend: Mapped[str] = mapped_column(String(16), default="local")
+    storage_key: Mapped[str] = mapped_column(String(512))
+
+    original_filename: Mapped[str] = mapped_column(String(255), default="")
+    mime_type: Mapped[str] = mapped_column(String(64), default="application/octet-stream")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    content_hash: Mapped[str] = mapped_column(String(64), default="")
+
+    status: Mapped[str] = mapped_column(
+        String(32),
+        default="ready",
+    )  # uploading | ready | error
+    error_message: Mapped[str] = mapped_column(Text, default="")
+
+    metadata_: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
+
+
+# ── Knowledge Base / RAG corpus (Stage 6) ────────────────────────────────────
 
 
 class KnowledgeDocument(Base, UUIDMixin, TimestampMixin):
+    """One source document in the global knowledge corpus.
+
+    Stage 6 — the corpus is **shared across all users + projects**.
+    Every architect sees the same NBC, IBC, ECBC, vendor catalogs,
+    etc. Documents are versioned via ``effective_from`` /
+    ``effective_to`` so an updated NBC 2024 can supersede NBC 2016
+    without losing the audit trail.
+    """
+
     __tablename__ = "knowledge_documents"
 
     title: Mapped[str] = mapped_column(String(400))
     source_type: Mapped[str] = mapped_column(
         String(64)
-    )  # pdf | manual | catalog | style_guide
+    )  # pdf | manual | catalog | style_guide | textbook | bye_law
     storage_key: Mapped[str] = mapped_column(String(512), default="")
     status: Mapped[str] = mapped_column(
         String(32), default="pending"
     )  # pending | processing | indexed | error
 
-    chunks: Mapped[list["KnowledgeChunk"]] = relationship(back_populates="document")
+    # Stage 6 additions — citation + jurisdiction.
+    jurisdiction: Mapped[str] = mapped_column(
+        String(64), default="", index=True,
+    )  # e.g. nbc_india_2016 | ibc_us_2021 | ecbc_india | maharashtra_dcr | karnataka_kmc
+    publisher: Mapped[str] = mapped_column(String(200), default="")
+    edition: Mapped[str] = mapped_column(String(64), default="")
+    total_pages: Mapped[int] = mapped_column(Integer, default=0)
+    language: Mapped[str] = mapped_column(String(8), default="en")
+    effective_from: Mapped[str | None] = mapped_column(
+        String(32), nullable=True,
+    )  # ISO date string
+    effective_to: Mapped[str | None] = mapped_column(
+        String(32), nullable=True,
+    )
+
+    chunks: Mapped[list["KnowledgeChunk"]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+    )
 
 
 class KnowledgeChunk(Base, UUIDMixin):
+    """One indexable chunk of a knowledge document.
+
+    Stage 6 — each chunk carries:
+
+    - The verbatim text (so search results are quotable).
+    - An ``embedding vector(1536)`` for semantic similarity.
+    - A ``content_tsv`` Postgres tsvector for BM25-like keyword
+      matching. Built by a migration trigger on insert/update.
+    - Citation metadata (page, section anchor) so the agent can
+      answer "NBC Part 4 §3.2" instead of "we have a chunk that
+      mentions corridor width".
+    - ``jurisdiction`` denormalised from the parent document for
+      cheap WHERE-filtering without a join.
+
+    Re-ingesting a document deletes its chunks and writes new ones
+    (CASCADE on the FK). The IDs are not stable across re-ingests;
+    cite by ``(document_id, section, page)`` instead.
+    """
+
     __tablename__ = "knowledge_chunks"
 
     document_id: Mapped[str] = mapped_column(
-        String(32), ForeignKey("knowledge_documents.id"), index=True
+        String(32),
+        ForeignKey("knowledge_documents.id", ondelete="CASCADE"),
+        index=True,
     )
     content: Mapped[str] = mapped_column(Text)
     token_count: Mapped[int] = mapped_column(Integer, default=0)
-    # pgvector column added via migration: embedding vector(1536)
+
+    # Stage 6 — citation metadata.
+    jurisdiction: Mapped[str] = mapped_column(
+        String(64), default="", index=True,
+    )  # denormalised from parent document
+    page: Mapped[int] = mapped_column(Integer, default=0)
+    page_end: Mapped[int] = mapped_column(Integer, default=0)
+    section: Mapped[str] = mapped_column(
+        String(200), default="",
+    )  # e.g. "Part 4 §3.2" / "Chapter 5 - Plumbing Fixtures"
+    chunk_index: Mapped[int] = mapped_column(Integer, default=0)
+    total_chunks: Mapped[int] = mapped_column(Integer, default=1)
+
+    # The embedding column. Migration 0017 ALTERs from a placeholder
+    # type to ``vector(1536)`` after enabling the extension. We use
+    # the same Vector wrapper as project_memory_chunks so a bare-
+    # pgvector dev env can still import this module.
+    embedding: Mapped[list[float]] = mapped_column(
+        Vector(1536), nullable=True,
+    )
+
+    # The keyword-search column — populated by a Postgres trigger on
+    # insert/update from ``content``. Declared as deferred-loaded
+    # JSONB-ish in the ORM (we never read it from Python; queries
+    # use raw SQL ``ts_rank`` against this column).
+    # Type left as ``Text`` here so SQLAlchemy doesn't try to validate
+    # tsvector contents — the migration sets the actual type.
+    # (Stage 6 — see migration 0017_stage6_corpus.py)
+
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
 
     document: Mapped["KnowledgeDocument"] = relationship(back_populates="chunks")

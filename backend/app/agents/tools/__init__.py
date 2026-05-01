@@ -25,8 +25,10 @@ Stage 4H → io (8 tools — list/parse/export formats + recipients +
 Stage 5  → recall (1 tool — conversation recall over persisted history)
 Stage 5B → memory (3 tools — search / index / stats over project memory RAG)
 Stage 5D → memory (+1 tool — prune_project_memory for eviction)
+Stage 6  → knowledge_search (2 tools — search / list over global RAG corpus)
+Stage 7  → vision (5 tools — analyze / site / aesthetic / sketch / digitize)
 
-Total: 60 tools as of Stage 5D.
+Total: 67 tools as of Stage 7.
 """
 
 from __future__ import annotations
@@ -42,6 +44,7 @@ from app.agents.tools import (  # noqa: F401
     drawings as _drawings,
     ergonomics as _ergonomics,
     io as _io,
+    knowledge_search as _knowledge_search,
     manufacturing as _manufacturing,
     memory as _memory,
     mep_cost as _mep_cost,
@@ -52,6 +55,7 @@ from app.agents.tools import (  # noqa: F401
     recall as _recall,
     specs as _specs,
     themes as _themes,
+    vision as _vision,
 )
 
 
@@ -64,6 +68,7 @@ _REGISTERED_MODULES = (
     _drawings,
     _ergonomics,
     _io,
+    _knowledge_search,
     _manufacturing,
     _memory,
     _mep_cost,
@@ -74,6 +79,7 @@ _REGISTERED_MODULES = (
     _recall,
     _specs,
     _themes,
+    _vision,
 )
 
 

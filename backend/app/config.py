@@ -69,11 +69,34 @@ class Settings(BaseSettings):
     async_indexing_enabled: bool = False
 
     # ── Storage (Cloudflare R2 / S3-compat) ──────────────
+    # Stage 7 — backend selector. ``local`` writes to a directory on
+    # disk (defaults to ``./uploads``); ``s3`` uses the S3-compatible
+    # bucket below. Tests use ``local`` with a temp dir.
+    storage_backend: str = "local"
+    storage_local_root: str = "uploads"
     s3_endpoint: str = ""
     s3_access_key: str = ""
     s3_secret_key: str = ""
     s3_bucket: str = "katha-assets"
     s3_region: str = "auto"
+
+    # Stage 7 — multi-modal (vision).
+    # Image-asset upload limits enforced at the route layer.
+    upload_max_bytes: int = 25 * 1024 * 1024  # 25 MB
+    # Allowed MIME types for the upload endpoint. The vision tools
+    # additionally check the image is one of these before sending to
+    # the model — no user-supplied URI bypasses this.
+    upload_allowed_mime: tuple[str, ...] = (
+        "image/jpeg",
+        "image/png",
+        "image/webp",
+        "image/heic",
+        "image/heif",
+    )
+    # Anthropic vision uses the same Claude model + key as the agent
+    # runtime. We expose the model slug separately so future stages
+    # can pin a different vision-tuned variant.
+    vision_model: str = "claude-sonnet-4-5"
 
     # ── Auth ─────────────────────────────────────────────
     jwt_secret: str = _DEFAULT_JWT_SECRET

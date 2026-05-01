@@ -23,6 +23,7 @@ from app.routes.parametric import router as parametric_router
 from app.routes.prompts import router as prompts_router
 from app.routes.projects import router as projects_router
 from app.routes.specs import router as specs_router
+from app.routes.uploads import router as uploads_router
 from app.routes.working_drawings import router as working_drawings_router
 
 all_routers = [
@@ -53,4 +54,6 @@ all_routers = [
     # Stage 3F public + admin endpoints (chat suggestion chips)
     suggestions_router,
     suggestions_admin_router,
+    # Stage 7 multi-modal uploads (/v2/uploads)
+    uploads_router,
 ]

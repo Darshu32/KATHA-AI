@@ -52,7 +52,12 @@ tmp_*/
 tmp_diagrams/
 tmp_exports/
 generated/
-uploads/
+# Only ignore the project-root upload dir (Stage 7's local storage
+# backend writes here). The Python package
+# ``backend/app/repositories/uploads`` is source code and must NOT
+# match this pattern — leading ``/`` anchors to repo root.
+/uploads/
+/backend/uploads/
 
 # ── Database / local storage ────────────────────────────────────────────────
 *.sqlite
