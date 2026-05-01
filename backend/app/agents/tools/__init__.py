@@ -31,8 +31,13 @@ Stage 8  → decisions (2 tools — record / recall) +
            profiles (3 tools — architect fingerprint / client profile /
            resume project context)
 Stage 9  → haptic (1 tool — export_haptic_payload, BRD §Layer 7)
+Stage 10 → brief (2 tools — intake_design_brief +
+           brief_to_generation_context, BRD §1A) +
+           sensitivity (1 tool — analyze_cost_shock, BRD §4D ±10%) +
+           recommendations (2 tools — quick_recommendations +
+           full_recommendations, BRD §6 proactive advisor)
 
-Total: 73 tools as of Stage 9.
+Total: 78 tools as of Stage 10.
 """
 
 from __future__ import annotations
@@ -40,6 +45,7 @@ from __future__ import annotations
 # Import side-effects register the tools. Order doesn't matter — each
 # module is independent and each @tool registers itself.
 from app.agents.tools import (  # noqa: F401
+    brief as _brief,
     clearances as _clearances,
     codes as _codes,
     cost as _cost,
@@ -60,6 +66,8 @@ from app.agents.tools import (  # noqa: F401
     pipeline as _pipeline,
     profiles as _profiles,
     recall as _recall,
+    recommendations as _recommendations,
+    sensitivity as _sensitivity,
     specs as _specs,
     themes as _themes,
     vision as _vision,
@@ -67,6 +75,7 @@ from app.agents.tools import (  # noqa: F401
 
 
 _REGISTERED_MODULES = (
+    _brief,
     _clearances,
     _codes,
     _cost,
@@ -87,6 +96,8 @@ _REGISTERED_MODULES = (
     _pipeline,
     _profiles,
     _recall,
+    _recommendations,
+    _sensitivity,
     _specs,
     _themes,
     _vision,
