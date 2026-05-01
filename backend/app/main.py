@@ -9,6 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import get_settings
 from app.db import AuditEvent  # noqa: F401  (registers table on Base.metadata)
+from app.middleware import RateLimitMiddleware
 from app.models import architecture  # noqa: F401
 from app.models import orm  # noqa: F401
 from app.models import pricing  # noqa: F401  (Stage 1 pricing tables)
@@ -16,7 +17,9 @@ from app.models import standards as standard_models  # noqa: F401  (Stage 3B bui
 from app.models import suggestions as suggestion_models  # noqa: F401  (Stage 3F suggestions table)
 from app.models import themes as theme_models  # noqa: F401  (Stage 3A themes table)
 from app.models.schemas import ErrorResponse, ErrorDetail
+from app.observability.error_envelope import install_error_handlers
 from app.observability.logging import configure_logging
+from app.observability.otel import install as install_otel
 from app.observability.request_id import RequestIdMiddleware
 from app.routes import all_routers
 
@@ -58,40 +61,27 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Stage 13 — sliding-window rate limiter. Soft-fails when Redis is
+# unreachable so a limiter outage never becomes an API outage.
+app.add_middleware(
+    RateLimitMiddleware,
+    redis_url=settings.redis_url,
+)
 
 for router in all_routers:
     app.include_router(router, prefix="/api/v1")
 
 
-@app.exception_handler(RequestValidationError)
-async def validation_exception_handler(_: Request, exc: RequestValidationError) -> JSONResponse:
-    details = [
-        ErrorDetail(
-            field=".".join(str(part) for part in error["loc"] if part != "body"),
-            message=error["msg"],
-        ).model_dump()
-        for error in exc.errors()
-    ]
-    return JSONResponse(
-        status_code=422,
-        content=ErrorResponse(
-            error="validation_error",
-            message="Request validation failed",
-            details=details,
-        ).model_dump(),
-    )
+# Stage 13 — canonical error envelope. Replaces the inline handlers
+# that lived here through Stage 0–12; same shape, but now driven by
+# ``ErrorCode`` enum so client integrations get stable codes.
+install_error_handlers(app)
 
 
-@app.exception_handler(HTTPException)
-async def http_exception_handler(_: Request, exc: HTTPException) -> JSONResponse:
-    if isinstance(exc.detail, dict) and {"error", "message"}.issubset(exc.detail.keys()):
-        content = exc.detail
-    else:
-        content = ErrorResponse(
-            error="http_error",
-            message=str(exc.detail),
-        ).model_dump()
-    return JSONResponse(status_code=exc.status_code, content=content)
+# Stage 13 — OpenTelemetry. No-op when ``OTEL_EXPORTER_OTLP_ENDPOINT``
+# is unset (the default). When configured, every request becomes a
+# span exported via OTLP/HTTP — vendor-agnostic.
+install_otel(app)
 
 
 @app.get("/health")
