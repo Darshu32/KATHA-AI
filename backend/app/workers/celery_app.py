@@ -29,6 +29,8 @@ celery_app.conf.update(
         "app.workers.tasks.build_3d_scene_task": {"queue": "rendering"},
         "app.workers.tasks.ingest_document_task": {"queue": "ingestion"},
         "app.workers.tasks.refresh_architecture_task": {"queue": "ingestion"},
+        # Stage 5D — project memory indexing.
+        "app.workers.memory_tasks.index_design_version_task": {"queue": "ingestion"},
     },
 )
 

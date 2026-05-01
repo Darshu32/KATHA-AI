@@ -61,6 +61,13 @@ class Settings(BaseSettings):
     # ── Feature Flags ───────────────────────────────────
     sora_enabled: bool = False
 
+    # Stage 5D — when True, auto-indexing of design versions runs as
+    # a Celery task instead of inline. Default False so installations
+    # without a healthy worker still get inline indexing. Production
+    # turns this on once Celery has been monitored to keep up with
+    # generation traffic.
+    async_indexing_enabled: bool = False
+
     # ── Storage (Cloudflare R2 / S3-compat) ──────────────
     s3_endpoint: str = ""
     s3_access_key: str = ""

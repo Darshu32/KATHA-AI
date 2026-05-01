@@ -36,6 +36,16 @@ Cost guardrails
 ---------------
 The 3 LLM-heavy tools have generous timeouts (180 s for initial
 generation, 120 s for theme/edit). The 2 read tools sit at 30 s.
+
+Stage 5C — auto-indexing
+------------------------
+The 3 write tools auto-index the freshly-saved version into project
+memory after the pipeline returns. Indexing is best-effort: any
+failure (embedder error, DB error in chunk insert) is logged + the
+parent reply still succeeds, with the outcome surfaced via
+``indexed`` / ``index_chunk_count`` / ``index_skipped_reason``
+fields on :class:`GenerationOutput`. See
+:mod:`app.agents.auto_index`.
 """
 
 from __future__ import annotations
@@ -45,6 +55,7 @@ from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
+from app.agents.auto_index import auto_index_design_version
 from app.agents.tool import ToolContext, ToolError, tool
 from app.services.design_graph_service import (
     get_latest_version,
@@ -197,6 +208,96 @@ class GenerationOutput(BaseModel):
     )
     changed_object_ids: list[str] = Field(default_factory=list)
 
+    # Stage 5C — auto-indexing into project memory.
+    indexed: bool = Field(
+        default=False,
+        description=(
+            "True when the new version was successfully indexed into "
+            "project memory and is now searchable via search_project_memory. "
+            "False on indexer errors, missing scope, or empty content — "
+            "the parent generation still succeeded either way."
+        ),
+    )
+    index_chunk_count: int = Field(
+        default=0,
+        description="Number of chunks written to project memory for this version.",
+    )
+    index_skipped_reason: Optional[str] = Field(
+        default=None,
+        description=(
+            "Set when indexing was skipped, failed, or queued: "
+            "'no_project_id' / 'no_owner_id' / 'no_version_id' / "
+            "'no_content' / 'error' / 'queued' / 'dispatch_failed'. "
+            "Null on inline success."
+        ),
+    )
+    index_task_id: Optional[str] = Field(
+        default=None,
+        description=(
+            "Stage 5D — Celery task id when async indexing was "
+            "dispatched. Null in inline mode (Stage 5C) and on "
+            "dispatch failures."
+        ),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Shared post-save helper: build the GenerationOutput + auto-index
+# ─────────────────────────────────────────────────────────────────────
+
+
+async def _build_generation_output(
+    ctx: ToolContext,
+    *,
+    pipeline_result: dict[str, Any],
+    project_id: str,
+    change_type: str,
+    change_summary: str,
+    project_name: str = "",
+    changed_object_ids: Optional[list[str]] = None,
+) -> GenerationOutput:
+    """Translate a pipeline result + run the auto-indexer.
+
+    Centralises three concerns the three write tools all share:
+
+    1. Slim ``graph_summary`` + ``estimate_summary`` extraction.
+    2. ``full_graph_data`` passthrough so the agent can chain.
+    3. Best-effort auto-indexing into project memory.
+
+    Auto-indexing never raises — failure surfaces as
+    ``indexed=False`` + ``index_skipped_reason``.
+    """
+    graph = pipeline_result.get("graph_data") or {}
+    version_id = str(pipeline_result.get("version_id") or "")
+    version_int = int(pipeline_result.get("version") or 0)
+
+    auto = await auto_index_design_version(
+        ctx.session,
+        project_id=project_id,
+        owner_id=ctx.actor_id,
+        version_id=version_id,
+        version=version_int,
+        graph_data=graph,
+        project_name=project_name,
+    )
+
+    return GenerationOutput(
+        project_id=str(pipeline_result.get("project_id") or project_id),
+        version=version_int,
+        version_id=version_id,
+        change_type=change_type,
+        change_summary=change_summary,
+        status=str(pipeline_result.get("status") or "completed"),
+        graph_summary=_summarise_graph(graph),
+        estimate_summary=_summarise_estimate(pipeline_result.get("estimate")),
+        full_graph_data=graph,
+        changed_object_ids=list(changed_object_ids or []),
+        indexed=auto.indexed,
+        index_chunk_count=auto.chunk_count,
+        index_skipped_reason=auto.skipped_reason,
+        index_task_id=auto.task_id,
+    )
+
 
 @tool(
     name="generate_initial_design",
@@ -232,17 +333,13 @@ async def generate_initial_design(
     except (ValueError, RuntimeError) as exc:
         raise ToolError(f"Initial generation failed: {exc}") from exc
 
-    graph = result.get("graph_data") or {}
-    return GenerationOutput(
-        project_id=str(result.get("project_id") or project_id),
-        version=int(result.get("version") or 0),
-        version_id=str(result.get("version_id") or ""),
+    return await _build_generation_output(
+        ctx,
+        pipeline_result=result,
+        project_id=project_id,
         change_type="initial",
         change_summary=f"Initial generation from prompt: {input.prompt[:100]}",
-        status=str(result.get("status") or "completed"),
-        graph_summary=_summarise_graph(graph),
-        estimate_summary=_summarise_estimate(result.get("estimate")),
-        full_graph_data=graph,
+        project_name=input.prompt[:100],
     )
 
 
@@ -303,17 +400,13 @@ async def apply_theme(
     except RuntimeError as exc:
         raise ToolError(f"Theme switch failed: {exc}") from exc
 
-    graph = result.get("graph_data") or {}
-    return GenerationOutput(
-        project_id=str(result.get("project_id") or project_id),
-        version=int(result.get("version") or 0),
-        version_id=str(result.get("version_id") or ""),
+    return await _build_generation_output(
+        ctx,
+        pipeline_result=result,
+        project_id=project_id,
         change_type="theme_switch",
         change_summary=f"Theme switched to {input.new_style}",
-        status=str(result.get("status") or "completed"),
-        graph_summary=_summarise_graph(graph),
-        estimate_summary=_summarise_estimate(result.get("estimate")),
-        full_graph_data=graph,
+        project_name=input.new_style,
     )
 
 
@@ -376,18 +469,15 @@ async def edit_design_object(
     except RuntimeError as exc:
         raise ToolError(f"Local edit failed: {exc}") from exc
 
-    graph = result.get("graph_data") or {}
-    return GenerationOutput(
-        project_id=str(result.get("project_id") or project_id),
-        version=int(result.get("version") or 0),
-        version_id=str(result.get("version_id") or ""),
+    return await _build_generation_output(
+        ctx,
+        pipeline_result=result,
+        project_id=project_id,
         change_type="prompt_edit",
         change_summary=f"Edited {input.object_id}: {input.edit_prompt[:100]}",
-        status=str(result.get("status") or "completed"),
-        graph_summary=_summarise_graph(graph),
-        estimate_summary=_summarise_estimate(result.get("estimate")),
-        full_graph_data=graph,
-        changed_object_ids=list(result.get("changed_objects") or [input.object_id]),
+        changed_object_ids=list(
+            result.get("changed_objects") or [input.object_id]
+        ),
     )
 
 

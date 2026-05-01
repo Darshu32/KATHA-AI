@@ -10,6 +10,10 @@ Event vocabulary
 ==================== =========================================================
 Event                Payload
 ==================== =========================================================
+``session``          ``{ "id", "new", "project_id" }`` — Stage-5 session id
+                       resolved server-side. Emitted as the first SSE event so
+                       the client can store it for resumption. ``new=true``
+                       indicates the server auto-created the session.
 ``thinking``         ``{ "text": "..." }`` — provider's text deltas before any
                        tool call. Frontend can use this for "Claude is
                        thinking…" indicators.
@@ -45,7 +49,9 @@ import json
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal, Optional
 
-EventName = Literal["thinking", "tool_call", "tool_result", "text", "done", "error"]
+EventName = Literal[
+    "session", "thinking", "tool_call", "tool_result", "text", "done", "error",
+]
 
 
 # ─────────────────────────────────────────────────────────────────────
@@ -64,6 +70,21 @@ class AgentEvent:
         d = asdict(self)
         d.pop("event", None)
         return d
+
+
+@dataclass
+class SessionEvent(AgentEvent):
+    """First SSE event when ``/v2/chat`` resolves or creates a session.
+
+    The frontend stores ``id`` and replays it on the next turn so the
+    server can load history from DB. ``new`` distinguishes "this is
+    your first message in this session" from "we resumed your existing
+    session".
+    """
+    id: str = ""
+    new: bool = False
+    project_id: Optional[str] = None
+    event: EventName = "session"
 
 
 @dataclass

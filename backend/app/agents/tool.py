@@ -110,7 +110,8 @@ class ToolContext:
     - DB session (a single transaction across all tool calls in the turn)
     - Identifying the actor (writes go through repositories with the
       right ``actor_id``)
-    - Audit / observability (request_id, project_id)
+    - Identifying the project + chat session in scope
+    - Audit / observability (request_id)
     - Inter-tool state (``state`` dict for tools that share intermediate
       results inside one turn)
     """
@@ -118,6 +119,7 @@ class ToolContext:
     session: AsyncSession
     actor_id: Optional[str] = None
     project_id: Optional[str] = None
+    session_id: Optional[str] = None
     request_id: Optional[str] = None
     state: dict[str, Any] = field(default_factory=dict)
 
