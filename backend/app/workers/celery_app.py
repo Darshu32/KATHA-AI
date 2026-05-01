@@ -31,6 +31,13 @@ celery_app.conf.update(
         "app.workers.tasks.refresh_architecture_task": {"queue": "ingestion"},
         # Stage 5D — project memory indexing.
         "app.workers.memory_tasks.index_design_version_task": {"queue": "ingestion"},
+        # Stage 8 — architect / client profile extraction.
+        "app.workers.memory_extraction.extract_architect_fingerprint_task": {
+            "queue": "ingestion",
+        },
+        "app.workers.memory_extraction.extract_client_profile_task": {
+            "queue": "ingestion",
+        },
     },
 )
 

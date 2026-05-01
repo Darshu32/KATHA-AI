@@ -27,8 +27,12 @@ Stage 5B → memory (3 tools — search / index / stats over project memory RAG)
 Stage 5D → memory (+1 tool — prune_project_memory for eviction)
 Stage 6  → knowledge_search (2 tools — search / list over global RAG corpus)
 Stage 7  → vision (5 tools — analyze / site / aesthetic / sketch / digitize)
+Stage 8  → decisions (2 tools — record / recall) +
+           profiles (3 tools — architect fingerprint / client profile /
+           resume project context)
+Stage 9  → haptic (1 tool — export_haptic_payload, BRD §Layer 7)
 
-Total: 67 tools as of Stage 7.
+Total: 73 tools as of Stage 9.
 """
 
 from __future__ import annotations
@@ -40,9 +44,11 @@ from app.agents.tools import (  # noqa: F401
     codes as _codes,
     cost as _cost,
     cost_extensions as _cost_extensions,
+    decisions as _decisions,
     diagrams as _diagrams,
     drawings as _drawings,
     ergonomics as _ergonomics,
+    haptic as _haptic,
     io as _io,
     knowledge_search as _knowledge_search,
     manufacturing as _manufacturing,
@@ -52,6 +58,7 @@ from app.agents.tools import (  # noqa: F401
     mep_hvac as _mep_hvac,
     mep_plumbing as _mep_plumbing,
     pipeline as _pipeline,
+    profiles as _profiles,
     recall as _recall,
     specs as _specs,
     themes as _themes,
@@ -64,9 +71,11 @@ _REGISTERED_MODULES = (
     _codes,
     _cost,
     _cost_extensions,
+    _decisions,
     _diagrams,
     _drawings,
     _ergonomics,
+    _haptic,
     _io,
     _knowledge_search,
     _manufacturing,
@@ -76,6 +85,7 @@ _REGISTERED_MODULES = (
     _mep_hvac,
     _mep_plumbing,
     _pipeline,
+    _profiles,
     _recall,
     _specs,
     _themes,

@@ -51,6 +51,11 @@ class User(Base, UUIDMixin, TimestampMixin):
     display_name: Mapped[str] = mapped_column(String(120), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
 
+    # Stage 8 — privacy / consent. When False, the architect-fingerprint
+    # extractor and the client-profile extractor refuse to run for this
+    # user. The agent's UI surfaces the toggle on the settings page.
+    learning_enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+
     projects: Mapped[list["Project"]] = relationship(back_populates="owner")
 
 
@@ -62,6 +67,15 @@ class Project(Base, UUIDMixin, TimestampMixin):
 
     owner_id: Mapped[str] = mapped_column(
         String(32), ForeignKey("users.id"), index=True
+    )
+    # Stage 8 — optional client linkage. When set, the
+    # client_profile extractor folds this project's design choices
+    # into the client's recurring-constraint pattern.
+    client_id: Mapped[str | None] = mapped_column(
+        String(32),
+        ForeignKey("clients.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
@@ -549,3 +563,312 @@ class KnowledgeChunk(Base, UUIDMixin):
     metadata_: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
 
     document: Mapped["KnowledgeDocument"] = relationship(back_populates="chunks")
+
+
+# ── Clients (Stage 8 — per-client memory across projects) ────────────────────
+
+
+class Client(Base, UUIDMixin, TimestampMixin):
+    """A studio client an architect designs for.
+
+    The minimum entity needed to bind multiple projects to the same
+    real-world client so the client-profile extractor can spot
+    recurring constraints (budget bands, family size, accessibility
+    needs).
+
+    Owned by the architect (``primary_user_id``); we don't try to
+    model multi-architect studios yet — Stage 8 is per-architect.
+    """
+
+    __tablename__ = "clients"
+
+    primary_user_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    name: Mapped[str] = mapped_column(String(200))
+    contact_email: Mapped[str] = mapped_column(String(320), default="")
+    notes: Mapped[str] = mapped_column(Text, default="")
+    status: Mapped[str] = mapped_column(
+        String(32), default="active",
+    )  # active | archived
+
+    metadata_: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
+
+
+class ClientProfile(Base, UUIDMixin, TimestampMixin):
+    """Aggregated patterns across one client's projects.
+
+    Computed by the nightly extractor (or on-demand). One row per
+    client — re-running the extractor updates the row in place.
+
+    Fields are deliberately structured-but-flexible: the extractor
+    today emits typical-budget bands, recurring-room types, and
+    accessibility flags; future extractors can add fields without
+    a migration via ``extra``.
+    """
+
+    __tablename__ = "client_profiles"
+
+    client_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("clients.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    project_count: Mapped[int] = mapped_column(Integer, default=0)
+    typical_budget_inr: Mapped[dict] = mapped_column(
+        JSONB, default=dict,
+    )  # {"low": float, "high": float, "median": float, "samples": int}
+    recurring_room_types: Mapped[list] = mapped_column(JSONB, default=list)
+    recurring_themes: Mapped[list] = mapped_column(JSONB, default=list)
+    accessibility_flags: Mapped[list] = mapped_column(JSONB, default=list)
+    constraints: Mapped[list] = mapped_column(JSONB, default=list)
+    last_project_at: Mapped[str | None] = mapped_column(
+        String(32), nullable=True,
+    )
+    last_extracted_at: Mapped[str | None] = mapped_column(
+        String(32), nullable=True,
+    )
+    extra: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
+
+
+# ── Architect profile (Stage 8 — per-user style fingerprint) ────────────────
+
+
+class ArchitectProfile(Base, UUIDMixin, TimestampMixin):
+    """One architect's style fingerprint, refreshed nightly.
+
+    The fingerprint is **derived** from the architect's projects
+    (design graphs, decisions, tool-usage stats). The extractor is
+    deterministic + LLM-free — counts material occurrences, finds
+    typical room dimensions, summarises tool-call frequency.
+
+    Privacy: the extractor refuses to run when ``User.learning_enabled``
+    is False. The row is created on first extraction; if the
+    architect later disables learning, the row stays but isn't
+    refreshed.
+    """
+
+    __tablename__ = "architect_profiles"
+
+    user_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+        index=True,
+    )
+    project_count: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Style preferences derived from past design graphs.
+    preferred_themes: Mapped[list] = mapped_column(
+        JSONB, default=list,
+    )  # [{"theme": "modern", "count": 12, "share": 0.3}, ...]
+    preferred_materials: Mapped[list] = mapped_column(JSONB, default=list)
+    preferred_palette_hexes: Mapped[list] = mapped_column(JSONB, default=list)
+
+    # Typical room dims (median across projects).
+    typical_room_dimensions_m: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+    # Tool-usage stats — which tools they reach for first / often.
+    tool_usage: Mapped[list] = mapped_column(
+        JSONB, default=list,
+    )  # [{"tool": "estimate_project_cost", "count": 47, "share": 0.18}, ...]
+
+    last_project_at: Mapped[str | None] = mapped_column(
+        String(32), nullable=True,
+    )
+    last_extracted_at: Mapped[str | None] = mapped_column(
+        String(32), nullable=True,
+    )
+    extra: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
+
+
+# ── Design decisions (Stage 8 — per-project decision log) ──────────────────
+
+
+class DesignDecision(Base, UUIDMixin, TimestampMixin):
+    """One recorded design decision — what changed, why, who, when.
+
+    Append-only. Created either by the agent (via the
+    ``record_design_decision`` tool) or by the architect themselves
+    via the future UI. The agent reads decisions to answer questions
+    like "why did we pick teak last week?" without re-running every
+    cost engine.
+
+    The combination ``(project_id, version)`` lets the agent find
+    decisions that landed alongside a specific design version.
+    """
+
+    __tablename__ = "design_decisions"
+    __table_args__ = (
+        Index(
+            "ix_design_decisions_project_recent",
+            "project_id",
+            "created_at",
+        ),
+    )
+
+    project_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    actor_id: Mapped[str | None] = mapped_column(
+        String(32),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    version: Mapped[int] = mapped_column(Integer, default=0)
+    """Design-graph version this decision pertains to. 0 when the
+    decision predates any saved version (e.g. brief-stage choice)."""
+
+    category: Mapped[str] = mapped_column(
+        String(64), default="general",
+    )  # material | layout | budget | theme | mep | structural | general
+    title: Mapped[str] = mapped_column(String(200))
+    summary: Mapped[str] = mapped_column(Text)
+    rationale: Mapped[str] = mapped_column(Text, default="")
+    rejected_alternatives: Mapped[list] = mapped_column(JSONB, default=list)
+    sources: Mapped[list] = mapped_column(
+        JSONB, default=list,
+    )  # ['nbc_india_2016#§3.2', 'pricing_snapshot:abc123', ...]
+    tags: Mapped[list] = mapped_column(JSONB, default=list)
+    extra: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
+
+
+# ── Stage 9 — Haptic data structure (BRD Layer 7) ────────────────────
+#
+# Six catalog tables mapping material keys (and object types) to the
+# physical / interaction parameters a haptic arm needs. The catalog
+# is seeded from a migration; the agent reads it via the
+# ``app.haptic.catalog`` module and embeds the relevant subset into
+# every haptic export payload.
+#
+# Materials are *string keys* (e.g. ``"walnut"``, ``"leather"``) that
+# match the design graph's ``material`` field — there's no FK to a
+# materials table because the design graph itself doesn't have one.
+# When a graph references an unknown material the validator falls
+# back to the catalog's ``"generic"`` profile.
+
+
+class HapticTexture(Base, UUIDMixin, TimestampMixin):
+    """One canonical texture profile per material.
+
+    The ``code`` column is the stable identifier hardware drivers
+    reference (``walnut_grain_001``). ``signature_data`` is a JSONB
+    description of the texture parametrically — grain frequency,
+    amplitude in micrometres, pattern type — so the haptic system
+    can synthesize the surface without shipping bitmap textures.
+    """
+
+    __tablename__ = "haptic_textures"
+
+    name: Mapped[str] = mapped_column(String(200))
+    code: Mapped[str] = mapped_column(String(100), unique=True, index=True)
+    material_id: Mapped[str] = mapped_column(String(100), index=True)
+    signature_data: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+
+class HapticThermal(Base, UUIDMixin, TimestampMixin):
+    """Perceived surface temperature in °C against a 22 °C ambient.
+
+    Driven by material thermal effusivity — wood feels warm
+    (~28 °C), steel feels cold (~21 °C), leather feels warmest
+    (~32 °C, per BRD §Layer 7). One row per material.
+    """
+
+    __tablename__ = "haptic_thermal"
+
+    material_id: Mapped[str] = mapped_column(
+        String(100), unique=True, index=True,
+    )
+    temperature_celsius: Mapped[float] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(Text, default="")
+
+
+class HapticFriction(Base, UUIDMixin, TimestampMixin):
+    """Static friction coefficient against the human fingertip.
+
+    BRD §Layer 7 anchors wood → 0.35, leather → 0.40. Measured on a
+    dry surface at room temperature; ``condition`` documents the
+    measurement context for vendors who care.
+    """
+
+    __tablename__ = "haptic_friction"
+
+    material_id: Mapped[str] = mapped_column(
+        String(100), unique=True, index=True,
+    )
+    coefficient: Mapped[float] = mapped_column(Float)
+    condition: Mapped[str] = mapped_column(
+        String(64), default="dry_room_temp",
+    )
+
+
+class HapticFirmness(Base, UUIDMixin, TimestampMixin):
+    """Firmness scale + bulk density.
+
+    ``firmness_scale`` ∈ {soft, medium, firm} drives the haptic
+    arm's pushback force when the user presses a virtual surface.
+    ``density`` (kg/m³) drives perceived weight when the arm lifts
+    a virtual object.
+    """
+
+    __tablename__ = "haptic_firmness"
+
+    material_id: Mapped[str] = mapped_column(
+        String(100), unique=True, index=True,
+    )
+    firmness_scale: Mapped[str] = mapped_column(
+        String(32), default="medium",
+    )
+    density: Mapped[float] = mapped_column(Float, default=0.0)
+
+
+class HapticDimensionRule(Base, UUIDMixin, TimestampMixin):
+    """Per-object-type adjustment rules for the haptic arm.
+
+    The arm reads ``ranges`` to know how far it can move adjustment
+    sliders, ``adjustable_axes`` to know which dimensions are
+    user-tweakable at all, and ``feedback_curve`` to know which
+    proportions stay locked while the user adjusts (per BRD's
+    "proportions maintained within design intent").
+    """
+
+    __tablename__ = "haptic_dimension_rules"
+
+    object_type: Mapped[str] = mapped_column(
+        String(100), unique=True, index=True,
+    )
+    adjustable_axes: Mapped[list] = mapped_column(JSONB, default=list)
+    ranges: Mapped[dict] = mapped_column(JSONB, default=dict)
+    feedback_curve: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+
+class HapticFeedbackLoop(Base, UUIDMixin, TimestampMixin):
+    """Declarative rule pairing a *trigger* with a *response*.
+
+    BRD examples this models verbatim:
+
+    - "When height changes by 1cm, cost changes by ₹X"
+    - "When material changes from walnut to oak, cost -₹Y"
+    - "Proportions maintained within design intent"
+
+    ``rule_key`` is a stable namespaced identifier hardware drivers
+    index by (e.g. ``chair.seat_height.cost_per_cm``).
+    """
+
+    __tablename__ = "haptic_feedback_loops"
+
+    rule_key: Mapped[str] = mapped_column(
+        String(120), unique=True, index=True,
+    )
+    trigger: Mapped[dict] = mapped_column(JSONB, default=dict)
+    response: Mapped[dict] = mapped_column(JSONB, default=dict)
+    formula: Mapped[str] = mapped_column(Text, default="")
