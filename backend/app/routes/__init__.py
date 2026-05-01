@@ -12,6 +12,7 @@ from app.routes.architecture import router as architecture_router
 from app.routes.auth import router as auth_router
 from app.routes.brief import router as brief_router
 from app.routes.chat import router as chat_router
+from app.routes.decisions import router as decisions_router
 from app.routes.design import router as design_router
 from app.routes.diagrams import router as diagrams_router
 from app.routes.drawings import router as drawings_router
@@ -56,4 +57,6 @@ all_routers = [
     suggestions_admin_router,
     # Stage 7 multi-modal uploads (/v2/uploads)
     uploads_router,
+    # Stage 11 decisions + challenge surface (reasoning transparency)
+    decisions_router,
 ]

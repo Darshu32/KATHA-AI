@@ -36,8 +36,13 @@ Stage 10 → brief (2 tools — intake_design_brief +
            sensitivity (1 tool — analyze_cost_shock, BRD §4D ±10%) +
            recommendations (2 tools — quick_recommendations +
            full_recommendations, BRD §6 proactive advisor)
+Stage 11 → transparency (3 tools — explain_decision +
+           challenge_design_decision + compare_alternatives,
+           reasoning transparency / decision challenge / rejection
+           ledger). PLUS framework-level retrofit: every successful
+           tool result now carries a confidence + provenance block.
 
-Total: 78 tools as of Stage 10.
+Total: 81 tools as of Stage 11.
 """
 
 from __future__ import annotations
@@ -70,6 +75,7 @@ from app.agents.tools import (  # noqa: F401
     sensitivity as _sensitivity,
     specs as _specs,
     themes as _themes,
+    transparency as _transparency,
     vision as _vision,
 )
 
@@ -100,6 +106,7 @@ _REGISTERED_MODULES = (
     _sensitivity,
     _specs,
     _themes,
+    _transparency,
     _vision,
 )
 

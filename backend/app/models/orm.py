@@ -741,6 +741,91 @@ class DesignDecision(Base, UUIDMixin, TimestampMixin):
     tags: Mapped[list] = mapped_column(JSONB, default=list)
     extra: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
 
+    # Stage 11 — reasoning transparency.
+    reasoning_steps: Mapped[list] = mapped_column(JSONB, default=list)
+    """Ordered list of {step, observation, conclusion} dicts. The
+    agent walks this back to the user when they ask "why did we
+    pick X" — each step is a re-walkable inference."""
+
+    confidence_score: Mapped[float | None] = mapped_column(
+        Float, nullable=True,
+    )
+    """0..1 confidence in the decision. Null for legacy Stage 8
+    rows that predate Stage 11."""
+
+    confidence_factors: Mapped[list] = mapped_column(JSONB, default=list)
+    """Human-readable contributors — e.g.
+    ['nbc_compliance_verified', 'cost_within_budget',
+    'theme_pack_match']."""
+
+    provenance: Mapped[dict] = mapped_column(JSONB, default=dict)
+    """Provenance banner snapshot at decision time — catalog
+    versions, tooling generation, request_id. Lets future-us
+    reconstruct exactly which catalog produced the decision."""
+
+
+# ── Stage 11 — DecisionChallenge (reasoning transparency) ────────────
+
+
+class DecisionChallenge(Base, UUIDMixin, TimestampMixin):
+    """One architect challenge against a recorded design decision.
+
+    The architect can challenge any decision via the
+    ``challenge_design_decision`` agent tool or the
+    ``POST /projects/{id}/decisions/{id}/challenge`` route. The
+    agent then re-reasons and emits one of three resolutions:
+
+    - ``rejected_challenge`` — agent stands by the original decision,
+      ``response_reasoning`` explains why.
+    - ``decision_revised`` — agent agrees the challenge has merit
+      and records a NEW :class:`DesignDecision` superseding the
+      original. ``new_decision_id`` points at it.
+    - ``accepted_override`` — agent accepts the user's override
+      without re-reasoning (user has authority); a new decision
+      reflecting the override may be linked via ``new_decision_id``.
+
+    Append-only by convention — a re-challenge after a resolution
+    creates a new row, never overwrites.
+    """
+
+    __tablename__ = "decision_challenges"
+    __table_args__ = (
+        Index(
+            "ix_decision_challenges_project_recent",
+            "project_id",
+            "created_at",
+        ),
+    )
+
+    decision_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("design_decisions.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    challenger_id: Mapped[str | None] = mapped_column(
+        String(32),
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    project_id: Mapped[str] = mapped_column(
+        String(32),
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    challenge_text: Mapped[str] = mapped_column(Text)
+    resolution: Mapped[str] = mapped_column(
+        String(40), default="pending",
+    )  # pending | rejected_challenge | decision_revised | accepted_override
+    response_reasoning: Mapped[str] = mapped_column(Text, default="")
+    new_decision_id: Mapped[str | None] = mapped_column(
+        String(32),
+        ForeignKey("design_decisions.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    extra: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
+
 
 # ── Stage 9 — Haptic data structure (BRD Layer 7) ────────────────────
 #

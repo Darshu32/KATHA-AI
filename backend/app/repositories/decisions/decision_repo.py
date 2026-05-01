@@ -34,6 +34,12 @@ class DesignDecisionRepository:
         sources: Optional[list[Any]] = None,
         tags: Optional[list[str]] = None,
         extra: Optional[dict[str, Any]] = None,
+        # Stage 11 — reasoning transparency fields. All optional so
+        # legacy callers (Stage 8) keep working unchanged.
+        reasoning_steps: Optional[list[Any]] = None,
+        confidence_score: Optional[float] = None,
+        confidence_factors: Optional[list[str]] = None,
+        provenance: Optional[dict[str, Any]] = None,
     ) -> DesignDecision:
         row = DesignDecision(
             project_id=project_id,
@@ -47,6 +53,13 @@ class DesignDecisionRepository:
             sources=list(sources or []),
             tags=list(tags or []),
             extra=dict(extra or {}),
+            reasoning_steps=list(reasoning_steps or []),
+            confidence_score=(
+                None if confidence_score is None
+                else max(0.0, min(1.0, float(confidence_score)))
+            ),
+            confidence_factors=list(confidence_factors or []),
+            provenance=dict(provenance or {}),
         )
         session.add(row)
         await session.flush()

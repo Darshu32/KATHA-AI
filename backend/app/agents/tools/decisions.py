@@ -49,6 +49,23 @@ def _require_project(ctx: ToolContext) -> str:
 # ─────────────────────────────────────────────────────────────────────
 
 
+class ReasoningStep(BaseModel):
+    """One step in the agent's reasoning chain (Stage 11)."""
+
+    step: str = Field(
+        max_length=200,
+        description="Short label — 'check_budget', 'verify_NBC_clearance'.",
+    )
+    observation: str = Field(
+        max_length=1500,
+        description="What the agent observed at this step.",
+    )
+    conclusion: str = Field(
+        max_length=1500,
+        description="What the agent concluded from the observation.",
+    )
+
+
 class RecordDecisionInput(BaseModel):
     title: str = Field(
         description=(
@@ -112,6 +129,38 @@ class RecordDecisionInput(BaseModel):
         description="Optional free-form tags ('accessibility', 'client_request').",
     )
 
+    # ── Stage 11 — reasoning transparency ────────────────────────────
+    reasoning_steps: list[ReasoningStep] = Field(
+        default_factory=list,
+        max_length=30,
+        description=(
+            "Ordered reasoning chain. Each step is "
+            "{step, observation, conclusion}. The architect walks "
+            "this back when they ask 'why did we pick X'. "
+            "Empty list is allowed for trivial choices but strongly "
+            "discouraged for material / budget / layout decisions."
+        ),
+    )
+    confidence_score: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description=(
+            "0..1 confidence in the decision. Set high when sources "
+            "+ math agree; lower when the LLM had to weigh "
+            "competing signals. Null when not measured."
+        ),
+    )
+    confidence_factors: list[str] = Field(
+        default_factory=list,
+        max_length=20,
+        description=(
+            "Human-readable contributors to the confidence score — "
+            "['nbc_compliance_verified', 'cost_within_budget', "
+            "'theme_pack_match']."
+        ),
+    )
+
 
 class DecisionRecord(BaseModel):
     id: str
@@ -126,6 +175,11 @@ class DecisionRecord(BaseModel):
     sources: list[str] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
     created_at: Optional[str] = None
+    # Stage 11 — reasoning transparency.
+    reasoning_steps: list[dict[str, Any]] = Field(default_factory=list)
+    confidence_score: Optional[float] = None
+    confidence_factors: list[str] = Field(default_factory=list)
+    provenance: dict[str, Any] = Field(default_factory=dict)
 
 
 class RecordDecisionOutput(BaseModel):
@@ -134,6 +188,7 @@ class RecordDecisionOutput(BaseModel):
 
 def _row_to_record(row) -> DecisionRecord:
     created = getattr(row, "created_at", None)
+    confidence_score = getattr(row, "confidence_score", None)
     return DecisionRecord(
         id=str(getattr(row, "id", "") or ""),
         project_id=str(getattr(row, "project_id", "") or ""),
@@ -147,6 +202,12 @@ def _row_to_record(row) -> DecisionRecord:
         sources=list(getattr(row, "sources", None) or []),
         tags=list(getattr(row, "tags", None) or []),
         created_at=created.isoformat() if hasattr(created, "isoformat") else None,
+        reasoning_steps=list(getattr(row, "reasoning_steps", None) or []),
+        confidence_score=(
+            float(confidence_score) if confidence_score is not None else None
+        ),
+        confidence_factors=list(getattr(row, "confidence_factors", None) or []),
+        provenance=dict(getattr(row, "provenance", None) or {}),
     )
 
 
@@ -177,6 +238,17 @@ async def record_design_decision(
             f"{sorted(_KNOWN_CATEGORIES)}"
         )
 
+    # Stage 11 — capture provenance + reasoning at write time.
+    from app.provenance import build_banner
+
+    provenance = build_banner(
+        tool="record_design_decision",
+        tool_invocation_kind="agent_call",
+        request_id=ctx.request_id,
+        extra={"category": category, "version": int(input.version or 0)},
+    )
+    reasoning_steps = [s.model_dump(mode="json") for s in input.reasoning_steps]
+
     row = await DesignDecisionRepository.record(
         ctx.session,
         project_id=project_id,
@@ -189,6 +261,10 @@ async def record_design_decision(
         rejected_alternatives=input.rejected_alternatives,
         sources=input.sources,
         tags=input.tags,
+        reasoning_steps=reasoning_steps,
+        confidence_score=input.confidence_score,
+        confidence_factors=list(input.confidence_factors or []),
+        provenance=provenance,
     )
     return RecordDecisionOutput(decision=_row_to_record(row))
 

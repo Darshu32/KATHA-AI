@@ -68,8 +68,10 @@ from typing import Any, Awaitable, Callable, Optional, Type, TypeVar
 from pydantic import BaseModel, ValidationError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.agents.confidence import KINDS as _CONFIDENCE_KINDS, build_confidence
 from app.db import AuditLog
 from app.observability.request_id import get_request_id
+from app.provenance import build_banner
 
 log = logging.getLogger(__name__)
 
@@ -154,6 +156,12 @@ class ToolSpec:
     audit_target_type: Optional[str] = None
     # If set, every successful call writes an AuditEvent with this
     # ``target_type``. Skip for read-only tools that don't change state.
+    confidence_kind: Optional[str] = None
+    # Stage 11 — declares the tool's source of confidence (see
+    # ``app.agents.confidence.KINDS``). When ``None`` the framework
+    # falls back to the curated ``_DEFAULT_KIND_BY_TOOL`` map keyed
+    # by tool ``name``. Tools authored in Stage 11+ should declare
+    # this on the ``@tool`` decorator instead of relying on the map.
 
     def input_schema(self) -> dict[str, Any]:
         """JSON-schema the provider layer hands to the LLM."""
@@ -219,6 +227,7 @@ def tool(
     description: Optional[str] = None,
     timeout_seconds: float = 30.0,
     audit_target_type: Optional[str] = None,
+    confidence_kind: Optional[str] = None,
 ) -> Callable[[ToolFn], ToolFn]:
     """Mark an async function as an LLM-callable tool.
 
@@ -234,7 +243,21 @@ def tool(
     audit_target_type:
         If set, every successful call records an AuditEvent with this
         ``target_type``. Use for write tools; read tools can leave None.
+    confidence_kind:
+        Stage 11 — one of :data:`app.agents.confidence.KINDS`. Declares
+        why the framework should trust this tool's output. ``None`` =
+        fall back to the curated map (``_DEFAULT_KIND_BY_TOOL``) and
+        finally to ``"unknown"``. Tools whose confidence depends on
+        the run (RAG, LLM self-report) should leave this ``None`` and
+        set ``ctx.state["confidence_override"]`` at runtime instead.
     """
+
+    if confidence_kind is not None and confidence_kind not in _CONFIDENCE_KINDS:
+        # Fail at decoration time so a typo can't ship into prod.
+        raise ValueError(
+            f"@tool confidence_kind={confidence_kind!r} is not in "
+            f"{_CONFIDENCE_KINDS}"
+        )
 
     def decorator(fn: ToolFn) -> ToolFn:
         sig = inspect.signature(fn)
@@ -274,6 +297,7 @@ def tool(
             fn=fn,
             timeout_seconds=timeout_seconds,
             audit_target_type=audit_target_type,
+            confidence_kind=confidence_kind,
         )
         REGISTRY.register(spec)
         return fn
@@ -404,8 +428,34 @@ async def call_tool(
         elapsed_ms,
         extra={"tool": name, "elapsed_ms": elapsed_ms},
     )
+
+    # 5. Stage 11 — confidence + provenance retrofit.
+    #
+    # Every successful tool result carries a confidence block (score
+    # + kind + factors) and a provenance banner (catalog versions +
+    # tool stamp + request_id). Tools can override the confidence
+    # at runtime by setting ``ctx.state["confidence_override"]``
+    # before returning — RAG retrievers do this with the top
+    # similarity score; LLM tools do this with their self-reported
+    # confidence.
+    runtime_override = None
+    if isinstance(ctx.state, dict):
+        runtime_override = ctx.state.get("confidence_override")
+    confidence = build_confidence(
+        declared_kind=spec.confidence_kind,
+        tool_name=name,
+        runtime_override=runtime_override if isinstance(runtime_override, dict) else None,
+    )
+    provenance = build_banner(
+        tool=name,
+        tool_invocation_kind="agent_call",
+        request_id=ctx.request_id,
+    )
+
     return {
         "ok": True,
         "output": output_dict,
         "elapsed_ms": round(elapsed_ms, 2),
+        "confidence": confidence.to_dict(),
+        "provenance": provenance,
     }
