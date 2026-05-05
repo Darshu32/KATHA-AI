@@ -2,8 +2,10 @@
 
 import logging
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import get_db
 from app.models.brief import DesignBriefIn, DesignBriefOut
 from app.models.schemas import ErrorDetail, ErrorResponse
 from app.services.design_brief_service import (
@@ -60,14 +62,22 @@ async def brief_context(payload: DesignBriefIn) -> dict:
 
 
 @router.post("/knowledge")
-async def brief_knowledge(payload: DesignBriefIn) -> dict:
+async def brief_knowledge(
+    payload: DesignBriefIn,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Return the input-stage knowledge bundle injected for this brief.
 
-    Covers standard dimensions, applicable building codes, climate-specific
-    considerations, and material availability/pricing by region.
+    Covers standard dimensions, applicable building codes (DB-backed via
+    Stage 3E + Stage 15a), climate-specific considerations, and material
+    availability/pricing by region.
+
+    Stage 15: ``inject_knowledge`` is now async and accepts a session
+    so the codes block resolves from ``building_standards`` first,
+    falling back to Python literals on a miss.
     """
     normalized = validate_and_normalize(payload)
-    bundle = inject_knowledge(normalized)
+    bundle = await inject_knowledge(normalized, session=db)
     return {
         "brief_id": normalized.brief_id,
         "warnings": normalized.warnings,
@@ -77,15 +87,19 @@ async def brief_knowledge(payload: DesignBriefIn) -> dict:
 
 
 @router.post("/architect")
-async def brief_architect(payload: DesignBriefIn) -> dict:
+async def brief_architect(
+    payload: DesignBriefIn,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM architect-brief stage.
 
     Enforces the project contract: validated brief → injected Layer 1B
-    knowledge preamble → live LLM call → structured architect brief.
+    knowledge preamble (DB-backed via Stage 15) → live LLM call →
+    structured architect brief.
     """
     normalized = validate_and_normalize(payload)
     try:
-        result = await generate_architect_brief(normalized)
+        result = await generate_architect_brief(normalized, session=db)
     except ArchitectBriefError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,

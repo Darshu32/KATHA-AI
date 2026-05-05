@@ -263,6 +263,8 @@ The platform also ships features ahead of the Phase 1 spec:
 | Multi-modal inputs (image / sketch / voice) | 7 | `app/storage/`, `app/vision/`, `app/agents/tools/vision.py` |
 | Architect / client / project memory + decisions log | 8 | `app/profiles/`, `app/repositories/{architects,clients,decisions}/`, `app/agents/tools/{decisions,profiles}.py` |
 | Haptic data structure (BRD Layer 7) | 9 | `app/haptic/`, `app/agents/tools/haptic.py` |
+| Live data feeds (MCX + FX + GST + vendor scrapers) — self-updating prices, freshness on snapshots, Slack anomaly alerts, Live → cached → seed → unavailable fallback | 12 | `app/feeds/`, `app/repositories/live_pricing/`, `app/workers/feed_tasks.py`, `app/routes/admin/feeds.py`, alembic 0023, docs `docs/data/live-feeds.md` |
+| Export polish — DOCX assembly + maintenance sections (BRD §5A); PPTX assembly + maintenance slides + embedded render gallery; HTML viewer with inline base64 GLTF (single self-contained artefact) | 14 | `app/services/exporters/_synthesis.py`, `app/services/exporters/{docx,pptx,html}_exporter.py`, `tests/unit/test_stage14_exporter_polish.py` |
 
 ---
 

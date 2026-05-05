@@ -1,6 +1,7 @@
-"""Celery application — broker config and task autodiscovery."""
+"""Celery application — broker config, task routing, beat schedule."""
 
 from celery import Celery
+from celery.schedules import crontab
 
 from app.config import get_settings
 
@@ -10,6 +11,16 @@ celery_app = Celery(
     "katha_workers",
     broker=settings.celery_broker_url,
     backend=settings.celery_result_backend,
+    # Explicit task module list — autodiscover_tasks only finds the
+    # canonical "tasks.py", which would silently exclude feed_tasks,
+    # memory_tasks, and memory_extraction. Without this, beat would
+    # fire scheduled jobs that no worker has registered.
+    include=[
+        "app.workers.tasks",
+        "app.workers.feed_tasks",
+        "app.workers.memory_tasks",
+        "app.workers.memory_extraction",
+    ],
 )
 
 celery_app.conf.update(
@@ -37,6 +48,46 @@ celery_app.conf.update(
         },
         "app.workers.memory_extraction.extract_client_profile_task": {
             "queue": "ingestion",
+        },
+        # Stage 12 — live data feed refreshes (own queue so a sluggish
+        # vendor scraper never starves the design / estimation queues).
+        "app.workers.feed_tasks.refresh_mcx_task": {"queue": "feeds"},
+        "app.workers.feed_tasks.refresh_fx_task": {"queue": "feeds"},
+        "app.workers.feed_tasks.refresh_gst_task": {"queue": "feeds"},
+        "app.workers.feed_tasks.refresh_vendor_jaquar_task": {"queue": "feeds"},
+        "app.workers.feed_tasks.refresh_vendor_kohler_task": {"queue": "feeds"},
+        "app.workers.feed_tasks.refresh_vendor_asian_paints_task": {
+            "queue": "feeds",
+        },
+    },
+    # Stage 12 — beat schedule. Cadences match upstream change
+    # frequency: commodities + FX move daily, GST barely moves,
+    # vendor catalogs settle on a multi-day cycle. Tweak in a hotfix
+    # without redeploying the worker by editing this map.
+    beat_schedule={
+        "feed-mcx-refresh": {
+            "task": "app.workers.feed_tasks.refresh_mcx_task",
+            "schedule": crontab(minute=0, hour="*/6"),
+        },
+        "feed-fx-refresh": {
+            "task": "app.workers.feed_tasks.refresh_fx_task",
+            "schedule": crontab(minute=15, hour="*/6"),
+        },
+        "feed-gst-refresh": {
+            "task": "app.workers.feed_tasks.refresh_gst_task",
+            "schedule": crontab(minute=30, hour=2, day_of_week=1),
+        },
+        "feed-vendor-jaquar-refresh": {
+            "task": "app.workers.feed_tasks.refresh_vendor_jaquar_task",
+            "schedule": crontab(minute=0, hour=3),
+        },
+        "feed-vendor-kohler-refresh": {
+            "task": "app.workers.feed_tasks.refresh_vendor_kohler_task",
+            "schedule": crontab(minute=20, hour=3),
+        },
+        "feed-vendor-asian-paints-refresh": {
+            "task": "app.workers.feed_tasks.refresh_vendor_asian_paints_task",
+            "schedule": crontab(minute=40, hour=3),
         },
     },
 )

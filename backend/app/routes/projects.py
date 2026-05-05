@@ -32,6 +32,9 @@ async def create_project_route(
         owner_id=user.id,
         name=payload.name,
         description=payload.description,
+        project_type=payload.project_type.value,
+        project_sub_type=payload.project_sub_type,
+        project_scale=payload.project_scale,
     )
     return project
 
@@ -76,6 +79,12 @@ async def update_project_route(
         project.description = payload.description
     if payload.status is not None:
         project.status = payload.status.value
+    if payload.project_type is not None:
+        project.project_type = payload.project_type.value
+    if payload.project_sub_type is not None:
+        project.project_sub_type = payload.project_sub_type or None
+    if payload.project_scale is not None:
+        project.project_scale = payload.project_scale or None
 
     await db.flush()
     return project

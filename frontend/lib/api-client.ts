@@ -86,6 +86,69 @@ export const architecture = {
     request<ArchitectureAskResponse>("/architecture/ask", "POST", { question }, token),
 };
 
+// ── Project types (public, dynamic config) ────────────────────────────────
+
+export interface ProjectTypeDef {
+  slug: string;
+  label: string;
+  description: string;
+  starter_prompts: string[];
+  visual_hint: string;
+  is_primary: boolean;
+  sort_order: number;
+}
+
+export const projectTypes = {
+  list: () =>
+    request<{ project_types: ProjectTypeDef[]; count: number }>(
+      "/project-types",
+    ),
+};
+
+// ── Themes (public, DB-backed) ────────────────────────────────────────────
+
+export interface ThemeDef {
+  slug: string;
+  display_name: string;
+  description: string;
+  era: string | null;
+  preview_image_keys: string[];
+  aliases: string[];
+}
+
+export const themes = {
+  list: () =>
+    request<{ themes: ThemeDef[]; count: number }>("/themes"),
+};
+
+// ── Image generation (Nano Banana / Gemini) ───────────────────────────────
+
+export interface ImageGenerateResponse {
+  status: "ok" | "provider_unconfigured";
+  image: {
+    url: string;
+    title?: string;
+    source?: string;
+    type?: string;
+  } | null;
+  prompt_assembled?: string | null;
+  project_type: string;
+  theme: string;
+}
+
+export const images = {
+  generate: (
+    token: string | undefined,
+    body: {
+      prompt: string;
+      project_type: string;
+      theme: string;
+      ratio?: string;
+    },
+  ) =>
+    request<ImageGenerateResponse>("/images/generate", "POST", body, token),
+};
+
 // ── Chat (Streaming) ──────────────────────────────────────────────────────
 
 export interface ChatStreamEvent {

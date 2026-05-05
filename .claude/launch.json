@@ -3,11 +3,51 @@
   "configurations": [
     {
       "name": "frontend",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["next", "dev"],
+      "runtimeExecutable": "/bin/bash",
+      "runtimeArgs": [
+        "-c",
+        "PATH=/opt/homebrew/bin:$PATH exec npx next dev --port 3001"
+      ],
       "port": 3001,
       "autoPort": true,
       "cwd": "frontend"
+    },
+    {
+      "name": "mock-backend",
+      "runtimeExecutable": "/bin/bash",
+      "runtimeArgs": [
+        "-c",
+        "PATH=/opt/homebrew/bin:$PATH exec node scripts/mock-backend.mjs"
+      ],
+      "port": 8000
+    },
+    {
+      "name": "backend",
+      "runtimeExecutable": "/bin/bash",
+      "runtimeArgs": [
+        "-c",
+        "set -a && . ../.env && set +a && PYTHONPATH=. exec .venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --reload"
+      ],
+      "port": 8000,
+      "cwd": "backend"
+    },
+    {
+      "name": "celery-worker",
+      "runtimeExecutable": "/bin/bash",
+      "runtimeArgs": [
+        "-c",
+        "set -a && . ../.env && set +a && PYTHONPATH=. exec .venv/bin/celery -A app.workers.celery_app worker --loglevel=info -Q celery,generation,estimation,rendering,ingestion,feeds --concurrency=2"
+      ],
+      "cwd": "backend"
+    },
+    {
+      "name": "celery-beat",
+      "runtimeExecutable": "/bin/bash",
+      "runtimeArgs": [
+        "-c",
+        "set -a && . ../.env && set +a && PYTHONPATH=. exec .venv/bin/celery -A app.workers.celery_app beat --loglevel=info"
+      ],
+      "cwd": "backend"
     }
   ]
 }

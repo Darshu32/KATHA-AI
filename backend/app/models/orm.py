@@ -79,6 +79,17 @@ class Project(Base, UUIDMixin, TimestampMixin):
     )
     name: Mapped[str] = mapped_column(String(200))
     description: Mapped[str] = mapped_column(Text, default="")
+    # Stage 14b — project type drives prompt prefixing, knowledge filter,
+    # cost rate-cards. Enum values mirror ProjectTypeEnum in models/brief.py.
+    project_type: Mapped[str] = mapped_column(
+        String(32), default="residential", index=True
+    )
+    project_sub_type: Mapped[str | None] = mapped_column(
+        String(120), nullable=True
+    )
+    project_scale: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
     status: Mapped[str] = mapped_column(
         String(32), default="draft"
     )  # draft | generating | ready | archived

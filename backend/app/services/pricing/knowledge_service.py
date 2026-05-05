@@ -40,6 +40,7 @@ from typing import Any, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.feeds.fallback import resolve_price_for_material
 from app.repositories.pricing import (
     CityPriceIndexRepository,
     CostFactorRepository,
@@ -146,17 +147,38 @@ async def build_pricing_knowledge(
     city_index = float(city_row["index_multiplier"]) if city_row else 1.0
 
     # ── Materials KB ──────────────────────────────────────────────────
+    # Stage 12: every band is run through the fallback chain (live →
+    # cached → seed → unavailable) so live MCX/vendor quotes override
+    # the seed value when fresh enough. The chain returns a uniform
+    # ``ResolvedPrice`` with a ``tier`` + ``freshness`` envelope which
+    # we record into ``source_versions`` for the transparency banner.
     materials = await mat_repo.list_active(when=when)
     wood_inr_kg: dict[str, list[float]] = {}
     metals_inr_kg: dict[str, list[float]] = {}
     upholstery_inr_m2: dict[str, list[float]] = {}
     foam_inr_m3: dict[str, list[float]] = {}
     finishes_inr_m2: dict[str, list[float]] = {}
+    material_freshness: dict[str, dict[str, Any]] = {}
 
     for m in materials:
-        band = [m["price_inr_low"], m["price_inr_high"]]
-        category = m["category"]
         slug = m["slug"]
+        category = m["category"]
+        resolved = await resolve_price_for_material(
+            session,
+            material_slug=slug,
+            region="global",
+            when=when,
+        )
+        if resolved.available:
+            band = [resolved.price_low, resolved.price_high]
+        else:
+            band = [m["price_inr_low"], m["price_inr_high"]]
+        material_freshness[slug] = {
+            "tier": resolved.tier,
+            "freshness": resolved.freshness,
+            "source": resolved.source or m["source"],
+            "quote_id": resolved.quote_id,
+        }
         if category in {"wood_solid", "wood_panel"} and m["basis_unit"] == "kg":
             wood_inr_kg[slug] = band
         elif category == "metal" and m["basis_unit"] == "kg":
@@ -193,7 +215,12 @@ async def build_pricing_knowledge(
             for r in hour_rows
         },
         "materials": {
-            m["slug"]: {"id": m["id"], "version": m["version"], "source": m["source"]}
+            m["slug"]: {
+                "id": m["id"],
+                "version": m["version"],
+                "source": m["source"],
+                **material_freshness.get(m["slug"], {}),
+            }
             for m in materials
         },
     }

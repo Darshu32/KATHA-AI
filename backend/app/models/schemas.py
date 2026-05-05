@@ -22,6 +22,20 @@ class ProjectStatus(str, Enum):
     ARCHIVED = "archived"
 
 
+class ProjectType(str, Enum):
+    """Mirrors brief.ProjectTypeEnum — kept here for the public API."""
+
+    RESIDENTIAL = "residential"
+    COMMERCIAL = "commercial"
+    HOSPITALITY = "hospitality"
+    INSTITUTIONAL = "institutional"
+    RETAIL = "retail"
+    OFFICE = "office"
+    MIXED_USE = "mixed_use"
+    INDUSTRIAL = "industrial"
+    CUSTOM = "custom"
+
+
 class GenerationStatus(str, Enum):
     QUEUED = "queued"
     PROCESSING = "processing"
@@ -66,12 +80,18 @@ class ProjectCreate(BaseModel):
     prompt: str = Field(min_length=10, max_length=5000)
     room_type: str = Field(default="living_room", max_length=64)
     style: str = Field(default="modern", max_length=64)
+    project_type: ProjectType = Field(default=ProjectType.RESIDENTIAL)
+    project_sub_type: str = Field(default="", max_length=120)
+    project_scale: str = Field(default="", max_length=64)
 
 
 class ProjectUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
     status: ProjectStatus | None = None
+    project_type: ProjectType | None = None
+    project_sub_type: str | None = None
+    project_scale: str | None = None
 
 
 class ProjectOut(BaseModel):
@@ -79,6 +99,9 @@ class ProjectOut(BaseModel):
     name: str
     description: str
     status: str
+    project_type: str
+    project_sub_type: str | None = None
+    project_scale: str | None = None
     latest_version: int
     created_at: datetime
     updated_at: datetime

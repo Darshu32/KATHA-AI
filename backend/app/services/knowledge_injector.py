@@ -11,11 +11,26 @@ meaningful *at input time*:
 The output is intentionally structured (not a prose blob) so downstream
 stages — theme engine, layout, estimator, LLM prompt builder — can pick
 the slices they need without re-computing.
+
+Stage 15 — DB-backed migration
+------------------------------
+This module is now async. Where Stage 3E migrated knowledge data into
+the versioned ``building_standards`` table, the corresponding accessor
+in :mod:`app.services.standards.codes_lookup` (and friends) is queried
+**first**; if it returns ``None`` the legacy ``app.knowledge.*`` Python
+literal is used as a fallback. This is "Pattern C" from the migration
+roadmap — DB-first, Python-fallback — letting the runtime move to
+admin-editable data without breaking when DB rows are missing.
+
+When the user explicitly disables hardcoded knowledge (Stage 16 RAG),
+the fallback path will route through the Stage 6 corpus instead.
 """
 
 from __future__ import annotations
 
 from typing import Any
+
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.knowledge import (
     clearances,
@@ -34,6 +49,7 @@ from app.models.brief import (
     DesignBriefOut,
     ProjectTypeEnum,
 )
+from app.services.standards import codes_lookup
 
 
 # Project type → space_standards segment used by the knowledge tables.
@@ -97,13 +113,53 @@ def _standard_dimensions(segment: str) -> dict[str, Any]:
 
 # ── 2. Building code requirements ───────────────────────────────────────────
 
-def _building_codes(
+
+async def _building_codes(
+    session: AsyncSession | None,
     project_type: ProjectTypeEnum,
     requested_codes: list[str],
     segment: str,
 ) -> dict[str, Any]:
-    nbc_min = codes.NBC_INDIA["minimum_room_dimensions"]
-    egress_key = "max_travel_residential_m" if segment == "residential" else "max_travel_commercial_m"
+    """Stage 15 — DB-first with Python-literal fallback.
+
+    Each NBC / ECBC / accessibility lookup tries the versioned
+    ``building_standards`` table first. If the row is missing (e.g.
+    fresh DB without the Stage-3E seed migration applied), we fall back
+    to the Python literal. This means the runtime can move ahead of
+    the DB without breaking, AND admins can override values via
+    ``POST /admin/standards/code/<slug>`` and have them take effect
+    immediately for every brief intake.
+    """
+    nbc_min = (
+        await codes_lookup.get_code_data(session, slug="minimum_room_dimensions")
+        if session is not None else None
+    ) or codes.NBC_INDIA["minimum_room_dimensions"]
+    nbc_vent = (
+        await codes_lookup.get_code_data(session, slug="ventilation")
+        if session is not None else None
+    ) or codes.NBC_INDIA["ventilation"]
+    nbc_light = (
+        await codes_lookup.get_code_data(session, slug="natural_light")
+        if session is not None else None
+    ) or codes.NBC_INDIA["natural_light"]
+    nbc_egress = (
+        await codes_lookup.get_code_data(session, slug="fire_egress")
+        if session is not None else None
+    ) or codes.NBC_INDIA["fire_egress"]
+    accessibility = (
+        await codes_lookup.get_accessibility(session)
+        if session is not None else None
+    ) or dict(codes.ACCESSIBILITY)
+    ecbc = (
+        await codes_lookup.get_ecbc_targets(session)
+        if session is not None else None
+    ) or codes.ECBC
+
+    egress_key = (
+        "max_travel_residential_m"
+        if segment == "residential"
+        else "max_travel_commercial_m"
+    )
     return {
         "applicable_codes": list(requested_codes),
         "habitable_min_area_m2": nbc_min["habitable_room_min_area_m2"],
@@ -111,21 +167,29 @@ def _building_codes(
         "habitable_min_height_m": nbc_min["habitable_room_min_height_m"],
         "kitchen_min_area_m2": nbc_min["kitchen_min_area_m2"],
         "bathroom_min_area_m2": nbc_min["bathroom_min_area_m2"],
-        "ventilation_openable_percent_floor": codes.NBC_INDIA["ventilation"]["openable_area_percent_floor"],
-        "natural_light_glazing_percent_floor": codes.NBC_INDIA["natural_light"]["glazing_percent_floor"],
+        "ventilation_openable_percent_floor": nbc_vent["openable_area_percent_floor"],
+        "natural_light_glazing_percent_floor": nbc_light["glazing_percent_floor"],
         "fire_egress": {
-            "max_travel_distance_m": codes.NBC_INDIA["fire_egress"][egress_key],
-            "min_exit_count_over_500m2_floor": codes.NBC_INDIA["fire_egress"]["min_exit_count_over_500m2_floor"],
-            "fire_door_rating_min_hr": codes.NBC_INDIA["fire_egress"]["fire_door_rating_min_hr"],
-            "corridor_min_width_mm": codes.NBC_INDIA["fire_egress"]["corridor_min_width_mm"],
+            "max_travel_distance_m": nbc_egress[egress_key],
+            "min_exit_count_over_500m2_floor": nbc_egress["min_exit_count_over_500m2_floor"],
+            "fire_door_rating_min_hr": nbc_egress["fire_door_rating_min_hr"],
+            "corridor_min_width_mm": nbc_egress["corridor_min_width_mm"],
         },
         "structural_references": ["IS-875 (loads)", "IS-456 (RCC)", "IS-800 (steel)"],
-        "accessibility": dict(codes.ACCESSIBILITY),
+        "accessibility": dict(accessibility),
         "energy_envelope_ecbc": {
-            "wall_u_value_w_m2k": codes.ECBC["envelope_U_value_wall_w_m2k"],
-            "roof_u_value_w_m2k": codes.ECBC["envelope_U_value_roof_w_m2k"],
-            "wwr_max": codes.ECBC["window_wall_ratio_max"],
-            "applies_when": codes.ECBC["notes"],
+            "wall_u_value_w_m2k": ecbc.get("envelope_U_value_wall_w_m2k")
+                or ecbc.get("wall_u_value_w_m2k"),
+            "roof_u_value_w_m2k": ecbc.get("envelope_U_value_roof_w_m2k")
+                or ecbc.get("roof_u_value_w_m2k"),
+            "wwr_max": ecbc.get("window_wall_ratio_max") or ecbc.get("wwr_max"),
+            "applies_when": ecbc.get("notes"),
+        },
+        "_provenance": {
+            # Stage 11 transparency: caller can see whether each value
+            # came from the DB or the Python fallback for THIS request.
+            "source": "db" if session is not None else "python_literal",
+            "fallback_path": "stage-3e DB row → app.knowledge.codes literal",
         },
     }
 
@@ -349,8 +413,29 @@ def _suggested_room_program(segment: str) -> dict[str, dict]:
 
 # ── Public API ──────────────────────────────────────────────────────────────
 
-def inject_knowledge(brief: DesignBriefOut) -> dict[str, Any]:
-    """Return the full input-stage knowledge bundle for a validated brief."""
+async def inject_knowledge(
+    brief: DesignBriefOut,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
+    """Return the full input-stage knowledge bundle for a validated brief.
+
+    Stage 15: now ``async`` and accepts an optional ``session``. When
+    a session is passed, knowledge sub-blocks query the versioned
+    ``building_standards`` table first (Stage 3E) and fall back to
+    Python literals on miss. When ``session`` is ``None``, behaviour is
+    identical to pre-Stage-15: pure Python literals (kept for tests
+    and any remaining sync callers during the transition).
+
+    Migration progress (block-by-block):
+      - building_codes ........... DB-first ✅ (Stage 15a)
+      - standard_dimensions ...... Python only (Stage 15b — to migrate)
+      - climate .................. Python only (Stage 15b)
+      - structural ............... Python only (Stage 15b)
+      - mep ...................... Python only (Stage 15c)
+      - regional_materials ....... Python only (Stage 15c)
+      - room_program_reference ... Python only (Stage 15c)
+    """
     segment = _segment(brief.project_type.type)
     zone_value = brief.regulatory.climatic_zone.value if brief.regulatory.climatic_zone else None
     dims = brief.space.dimensions
@@ -364,7 +449,8 @@ def inject_knowledge(brief: DesignBriefOut) -> dict[str, Any]:
         "theme": brief.theme.theme.value,
         "footprint_area_m2": round(area_m2, 2),
         "standard_dimensions": _standard_dimensions(segment),
-        "building_codes": _building_codes(
+        "building_codes": await _building_codes(
+            session,
             brief.project_type.type,
             brief.regulatory.building_codes,
             segment,
@@ -394,9 +480,17 @@ def inject_knowledge(brief: DesignBriefOut) -> dict[str, Any]:
     return bundle
 
 
-def build_prompt_preamble(brief: DesignBriefOut, bundle: dict[str, Any] | None = None) -> str:
-    """Compact text block for LLM grounding. Pulls from the bundle when given."""
-    bundle = bundle or inject_knowledge(brief)
+def build_prompt_preamble(
+    brief: DesignBriefOut,
+    bundle: dict[str, Any],
+) -> str:
+    """Compact text block for LLM grounding.
+
+    Stage 15: ``bundle`` is now required because computing it is async
+    (``inject_knowledge`` makes DB calls). Callers must compute the
+    bundle and pass it in. The single-arg legacy signature was removed
+    to avoid hiding an async call inside a sync function.
+    """
     segment = bundle["segment"]
     std = bundle["standard_dimensions"]
     cd = bundle["building_codes"]

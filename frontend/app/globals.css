@@ -1,166 +1,381 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
-@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&display=swap');
+/* KATHA AI — Editorial design system (Claude-inspired).
+ *
+ * Sans body, serif display, mono technical. Warm cream paper, near-black
+ * warm ink, terracotta as the single accent. Whitespace does the work;
+ * decoration is rare. Gridpaper exists only on the design canvas surface,
+ * never on chat or generic UI.
+ */
 
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
+/* ── Tokens ─────────────────────────────────────────────────────────── */
 :root {
   color-scheme: light;
-  --paper: #FFFFFF;
-  --paper-2: #FAFAFA;
-  --paper-3: #F2F2F2;
-  --ink: #0A0A0A;
-  --ink-2: #3F3F3F;
-  --ink-3: #808080;
-  --rule: #E5E5E5;
-  --accent: #111111;
-  --accent-2: #000000;
-  --accent-soft: #F2F2F2;
-  --display: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
-  --mono: "JetBrains Mono", ui-monospace, monospace;
-  --serif: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+
+  /* Paper — backgrounds. Pure-white theme: main is #FFFFFF, with
+     progressively darker neutrals for layered surfaces (sidebars,
+     inset cards, edges). Warmth comes from text + accents, not bg. */
+  --paper:       #FFFFFF;
+  --paper-soft:  #FAFAF9;
+  --paper-deep:  #F2F2F0;
+  --paper-edge:  #E8E8E5;
+
+  /* Ink — text. Keep warm near-black so the editorial register is
+     preserved and the page doesn't feel clinical. */
+  --ink:         #2A2620;
+  --ink-deep:    #1A1814;
+  --ink-soft:    #5A554F;
+  --ink-mute:    #8B867F;
+
+  /* Lines — neutral gray, not cream */
+  --hairline:        #E5E5E2;
+  --graphite:        #D0D0CC;
+  --graphite-soft:   #ECECE9;
+
+  /* Accents — used sparingly */
+  --terracotta:      #A8451B;
+  --terracotta-soft: #D77A50;
+  --terracotta-bg:   #F2DFCE;
+
+  --brass:           #9F7E4F;
+  --brass-soft:      #C2A375;
+  --brass-bg:        #EFE5CE;
+
+  --indigo:          #3D4F7A;
+  --indigo-soft:     #6B7CA0;
+
+  /* Semantic */
+  --olive:           #3F4E2D;
+  --mustard:         #B57F2A;
+  --brick:           #8B2D2D;
+
+  /* Type stacks — variables are populated by next/font in layout.tsx */
+  --display-stack: var(--font-display), ui-serif, Georgia, "Times New Roman", serif;
+  --sans-stack:    var(--font-sans), ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono-stack:    var(--font-mono), ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  /* Motion */
+  --ease-snap:      cubic-bezier(0.4, 0, 0.18, 1);
+  --ease-editorial: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* ── Body / page ────────────────────────────────────────────────────── */
+html, body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
 }
 
 body {
-  margin: 0;
-  min-height: 100vh;
-  background: var(--paper);
+  background-color: var(--paper);
   color: var(--ink);
-  font-family: var(--sans);
-  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
-  font-optical-sizing: auto;
+  font-family: var(--sans-stack);
+  font-feature-settings: "kern", "calt";
+  font-size: 15px;
+  line-height: 1.55;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  letter-spacing: -0.005em;
 }
 
-* {
-  box-sizing: border-box;
+* { box-sizing: border-box; }
+
+::selection {
+  background: var(--terracotta);
+  color: var(--paper);
 }
 
-/* Custom scrollbar */
-.chat-scrollbar::-webkit-scrollbar {
-  width: 6px;
+/* ── Type defaults ──────────────────────────────────────────────────── */
+.font-display { font-family: var(--display-stack); }
+.font-sans    { font-family: var(--sans-stack); }
+.font-mono    { font-family: var(--mono-stack); }
+
+/* Editorial display — Newsreader. Used for hero / page titles only. */
+h1, h2, h3, h4, h5, h6 {
+  font-family: var(--display-stack);
+  font-weight: 500;
+  letter-spacing: -0.015em;
+  color: var(--ink-deep);
+  line-height: 1.18;
+  margin: 0;
 }
 
-.chat-scrollbar::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-.chat-scrollbar::-webkit-scrollbar-thumb {
-  background: #d1d5db;
-  border-radius: 3px;
-}
-
-.chat-scrollbar::-webkit-scrollbar-thumb:hover {
-  background: #9ca3af;
-}
-
-/* Typing indicator dots */
-.typing-dot {
-  animation: typing-bounce 1.2s infinite;
-}
-
-.typing-dot:nth-child(2) {
-  animation-delay: 0.15s;
-}
-
-.typing-dot:nth-child(3) {
-  animation-delay: 0.3s;
-}
-
-@keyframes typing-bounce {
-  0%, 60%, 100% {
-    transform: translateY(0);
+/* ── Components ─────────────────────────────────────────────────────── */
+@layer components {
+  /* Section tag — small uppercase tracked label. No brackets. */
+  .section-tag {
+    font-family: var(--mono-stack);
+    font-weight: 500;
+    font-size: 0.6875rem;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--ink-mute);
   }
-  30% {
-    transform: translateY(-4px);
+
+  /* Mono tag — inline mono label, smaller. */
+  .mono-tag {
+    font-family: var(--mono-stack);
+    font-size: 0.6875rem;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--ink-soft);
+  }
+
+  /* Annotation — formerly handwritten; now mono italic, kept restrained.
+     Used for marginalia (timestamps, "auto-generated" notes). */
+  .annotation {
+    font-family: var(--mono-stack);
+    font-size: 0.6875rem;
+    color: var(--ink-mute);
+    letter-spacing: 0.04em;
+    line-height: 1;
+  }
+
+  /* Slide pill — for the chat mode picker (Quick / Deep / Auto).
+     Cleaner than before — soft border, no aggressive transitions. */
+  .slide-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+    font-family: var(--sans-stack);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    padding: 0.35rem 0.85rem;
+    border: 1px solid var(--hairline);
+    border-radius: 999px;
+    background: var(--paper-soft);
+    color: var(--ink-soft);
+    transition: all 180ms var(--ease-snap);
+    cursor: pointer;
+    user-select: none;
+  }
+  .slide-pill:hover {
+    border-color: var(--graphite);
+    color: var(--ink);
+  }
+  .slide-pill[data-active="true"] {
+    background: var(--ink-deep);
+    color: var(--paper);
+    border-color: var(--ink-deep);
+  }
+
+  /* Paper card — quiet surface with hairline border + minimal shadow. */
+  .paper-card {
+    background: var(--paper-soft);
+    border: 1px solid var(--hairline);
+    border-radius: 6px;
+    box-shadow:
+      0 1px 0 rgba(26, 24, 20, 0.04),
+      0 1px 2px rgba(26, 24, 20, 0.05);
+  }
+
+  /* Brass key-value — for cost streams + spec rows. */
+  .brass-kv {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    padding: 0.5rem 0;
+    border-bottom: 1px solid var(--hairline);
+    font-family: var(--mono-stack);
+    font-size: 0.8125rem;
+    color: var(--ink);
+  }
+  .brass-kv:last-child { border-bottom: 0; }
+  .brass-kv .v {
+    color: var(--brass);
+    font-weight: 500;
+    font-feature-settings: "tnum";
+  }
+
+  /* Brass rule — warm accent divider for major sectioning. */
+  .brass-rule {
+    height: 1px;
+    background: linear-gradient(
+      to right,
+      transparent 0,
+      var(--brass) 8%,
+      var(--brass) 92%,
+      transparent 100%
+    );
+  }
+
+  /* Dimension line — kept as a primitive for the design canvas surface,
+     but no longer used in chat UI. Not loaded as decoration on body. */
+  .dim-line {
+    position: relative;
+    height: 1px;
+    background: var(--ink-soft);
+    width: 100%;
+  }
+
+  /* Drafting tab — terminal panel tabs. */
+  .draft-tab {
+    font-family: var(--sans-stack);
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--ink-soft);
+    padding: 0.5rem 0.875rem;
+    border-bottom: 2px solid transparent;
+    cursor: pointer;
+    transition: color 160ms var(--ease-snap), border-color 160ms var(--ease-snap);
+    background: transparent;
+    border-top: 0;
+    border-left: 0;
+    border-right: 0;
+  }
+  .draft-tab:hover { color: var(--ink); }
+  .draft-tab[data-active="true"] {
+    color: var(--ink-deep);
+    border-bottom-color: var(--terracotta);
+  }
+
+  /* Status dots */
+  .status-dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-right: 6px;
+    vertical-align: middle;
+  }
+  .status-dot--ok    { background: var(--olive); }
+  .status-dot--warn  { background: var(--mustard); }
+  .status-dot--err   { background: var(--brick); }
+  .status-dot--info  { background: var(--indigo); }
+  .status-dot--src   { background: var(--brass); }
+
+  /* Canvas-only gridpaper. Only the design surface gets gridpaper, never
+     the chat or general UI. Apply via className="grid-paper". */
+  .grid-paper {
+    background-image:
+      linear-gradient(to right,  var(--graphite) 0.5px, transparent 0.5px),
+      linear-gradient(to bottom, var(--graphite) 0.5px, transparent 0.5px),
+      linear-gradient(to right,  var(--graphite-soft) 0.5px, transparent 0.5px),
+      linear-gradient(to bottom, var(--graphite-soft) 0.5px, transparent 0.5px);
+    background-size: 48px 48px, 48px 48px, 12px 12px, 12px 12px;
   }
 }
 
-/* Markdown prose styles */
+/* ── Scrollbars ─────────────────────────────────────────────────────── */
+.draft-scroll::-webkit-scrollbar { width: 8px; height: 8px; }
+.draft-scroll::-webkit-scrollbar-track { background: transparent; }
+.draft-scroll::-webkit-scrollbar-thumb {
+  background: var(--graphite);
+  border-radius: 4px;
+}
+.draft-scroll::-webkit-scrollbar-thumb:hover { background: var(--ink-soft); }
+
+/* ── Markdown prose (chat assistant messages) ───────────────────────── */
+.message-prose {
+  color: var(--ink);
+  font-family: var(--sans-stack);
+  line-height: 1.7;
+  font-size: 0.9375rem;
+}
 .message-prose h1,
 .message-prose h2,
 .message-prose h3,
 .message-prose h4 {
-  font-weight: 600;
-  margin-top: 1.25em;
-  margin-bottom: 0.5em;
-  line-height: 1.3;
-  color: #111827;
+  font-family: var(--display-stack);
+  font-weight: 500;
+  color: var(--ink-deep);
+  letter-spacing: -0.015em;
+  margin-top: 1.6em;
+  margin-bottom: 0.4em;
+  line-height: 1.22;
 }
-
-.message-prose h1 { font-size: 1.25rem; }
-.message-prose h2 { font-size: 1.125rem; }
-.message-prose h3 { font-size: 1rem; }
-
-.message-prose p {
-  margin-top: 0.5em;
-  margin-bottom: 0.5em;
-  line-height: 1.7;
-}
-
+.message-prose h1 { font-size: 1.625rem; }
+.message-prose h2 { font-size: 1.375rem; }
+.message-prose h3 { font-size: 1.125rem; }
+.message-prose h4 { font-size: 1rem; }
+.message-prose p { margin: 0.85em 0; }
 .message-prose ul,
-.message-prose ol {
-  margin-top: 0.5em;
-  margin-bottom: 0.5em;
-  padding-left: 1.5em;
-}
-
+.message-prose ol { margin: 0.85em 0; padding-left: 1.4em; }
 .message-prose ul { list-style-type: disc; }
 .message-prose ol { list-style-type: decimal; }
-
-.message-prose li {
-  margin-top: 0.25em;
-  margin-bottom: 0.25em;
-  line-height: 1.6;
-}
-
+.message-prose li::marker { color: var(--ink-mute); }
+.message-prose li { margin: 0.3em 0; }
 .message-prose blockquote {
-  border-left: 3px solid #e5e7eb;
+  border-left: 2px solid var(--graphite);
   padding-left: 1em;
-  margin: 0.75em 0;
-  color: #6b7280;
+  margin: 1.2em 0;
+  color: var(--ink-soft);
+  font-family: var(--display-stack);
   font-style: italic;
 }
-
+.message-prose code {
+  font-family: var(--mono-stack);
+  font-size: 0.85em;
+  background: var(--paper-deep);
+  padding: 0.12em 0.4em;
+  border-radius: 3px;
+  color: var(--ink-deep);
+}
+.message-prose pre {
+  font-family: var(--mono-stack);
+  font-size: 0.8125rem;
+  background: var(--ink-deep);
+  color: var(--paper);
+  padding: 1em 1.2em;
+  overflow-x: auto;
+  margin: 1.2em 0;
+  border-radius: 6px;
+  line-height: 1.55;
+}
+.message-prose pre code {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  padding: 0;
+}
 .message-prose table {
   width: 100%;
   border-collapse: collapse;
-  margin: 0.75em 0;
+  margin: 1.2em 0;
   font-size: 0.875rem;
 }
-
 .message-prose th,
 .message-prose td {
-  border: 1px solid #e5e7eb;
-  padding: 0.5em 0.75em;
+  border: 1px solid var(--hairline);
+  padding: 0.55em 0.85em;
   text-align: left;
 }
-
 .message-prose th {
-  background: #f9fafb;
+  background: var(--paper-soft);
   font-weight: 600;
+  color: var(--ink-deep);
+  font-size: 0.8125rem;
 }
-
 .message-prose hr {
   border: none;
-  border-top: 1px solid #e5e7eb;
-  margin: 1.5em 0;
+  border-top: 1px solid var(--hairline);
+  margin: 1.8em 0;
 }
-
 .message-prose a {
-  color: #2563eb;
+  color: var(--terracotta);
   text-decoration: underline;
-  text-underline-offset: 2px;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: color 160ms var(--ease-snap);
 }
+.message-prose a:hover { color: var(--terracotta-soft); }
+.message-prose strong { color: var(--ink-deep); font-weight: 600; }
 
-.message-prose a:hover {
-  color: #1d4ed8;
+/* ── Motion ─────────────────────────────────────────────────────────── */
+@keyframes fade-in {
+  0%   { opacity: 0; transform: translateY(4px); }
+  100% { opacity: 1; transform: translateY(0); }
 }
+@keyframes typing-bounce {
+  0%, 60%, 100% { transform: translateY(0); opacity: 0.4; }
+  30%           { transform: translateY(-3px); opacity: 1; }
+}
+.anim-fade-in { animation: fade-in 280ms var(--ease-editorial) both; }
+.typing-dot   { animation: typing-bounce 1.2s infinite; }
+.typing-dot:nth-child(2) { animation-delay: 0.15s; }
+.typing-dot:nth-child(3) { animation-delay: 0.3s; }
 
-.message-prose strong {
-  font-weight: 600;
-  color: #111827;
-}
+/* ── Utility ────────────────────────────────────────────────────────── */
+.tnum { font-feature-settings: "tnum" 1, "lnum" 1; }

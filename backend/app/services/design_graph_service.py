@@ -15,11 +15,18 @@ async def create_project(
     owner_id: str,
     name: str,
     description: str = "",
+    *,
+    project_type: str = "residential",
+    project_sub_type: str = "",
+    project_scale: str = "",
 ) -> Project:
     project = Project(
         owner_id=owner_id,
         name=name,
         description=description,
+        project_type=project_type,
+        project_sub_type=project_sub_type or None,
+        project_scale=project_scale or None,
         status="draft",
         latest_version=0,
     )

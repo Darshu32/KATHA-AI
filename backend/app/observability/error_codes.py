@@ -58,6 +58,14 @@ class ErrorCode(str, Enum):
     PROJECT_NOT_FOUND = "project_not_found"          # 404
     LEARNING_DISABLED = "learning_disabled"          # 403
 
+    # Stage 12 — live data feeds.
+    FEED_NOT_FOUND = "feed_not_found"                # 404
+    FEED_DISABLED = "feed_disabled"                  # 409
+    FEED_UNAVAILABLE = "feed_unavailable"            # 503
+    FEED_PARSE_ERROR = "feed_parse_error"            # 502
+    FEED_RATE_LIMITED = "feed_rate_limited"          # 502
+    PRICE_DATA_UNAVAILABLE = "price_data_unavailable"  # 503
+
     # Catch-all.
     UNKNOWN = "unknown"                              # 500
 
@@ -94,6 +102,13 @@ _HTTP_STATUS_BY_CODE: dict[ErrorCode, int] = {
     ErrorCode.DECISION_LOCKED: 409,
     ErrorCode.PROJECT_NOT_FOUND: 404,
     ErrorCode.LEARNING_DISABLED: 403,
+
+    ErrorCode.FEED_NOT_FOUND: 404,
+    ErrorCode.FEED_DISABLED: 409,
+    ErrorCode.FEED_UNAVAILABLE: 503,
+    ErrorCode.FEED_PARSE_ERROR: 502,
+    ErrorCode.FEED_RATE_LIMITED: 502,
+    ErrorCode.PRICE_DATA_UNAVAILABLE: 503,
 
     ErrorCode.UNKNOWN: 500,
 }

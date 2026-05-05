@@ -19,11 +19,76 @@ def _settings():
 # ── AI Image Generation (Google Nano Banana / Gemini) ───────────────────────
 
 
-async def generate_image(prompt: str) -> dict[str, Any] | None:
+# Theme visual hints prepended to the image-gen prompt. Themes are
+# DB-driven via the ``themes`` table; this map is a fallback for slugs
+# the agent already understands. When a theme exists in DB but isn't
+# in this map, the prompt falls back to the theme's display_name.
+_THEME_VISUAL_HINTS: dict[str, str] = {
+    "modern": (
+        "modern style — clean lines, neutral palette, natural materials, "
+        "minimal ornamentation"
+    ),
+    "minimalist": (
+        "minimalist style — restrained palette, lots of negative space, "
+        "only essential elements"
+    ),
+    "contemporary": (
+        "contemporary style — current trends, mixed materials, sculptural "
+        "lighting, soft curves"
+    ),
+    "scandinavian": (
+        "scandinavian style — pale wood, warm whites, hygge textures, "
+        "cozy minimalism"
+    ),
+    "traditional": (
+        "traditional style — classic ornamentation, rich woods, "
+        "symmetrical layouts, warm palette"
+    ),
+    "rustic": (
+        "rustic style — reclaimed wood, exposed beams, natural stone, "
+        "earthy textures"
+    ),
+    "industrial": (
+        "industrial style — exposed brick, raw steel, concrete floors, "
+        "edison bulbs, utilitarian aesthetic"
+    ),
+    "bohemian": (
+        "bohemian style — layered textiles, eclectic mix, warm color "
+        "palette, plants, vintage pieces"
+    ),
+    "luxury": (
+        "luxury style — premium materials, marble, brass, velvet, "
+        "dramatic lighting, refined ornamentation"
+    ),
+    "coastal": (
+        "coastal style — light blues and whites, weathered wood, natural "
+        "fibers, breezy and bright"
+    ),
+}
+
+
+async def generate_image(
+    prompt: str,
+    *,
+    project_type: str | None = None,
+    theme: str | None = None,
+    theme_label: str | None = None,
+) -> dict[str, Any] | None:
     """Generate an architecture image using Google Nano Banana (Gemini Image API).
 
-    Uses the Gemini API with image generation capabilities.
-    Returns {"url": str, "title": str, "source": "nano-banana", "type": "ai-image"} or None.
+    The provider only sees text — every contextual signal (project type,
+    theme) has to be encoded in the prompt or the model has no way to
+    reflect it. We prefix two clauses:
+
+    - ``Project type: <visual hint>`` — e.g. "hospitality interior — hotel
+      / restaurant aesthetic..."  Resolved against the canonical
+      definitions in :mod:`app.services.project_types`.
+    - ``Style: <theme hint>`` — e.g. "modern style — clean lines, neutral
+      palette..."  Resolved against the in-process map below; falls
+      back to ``theme_label`` when the slug is unknown (e.g. an admin-
+      defined theme).
+
+    Returns {"url": str, "title": str, ...} or None when API key absent.
     """
     s = _settings()
     api_key = s.gemini_api_key
@@ -31,8 +96,26 @@ async def generate_image(prompt: str) -> dict[str, Any] | None:
         logger.info("GEMINI_API_KEY not configured for image generation")
         return None
 
+    # Lazy import — avoids import-cycle risk and keeps unit tests of this
+    # module decoupled from the project_types module.
+    from app.services.project_types import visual_hint_for as _project_hint
+
+    type_hint = _project_hint(project_type)
+    type_clause = f"Project type: {type_hint}. " if type_hint else ""
+
+    theme_key = (theme or "").lower().strip()
+    theme_hint = _THEME_VISUAL_HINTS.get(theme_key, "")
+    if not theme_hint and theme_label:
+        # Admin-defined theme not in the static map — degrade gracefully
+        # to the display name so the prompt still carries the signal.
+        theme_hint = f"{theme_label} style"
+    theme_clause = f"Style: {theme_hint}. " if theme_hint else ""
+
     arch_prompt = (
-        f"Generate a professional architectural visualization: {prompt}. "
+        f"Generate a professional architectural visualization. "
+        f"{type_clause}"
+        f"{theme_clause}"
+        f"Subject: {prompt}. "
         "Photorealistic, high detail, clean composition, studio quality. "
         "Architecture photography style with natural lighting. "
         "No text, no watermarks, no labels."

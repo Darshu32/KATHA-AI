@@ -167,15 +167,10 @@ def upgrade() -> None:
         ),
     )
 
-    # Embedding column — placeholder until we ALTER to vector(1536).
-    op.add_column(
-        "knowledge_chunks",
-        sa.Column("embedding", sa.types.UserDefinedType(), nullable=True),
-    )
-    op.execute(
-        "ALTER TABLE knowledge_chunks "
-        "ALTER COLUMN embedding TYPE vector(1536) USING NULL::vector(1536)"
-    )
+    # ``embedding`` column already created by baseline 0001 as
+    # ``vector(1536)``. Skip the redundant add — older versions of this
+    # migration tried to ``ADD COLUMN embedding`` here which crashed
+    # with DuplicateColumnError on a fresh DB.
 
     # tsvector column for hybrid retrieval — populated by a trigger.
     op.execute(

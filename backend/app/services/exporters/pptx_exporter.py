@@ -1,18 +1,25 @@
 """PPTX (PowerPoint) exporter — Office Open XML (zero-dep, hand-rolled).
 
 A .pptx is a zip of XML files. We hand-write the minimum tree
-(presentation, slide master, layout, theme, and N slides) so the
-output opens in PowerPoint, Keynote, LibreOffice Impress, and Google
-Slides without external libraries.
+(presentation, slide master, layout, theme, slides + image parts) so
+the output opens in PowerPoint, Keynote, LibreOffice Impress, and
+Google Slides without external libraries.
 
-Slides emitted:
+Slides emitted (Stage 14 added Assembly + Maintenance + image embeds):
     1. Cover                      — project, theme, date
-    2. Concept                    — theme story + signature moves
+    2. Concept                    — theme story + signature moves +
+                                     hero render if available
     3. Specification summary      — material / manufacturing call-outs
     4. Cost & pricing snapshot    — manufacturing cost + final retail
     5. Timeline                   — lead time low/high
-    6. Renders / drawings index   — list of attached files
-    7. Next steps                 — handoff + sign-off
+    6. Renders / drawings index   — render gallery + attached files list
+    7. Assembly instructions      — BRD §5A (Stage 14)
+    8. Maintenance & care         — BRD §5A (Stage 14)
+    9. Next steps                 — handoff + sign-off
+
+Render images travel via spec["renders"] / graph["renders"] /
+graph["assets"] (kind ∈ render_2d|thumbnail). See
+``app.services.exporters._synthesis.collect_render_images``.
 
 Resolution: 13.333" × 7.5" widescreen (16:9), the modern default.
 """
@@ -22,7 +29,14 @@ from __future__ import annotations
 import io
 import zipfile
 from datetime import datetime, timezone
+from typing import Any
 from xml.sax.saxutils import escape
+
+from app.services.exporters._synthesis import (
+    collect_render_images,
+    derive_assembly_instructions,
+    derive_maintenance_guide,
+)
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
@@ -48,15 +62,27 @@ def _money(v: object) -> str:
 # ── XML fragments ───────────────────────────────────────────────────────────
 
 
-def _content_types(slide_count: int) -> str:
+def _content_types(slide_count: int, image_extensions: set[str]) -> str:
     overrides = "".join(
         f'<Override PartName="/ppt/slides/slide{i}.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/>'
         for i in range(1, slide_count + 1)
     )
+    # Stage 14 — register image MIME types for any embedded renders so
+    # PowerPoint and Keynote unpack the images correctly.
+    extras = ""
+    if "png" in image_extensions:
+        extras += '<Default Extension="png" ContentType="image/png"/>'
+    if "jpg" in image_extensions:
+        extras += '<Default Extension="jpg" ContentType="image/jpeg"/>'
+    if "jpeg" in image_extensions:
+        extras += '<Default Extension="jpeg" ContentType="image/jpeg"/>'
+    if "webp" in image_extensions:
+        extras += '<Default Extension="webp" ContentType="image/webp"/>'
     return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
 <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
 <Default Extension="xml" ContentType="application/xml"/>
+{extras}
 <Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/>
 <Override PartName="/ppt/slideMasters/slideMaster1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideMaster+xml"/>
 <Override PartName="/ppt/slideLayouts/slideLayout1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slideLayout+xml"/>
@@ -192,6 +218,27 @@ _SLIDE_RELS = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 </Relationships>"""
 
 
+def _slide_rels_with_images(image_filenames: list[str]) -> str:
+    """Per-slide rels including layout + each embedded picture.
+
+    PowerPoint/Keynote require every <p:pic> in the slide XML to carry
+    an r:embed pointing at a relationship in the slide's .rels file.
+    """
+    rels = (
+        '<Relationship Id="rId1" '
+        'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/slideLayout" '
+        'Target="../slideLayouts/slideLayout1.xml"/>'
+    )
+    for idx, fname in enumerate(image_filenames, start=2):
+        rels += (
+            f'<Relationship Id="rId{idx}" '
+            'Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" '
+            f'Target="../media/{fname}"/>'
+        )
+    return f"""<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">{rels}</Relationships>"""
+
+
 # ── Slide builders ──────────────────────────────────────────────────────────
 
 
@@ -254,6 +301,31 @@ def _slide_xml(text_boxes: list[str]) -> str:
 </p:sld>"""
 
 
+def _picture_xml(*, sp_id: int, rel_id: str, name: str,
+                 x_emu: int, y_emu: int, cx_emu: int, cy_emu: int) -> str:
+    """Embed a picture by relationship id. ``rel_id`` matches the slide rels."""
+    safe_name = _e(name)
+    return f"""
+<p:pic>
+  <p:nvPicPr>
+    <p:cNvPr id="{sp_id}" name="{safe_name}"/>
+    <p:cNvPicPr><a:picLocks noChangeAspect="1"/></p:cNvPicPr>
+    <p:nvPr/>
+  </p:nvPicPr>
+  <p:blipFill>
+    <a:blip r:embed="{rel_id}"/>
+    <a:stretch><a:fillRect/></a:stretch>
+  </p:blipFill>
+  <p:spPr>
+    <a:xfrm>
+      <a:off x="{x_emu}" y="{y_emu}"/>
+      <a:ext cx="{cx_emu}" cy="{cy_emu}"/>
+    </a:xfrm>
+    <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+  </p:spPr>
+</p:pic>"""
+
+
 # ── Per-slide content from spec_bundle ──────────────────────────────────────
 
 
@@ -279,7 +351,10 @@ def _build_cover(spec: dict) -> str:
     ])
 
 
-def _build_concept(spec: dict, graph: dict) -> str:
+def _build_concept(spec: dict, graph: dict, hero_image: dict | None = None) -> tuple[str, list[str]]:
+    """Concept slide. When a hero render is provided it occupies the
+    right half; the bullets stay on the left so the slide reads
+    deck-style instead of text-only."""
     meta = spec.get("meta") or {}
     style = (graph.get("style") or {}) if isinstance(graph, dict) else {}
     moves = style.get("signature_moves") or []
@@ -295,10 +370,27 @@ def _build_concept(spec: dict, graph: dict) -> str:
         paragraphs.append(
             ("•  Theme rule pack referenced from the BRD knowledge base.", {"size": 16}),
         )
-    return _slide_xml([
-        _text_box(sp_id=20, x_emu=720000, y_emu=720000,
-                  cx_emu=10752000, cy_emu=5400000, paragraphs=paragraphs),
-    ])
+
+    elements = []
+    image_files: list[str] = []
+    if hero_image is not None:
+        # Half-width text + half-width picture.
+        elements.append(_text_box(
+            sp_id=20, x_emu=720000, y_emu=720000,
+            cx_emu=5400000, cy_emu=5400000, paragraphs=paragraphs,
+        ))
+        elements.append(_picture_xml(
+            sp_id=21, rel_id="rId2", name=hero_image["caption"],
+            x_emu=6480000, y_emu=720000,
+            cx_emu=5040000, cy_emu=5400000,
+        ))
+        image_files.append(hero_image["filename"])
+    else:
+        elements.append(_text_box(
+            sp_id=20, x_emu=720000, y_emu=720000,
+            cx_emu=10752000, cy_emu=5400000, paragraphs=paragraphs,
+        ))
+    return _slide_xml(elements), image_files
 
 
 def _build_specification(spec: dict) -> str:
@@ -385,7 +477,10 @@ def _build_timeline(spec: dict) -> str:
     ])
 
 
-def _build_drawings_index(spec: dict) -> str:
+def _build_drawings_index(spec: dict, gallery: list[dict] | None = None) -> tuple[str, list[str]]:
+    """Drawings index slide. When ``gallery`` is supplied, the slide
+    gets a thumbnail strip across the bottom (2x2 grid up to four
+    images)."""
     objects_count = spec.get("objects_count") or 0
     meta = spec.get("meta") or {}
     dims = meta.get("dimensions_m") or {}
@@ -402,9 +497,93 @@ def _build_drawings_index(spec: dict) -> str:
         ("•  Parametric solid (STEP / IGES)", {"size": 14}),
         ("•  BIM model (IFC) and project data (GeoJSON)", {"size": 14}),
     ]
+    elements = [_text_box(
+        sp_id=60, x_emu=720000, y_emu=720000,
+        cx_emu=10752000, cy_emu=2400000, paragraphs=paragraphs,
+    )]
+    image_files: list[str] = []
+    if gallery:
+        # 2x2 grid bottom half: each tile 5040000 x 1800000 EMU.
+        for i, item in enumerate(gallery[:4]):
+            row, col = divmod(i, 2)
+            x = 720000 + col * 5400000
+            y = 3300000 + row * 1900000
+            elements.append(_picture_xml(
+                sp_id=61 + i, rel_id=f"rId{2 + i}",
+                name=item["caption"],
+                x_emu=x, y_emu=y, cx_emu=5040000, cy_emu=1700000,
+            ))
+            image_files.append(item["filename"])
+    return _slide_xml(elements), image_files
+
+
+def _build_assembly(spec: dict, graph: dict) -> str:
+    guide = derive_assembly_instructions(spec, graph)
+    paragraphs = [
+        ("Assembly instructions", {"size": 32, "bold": True, "color": "3D3A36"}),
+        ("", {"size": 8}),
+        (guide["summary"], {"size": 13, "color": "5C3B1E"}),
+        ("", {"size": 8}),
+    ]
+    if not guide["steps"]:
+        paragraphs.append(("Sequence will be generated once the manufacturing spec completes.",
+                           {"size": 14, "color": "111111"}))
+    else:
+        for step in guide["steps"][:8]:
+            paragraphs.append(
+                (f"{step['step_number']}.  {step['action']}",
+                 {"size": 14, "bold": True, "color": "111111"}),
+            )
+            paragraphs.append(
+                (f"     Tools: {', '.join(step['tools'])}",
+                 {"size": 11, "color": "5C3B1E"}),
+            )
+            paragraphs.append(
+                (f"     Note: {step['safety']}",
+                 {"size": 11, "color": "5C3B1E"}),
+            )
     return _slide_xml([
-        _text_box(sp_id=60, x_emu=720000, y_emu=720000,
-                  cx_emu=10752000, cy_emu=5400000, paragraphs=paragraphs),
+        _text_box(sp_id=80, x_emu=720000, y_emu=520000,
+                  cx_emu=10752000, cy_emu=5800000, paragraphs=paragraphs),
+    ])
+
+
+def _build_maintenance(spec: dict, graph: dict) -> str:
+    guide = derive_maintenance_guide(spec, graph)
+    paragraphs = [
+        ("Maintenance & care", {"size": 32, "bold": True, "color": "3D3A36"}),
+        ("", {"size": 8}),
+        (guide["intro"], {"size": 13, "color": "5C3B1E"}),
+        ("", {"size": 8}),
+    ]
+    if not guide["categories"]:
+        paragraphs.append(("Care guide pending material spec generation.",
+                           {"size": 14}))
+    else:
+        for entry in guide["categories"][:5]:
+            paragraphs.append(
+                (f"{entry['category'].title()} ({', '.join(entry['applies_to'][:3])})",
+                 {"size": 16, "bold": True, "color": "8C6A4F"}),
+            )
+            for label, items in (
+                ("Weekly", entry["weekly"]),
+                ("Monthly", entry["monthly"]),
+                ("Annually", entry["annually"]),
+            ):
+                if not items:
+                    continue
+                paragraphs.append(
+                    (f"     {label}: {'; '.join(items)}",
+                     {"size": 11, "color": "111111"}),
+                )
+            if entry["warnings"]:
+                paragraphs.append(
+                    (f"     ⚠ {entry['warnings'][0]}",
+                     {"size": 11, "color": "9B2C2C"}),
+                )
+    return _slide_xml([
+        _text_box(sp_id=90, x_emu=720000, y_emu=520000,
+                  cx_emu=10752000, cy_emu=5800000, paragraphs=paragraphs),
     ])
 
 
@@ -430,21 +609,62 @@ def _build_next_steps(spec: dict) -> str:
 # ── Public ──────────────────────────────────────────────────────────────────
 
 
+def _prepare_render_payload(spec: dict, graph: dict) -> tuple[dict | None, list[dict], dict[str, bytes]]:
+    """Walk the renders pipeline once and return:
+      - the hero render (first one) used on the concept slide
+      - the gallery (all renders) used on the drawings slide
+      - the {filename: bytes} map written to ppt/media/
+
+    Filenames are stable: ``render_1.png``, ``render_2.png``, ... so each
+    slide that references a picture by ``filename`` lands the right rel.
+    """
+    raw = collect_render_images(spec, graph)
+    if not raw:
+        return None, [], {}
+
+    media: dict[str, bytes] = {}
+    enriched: list[dict] = []
+    for idx, item in enumerate(raw, start=1):
+        filename = f"render_{idx}{item['ext']}"
+        media[filename] = item["bytes"]
+        enriched.append({
+            "filename": filename,
+            "caption": item["caption"],
+            "ext": item["ext"].lstrip("."),
+        })
+
+    hero = enriched[0]
+    return hero, enriched, media
+
+
 def export(spec: dict, graph: dict) -> dict:
     project = _safe_name((spec.get("meta") or {}).get("project_name", "project"))
-    slides = [
+    graph = graph or {}
+
+    hero, gallery, media = _prepare_render_payload(spec, graph)
+
+    # Each slide is (xml, image_filenames) — older builders return just
+    # XML, so we normalise via _ensure_tuple.
+    slides_raw: list[Any] = [
         _build_cover(spec),
-        _build_concept(spec, graph or {}),
+        _build_concept(spec, graph, hero_image=hero),
         _build_specification(spec),
         _build_cost(spec),
         _build_timeline(spec),
-        _build_drawings_index(spec),
+        _build_drawings_index(spec, gallery=gallery),
+        _build_assembly(spec, graph),
+        _build_maintenance(spec, graph),
         _build_next_steps(spec),
     ]
+    slides: list[tuple[str, list[str]]] = [
+        s if isinstance(s, tuple) else (s, []) for s in slides_raw
+    ]
+
+    image_extensions = {ext for f in media for ext in [f.rsplit(".", 1)[-1].lower()]}
 
     bio = io.BytesIO()
     with zipfile.ZipFile(bio, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("[Content_Types].xml", _content_types(len(slides)))
+        zf.writestr("[Content_Types].xml", _content_types(len(slides), image_extensions))
         zf.writestr("_rels/.rels", _ROOT_RELS)
         zf.writestr("ppt/presentation.xml", _presentation_xml(len(slides)))
         zf.writestr("ppt/_rels/presentation.xml.rels", _presentation_rels(len(slides)))
@@ -453,9 +673,19 @@ def export(spec: dict, graph: dict) -> dict:
         zf.writestr("ppt/slideMasters/_rels/slideMaster1.xml.rels", _SLIDE_MASTER_RELS)
         zf.writestr("ppt/slideLayouts/slideLayout1.xml", _SLIDE_LAYOUT)
         zf.writestr("ppt/slideLayouts/_rels/slideLayout1.xml.rels", _SLIDE_LAYOUT_RELS)
-        for i, slide_xml in enumerate(slides, start=1):
+
+        for fname, data in media.items():
+            zf.writestr(f"ppt/media/{fname}", data)
+
+        for i, (slide_xml, image_files) in enumerate(slides, start=1):
             zf.writestr(f"ppt/slides/slide{i}.xml", slide_xml)
-            zf.writestr(f"ppt/slides/_rels/slide{i}.xml.rels", _SLIDE_RELS)
+            if image_files:
+                zf.writestr(
+                    f"ppt/slides/_rels/slide{i}.xml.rels",
+                    _slide_rels_with_images(image_files),
+                )
+            else:
+                zf.writestr(f"ppt/slides/_rels/slide{i}.xml.rels", _SLIDE_RELS)
 
     return {
         "content_type": "application/vnd.openxmlformats-officedocument.presentationml.presentation",

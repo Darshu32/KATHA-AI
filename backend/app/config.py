@@ -30,7 +30,12 @@ class Settings(BaseSettings):
     environment: Environment = "dev"
     debug: bool = False
     api_version: str = "v1"
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:3000"])
+    cors_origins: list[str] = Field(
+        default_factory=lambda: [
+            "http://localhost:3000",
+            "http://localhost:3001",
+        ]
+    )
 
     # ── Database ─────────────────────────────────────────
     database_url: str = "postgresql+asyncpg://katha:katha@localhost:5432/katha"
@@ -97,6 +102,52 @@ class Settings(BaseSettings):
     # runtime. We expose the model slug separately so future stages
     # can pin a different vision-tuned variant.
     vision_model: str = "claude-sonnet-4-5"
+
+    # ── Stage 12 — Live data feeds ───────────────────────
+    # Master switch. When False every adapter resolves to its stub
+    # implementation regardless of the per-feed flags below — used by
+    # the test suite and offline dev. Production sets True and gates
+    # individual feeds via the per-feed envs.
+    live_feeds_enabled: bool = False
+
+    # Per-feed switches. False keeps the adapter registered but the
+    # Celery beat task short-circuits to a no-op (with a structured log
+    # event for ops dashboards).
+    feed_mcx_enabled: bool = True
+    feed_fx_enabled: bool = True
+    feed_gst_enabled: bool = True
+    feed_vendor_jaquar_enabled: bool = True
+    feed_vendor_kohler_enabled: bool = True
+    feed_vendor_asian_paints_enabled: bool = True
+
+    # HTTP transport — single timeout/retry policy for every adapter
+    # so ops can dial blast radius without per-adapter tuning.
+    feed_http_timeout_seconds: float = 20.0
+    feed_http_max_retries: int = 2
+
+    # Anomaly threshold. Midpoint move >= this percentage between the
+    # previous current quote and the incoming one fires an alert.
+    feed_anomaly_pct_threshold: float = 10.0
+
+    # Slack webhook for anomaly alerts. Empty string = log-only fallback
+    # (the alert row is still persisted; only the Slack POST is skipped).
+    feed_slack_webhook_url: str = ""
+    feed_slack_channel: str = "#price-alerts"
+
+    # Freshness ladder (seconds). The bands mirror what UI shows in
+    # the estimate envelope: live < 6h, recent < 24h, stale < 14d,
+    # otherwise expired. We keep them config-tunable so a long-weekend
+    # outage doesn't accidentally show every estimate as "expired".
+    feed_freshness_live_seconds: int = 6 * 3600
+    feed_freshness_recent_seconds: int = 24 * 3600
+    feed_freshness_stale_seconds: int = 14 * 86400
+
+    # Per-adapter base URLs (overridable so staging hits a recording
+    # proxy without code changes). Empty defaults are intentional —
+    # each adapter knows its own canonical URL when this is blank.
+    feed_mcx_base_url: str = ""
+    feed_fx_base_url: str = ""
+    feed_gst_base_url: str = ""
 
     # ── Auth ─────────────────────────────────────────────
     jwt_secret: str = _DEFAULT_JWT_SECRET

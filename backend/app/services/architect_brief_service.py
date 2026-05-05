@@ -24,7 +24,12 @@ from openai import AsyncOpenAI
 
 from app.config import get_settings
 from app.models.brief import DesignBriefOut
+from typing import TYPE_CHECKING
+
 from app.services.knowledge_injector import build_prompt_preamble, inject_knowledge
+
+if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession  # noqa: F401
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -187,15 +192,26 @@ class ArchitectBriefError(RuntimeError):
     """Raised when the LLM pipeline cannot produce a grounded brief."""
 
 
-async def generate_architect_brief(brief: DesignBriefOut) -> dict[str, Any]:
-    """Run the LLM with the Layer 1B knowledge preamble and return the structured brief."""
+async def generate_architect_brief(
+    brief: DesignBriefOut,
+    *,
+    session: "AsyncSession | None" = None,
+) -> dict[str, Any]:
+    """Run the LLM with the Layer 1B knowledge preamble and return the structured brief.
+
+    Stage 15: ``session`` is now optional. When passed, the knowledge
+    preamble is sourced from the DB-backed Stage 3E tables (Pattern C
+    fallback to Python literals on miss). When ``None``, it's pure
+    Python literals — same as pre-Stage-15. Routes that have a session
+    handy should always pass it.
+    """
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise ArchitectBriefError(
             "OpenAI API key is not configured. The architect-brief stage requires a live LLM call; "
             "no static fallback is served."
         )
 
-    bundle = inject_knowledge(brief)
+    bundle = await inject_knowledge(brief, session=session)
     user_message = _user_message(brief, bundle)
     client = _client_instance()
 

@@ -62,6 +62,7 @@ import asyncio
 import inspect
 import logging
 import time
+import typing
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable, Optional, Type, TypeVar
 
@@ -269,18 +270,28 @@ def tool(
             )
         ctx_param, input_param = params
 
-        # Validate signature.
-        if ctx_param.annotation is not ToolContext:
+        # Resolve annotations — modules using `from __future__ import
+        # annotations` give us strings, not classes. Use get_type_hints
+        # to evaluate against the function's globals + locals.
+        try:
+            hints = typing.get_type_hints(fn)
+        except Exception:  # noqa: BLE001 — fall back to raw annotations
+            hints = {}
+        ctx_anno = hints.get(ctx_param.name, ctx_param.annotation)
+        input_anno = hints.get(input_param.name, input_param.annotation)
+
+        # Validate signature. Allow string match for forward-ref edge cases.
+        if ctx_anno is not ToolContext and ctx_anno != "ToolContext":
             raise TypeError(
                 f"@tool {fn.__name__}: first arg must be annotated `ctx: ToolContext`"
             )
-        input_model = input_param.annotation
+        input_model = input_anno
         if not (inspect.isclass(input_model) and issubclass(input_model, BaseModel)):
             raise TypeError(
                 f"@tool {fn.__name__}: second arg must be a Pydantic BaseModel; "
                 f"got {input_model!r}"
             )
-        output_model = sig.return_annotation
+        output_model = hints.get("return", sig.return_annotation)
         if not (inspect.isclass(output_model) and issubclass(output_model, BaseModel)):
             raise TypeError(
                 f"@tool {fn.__name__}: return annotation must be a Pydantic BaseModel; "

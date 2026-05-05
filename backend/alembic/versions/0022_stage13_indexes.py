@@ -47,7 +47,7 @@ _INDEXES = [
     (
         "ix_chat_messages_session_recent",
         "chat_messages",
-        ["chat_session_id", "created_at"],
+        ["session_id", "created_at"],
     ),
     (
         "ix_project_memory_chunks_project_source",

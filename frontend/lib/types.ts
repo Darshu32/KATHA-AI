@@ -1,3 +1,21 @@
+// ── Project Type ───────────────────────────────────────────────────────────
+
+/* Type union mirrors the backend ProjectTypeEnum (closed vocabulary).
+ * Display data — labels, starter prompts, visual hints, primary/overflow
+ * grouping — is fetched dynamically from the backend at app boot
+ * (see lib/api-client.ts → projectTypes.list, useConfigStore in store.ts).
+ * Keep the union value list in sync if you add a new type. */
+export type ProjectType =
+  | "residential"
+  | "commercial"
+  | "hospitality"
+  | "office"
+  | "retail"
+  | "institutional"
+  | "mixed_use"
+  | "industrial"
+  | "custom";
+
 // ── Chat Types ─────────────────────────────────────────────────────────────
 
 export type ChatMode = "quick" | "deep" | "auto";

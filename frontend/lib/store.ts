@@ -4,6 +4,12 @@
 
 import { create } from "zustand";
 import { persist } from "zustand/middleware";
+import {
+  projectTypes as projectTypesApi,
+  themes as themesApi,
+  type ProjectTypeDef,
+  type ThemeDef,
+} from "./api-client";
 import type {
   Message,
   Conversation,
@@ -23,6 +29,7 @@ import type {
   NoteBlock,
   NoteSection,
   Notebook,
+  ProjectType,
 } from "./types";
 
 // ── Auth Store ──────────────────────────────────────────────────────────────
@@ -206,6 +213,9 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 interface ImageGenState {
   prompt: string;
   negativePrompt: string;
+  projectType: ProjectType;
+  projectSubType: string;
+  projectScale: string;
   theme: ArchTheme;
   drawingType: DrawingType;
   ratio: ImageRatio;
@@ -221,6 +231,9 @@ interface ImageGenState {
 
   setPrompt: (v: string) => void;
   setNegativePrompt: (v: string) => void;
+  setProjectType: (v: ProjectType) => void;
+  setProjectSubType: (v: string) => void;
+  setProjectScale: (v: string) => void;
   setTheme: (v: ArchTheme) => void;
   setDrawingType: (v: DrawingType) => void;
   setRatio: (v: ImageRatio) => void;
@@ -240,6 +253,9 @@ export const useImageGenStore = create<ImageGenState>()(
     (set) => ({
       prompt: "",
       negativePrompt: "",
+      projectType: "residential",
+      projectSubType: "",
+      projectScale: "",
       theme: "modern",
       drawingType: "3d-render",
       ratio: "16:9",
@@ -255,6 +271,9 @@ export const useImageGenStore = create<ImageGenState>()(
 
       setPrompt: (v) => set({ prompt: v }),
       setNegativePrompt: (v) => set({ negativePrompt: v }),
+      setProjectType: (v) => set({ projectType: v }),
+      setProjectSubType: (v) => set({ projectSubType: v }),
+      setProjectScale: (v) => set({ projectScale: v }),
       setTheme: (v) => set({ theme: v }),
       setDrawingType: (v) => set({ drawingType: v }),
       setRatio: (v) => set({ ratio: v }),
@@ -272,6 +291,9 @@ export const useImageGenStore = create<ImageGenState>()(
     {
       name: "katha-image-gen",
       partialize: (state) => ({
+        projectType: state.projectType,
+        projectSubType: state.projectSubType,
+        projectScale: state.projectScale,
         theme: state.theme,
         drawingType: state.drawingType,
         ratio: state.ratio,
@@ -286,6 +308,86 @@ export const useImageGenStore = create<ImageGenState>()(
     },
   ),
 );
+
+// ── Config Store (dynamic themes + project types from backend) ─────────────
+//
+// Fetched once per session by any component that needs the lists. The
+// store owns the in-flight promise so concurrent consumers share one
+// network request. Status flags let the UI render skeletons / fall back
+// to a safe empty state when the backend is unreachable.
+
+interface ConfigState {
+  projectTypeDefs: ProjectTypeDef[];
+  themes: ThemeDef[];
+  loadingProjectTypes: boolean;
+  loadingThemes: boolean;
+  errorProjectTypes: string | null;
+  errorThemes: string | null;
+  loadProjectTypes: () => Promise<void>;
+  loadThemes: () => Promise<void>;
+  loadAll: () => Promise<void>;
+}
+
+let _projectTypesInflight: Promise<void> | null = null;
+let _themesInflight: Promise<void> | null = null;
+
+export const useConfigStore = create<ConfigState>((set, get) => ({
+  projectTypeDefs: [],
+  themes: [],
+  loadingProjectTypes: false,
+  loadingThemes: false,
+  errorProjectTypes: null,
+  errorThemes: null,
+
+  loadProjectTypes: async () => {
+    if (_projectTypesInflight) return _projectTypesInflight;
+    if (get().projectTypeDefs.length > 0) return;
+    set({ loadingProjectTypes: true, errorProjectTypes: null });
+    _projectTypesInflight = (async () => {
+      try {
+        const res = await projectTypesApi.list();
+        set({
+          projectTypeDefs: res.project_types,
+          loadingProjectTypes: false,
+        });
+      } catch (e) {
+        set({
+          loadingProjectTypes: false,
+          errorProjectTypes:
+            e instanceof Error ? e.message : "failed to load project types",
+        });
+      } finally {
+        _projectTypesInflight = null;
+      }
+    })();
+    return _projectTypesInflight;
+  },
+
+  loadThemes: async () => {
+    if (_themesInflight) return _themesInflight;
+    if (get().themes.length > 0) return;
+    set({ loadingThemes: true, errorThemes: null });
+    _themesInflight = (async () => {
+      try {
+        const res = await themesApi.list();
+        set({ themes: res.themes, loadingThemes: false });
+      } catch (e) {
+        set({
+          loadingThemes: false,
+          errorThemes:
+            e instanceof Error ? e.message : "failed to load themes",
+        });
+      } finally {
+        _themesInflight = null;
+      }
+    })();
+    return _themesInflight;
+  },
+
+  loadAll: async () => {
+    await Promise.all([get().loadProjectTypes(), get().loadThemes()]);
+  },
+}));
 
 // ── Design Store ──────────────────────────────────────────────────────────
 

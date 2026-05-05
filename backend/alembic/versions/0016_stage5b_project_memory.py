@@ -106,13 +106,15 @@ def upgrade() -> None:
             nullable=False,
             server_default="0",
         ),
-        # Use raw DDL for the vector column so we don't take a runtime
-        # dep on ``pgvector.alembic`` here — the type lives in the
-        # extension and Postgres parses it natively.
+        # Placeholder column — replaced with the real ``vector(1536)``
+        # via raw DDL immediately below. We use a nullable ``Text``
+        # (not ``UserDefinedType()`` which newer SQLAlchemy refuses to
+        # render) so the create_table doesn't need a default. The
+        # ALTER below swaps in the real type and re-applies NOT NULL.
         sa.Column(
             "embedding",
-            sa.types.UserDefinedType(),
-            nullable=False,
+            sa.Text(),
+            nullable=True,
         ),
         sa.Column(
             "metadata",
@@ -122,12 +124,16 @@ def upgrade() -> None:
         ),
     )
     # Replace the placeholder ``embedding`` column type with the real
-    # ``vector(1536)``. We do this via raw DDL because Alembic doesn't
-    # know how to render the pgvector ``Vector`` type without the
+    # ``vector(1536)`` and re-apply NOT NULL. Raw DDL because Alembic
+    # doesn't render the pgvector ``Vector`` type without the
     # ``pgvector.alembic`` glue.
     op.execute(
         "ALTER TABLE project_memory_chunks "
         "ALTER COLUMN embedding TYPE vector(1536) USING NULL::vector(1536)"
+    )
+    op.execute(
+        "ALTER TABLE project_memory_chunks "
+        "ALTER COLUMN embedding SET NOT NULL"
     )
 
     # ── Indexes ──────────────────────────────────────────────────────

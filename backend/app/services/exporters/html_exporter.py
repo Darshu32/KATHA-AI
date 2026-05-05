@@ -2,9 +2,12 @@
 
 Renders the spec bundle as a self-contained .html file:
     • Tabs:  Overview / Specification / Cost / Manufacturing / MEP / Drawings
-    • <model-viewer> web component slot for an inline 3D preview
-      (the GLTF bytes can be dropped next to the file or a URL passed in;
-      no local network call is required to open the file)
+    • <model-viewer> web component with the GLTF embedded inline as a
+      base64 data URI — Stage 14 closes the BRD §5A "online specification
+      viewer" gap by making the file a single self-contained artefact
+      (no manual GLTF drop required). When graph geometry isn't present,
+      the slot degrades to "3D preview pending" rather than asking the
+      user to source assets.
     • Cost-calculator widget — reactive sliders re-run the BRD walk
       (manufacturer margin / designer margin / retail markup /
       customization premium) entirely client-side
@@ -12,16 +15,19 @@ Renders the spec bundle as a self-contained .html file:
       can move within
     • A shareable link section for client review
 
-No external assets are inlined except a single CDN script for
-<model-viewer>. The HTML opens in any modern browser without a build
-step.
+No external assets are loaded except a single CDN script for the
+<model-viewer> web component. The HTML opens in any modern browser
+without a build step.
 """
 
 from __future__ import annotations
 
+import base64
 import json
 from datetime import datetime, timezone
 from html import escape
+
+from app.services.exporters import gltf_exporter
 
 
 def _safe_name(name: str) -> str:
@@ -75,6 +81,32 @@ def _payload(spec: dict, graph: dict) -> dict:
     }
 
 
+def _build_gltf_data_uri(graph: dict) -> tuple[str, str]:
+    """Render the design graph to GLTF and base64-encode it as a data URI.
+
+    Returns ``(data_uri, status_message)``. ``data_uri`` is empty when
+    the geometry isn't available — the front-end then renders a
+    "3D preview pending" message instead of an inert viewer.
+
+    GLTF is a JSON document that already references its binary buffers
+    via embedded data URIs (see ``gltf_exporter``), so we wrap the whole
+    file in a single ``data:model/gltf+json;base64,…`` URI. <model-viewer>
+    accepts that exact MIME directly.
+    """
+    if not graph or not (graph.get("objects") or graph.get("room")):
+        return "", "3D preview will appear once the design graph completes."
+    try:
+        result = gltf_exporter.export(graph, graph)
+    except Exception as exc:  # noqa: BLE001 — exporter must not break the HTML
+        return "", f"3D preview unavailable ({type(exc).__name__})."
+
+    payload_bytes = result.get("bytes") if isinstance(result, dict) else None
+    if not payload_bytes:
+        return "", "3D preview unavailable (empty GLTF payload)."
+    encoded = base64.b64encode(payload_bytes).decode("ascii")
+    return f"data:model/gltf+json;base64,{encoded}", ""
+
+
 def export(spec: dict, graph: dict) -> dict:
     meta = spec.get("meta") or {}
     project_raw = meta.get("project_name", "KATHA Project")
@@ -83,6 +115,7 @@ def export(spec: dict, graph: dict) -> dict:
 
     payload = _payload(spec, graph or {})
     payload_json = json.dumps(payload, ensure_ascii=False)
+    model_data_uri, model_status = _build_gltf_data_uri(graph or {})
 
     material = spec.get("material") or {}
     manufacturing = spec.get("manufacturing") or {}
@@ -210,8 +243,8 @@ footer {{ padding:18px 48px; border-top:1px solid var(--rule); font-size:12px; c
 <section id="manufacturing">
   <h2>Manufacturing notes</h2>
   <div class="card">
-    <div class="kv"><span>Woodwork precision</span><span>{_e((wood.get('machine_precision_required') or {{}}).get('level','—'))} ±{_e((wood.get('machine_precision_required') or {{}}).get('tolerance_mm','—'))} mm</span></div>
-    <div class="kv"><span>Lead time</span><span>{_e((wood.get('lead_time') or {{}}).get('low_weeks','—'))}–{_e((wood.get('lead_time') or {{}}).get('high_weeks','—'))} weeks ({_e((wood.get('lead_time') or {{}}).get('complexity','—'))})</span></div>
+    <div class="kv"><span>Woodwork precision</span><span>{_e((wood.get('machine_precision_required') or dict()).get('level','—'))} ±{_e((wood.get('machine_precision_required') or dict()).get('tolerance_mm','—'))} mm</span></div>
+    <div class="kv"><span>Lead time</span><span>{_e((wood.get('lead_time') or dict()).get('low_weeks','—'))}–{_e((wood.get('lead_time') or dict()).get('high_weeks','—'))} weeks ({_e((wood.get('lead_time') or dict()).get('complexity','—'))})</span></div>
     <div class="kv"><span>Joinery methods</span><span>{_e(', '.join(j.get('method','') for j in (wood.get('joinery_methods') or [])[:4]) or '—')}</span></div>
     <div class="kv"><span>Metal fab applies to</span><span>{_e(', '.join(metal.get('applies_to') or []) or '—')}</span></div>
   </div>
@@ -224,7 +257,7 @@ footer {{ padding:18px 48px; border-top:1px solid var(--rule); font-size:12px; c
       <h3 style="margin:0 0 8px; font-size:14px; color:var(--accent); text-transform:uppercase; letter-spacing:1px;">HVAC</h3>
       <div class="kv"><span>Air changes / hr</span><span>{_e(hvac.get('ach_target','—'))}</span></div>
       <div class="kv"><span>Fresh-air CFM</span><span>{_e(hvac.get('cfm_fresh_air','—'))}</span></div>
-      <div class="kv"><span>Cooling tonnage</span><span>{_e((hvac.get('cooling') or {{}}).get('tonnage','—'))}</span></div>
+      <div class="kv"><span>Cooling tonnage</span><span>{_e((hvac.get('cooling') or dict()).get('tonnage','—'))}</span></div>
     </div>
     <div class="card">
       <h3 style="margin:0 0 8px; font-size:14px; color:var(--accent); text-transform:uppercase; letter-spacing:1px;">Electrical</h3>
@@ -305,9 +338,9 @@ footer {{ padding:18px 48px; border-top:1px solid var(--rule); font-size:12px; c
 <section id="model">
   <h2>3D model</h2>
   <div class="card">
-    <model-viewer id="viewer" src="" alt="3D model" auto-rotate camera-controls shadow-intensity="1" exposure="1.0">
+    <model-viewer id="viewer" src="{model_data_uri}" alt="3D model" auto-rotate camera-controls shadow-intensity="1" exposure="1.0">
     </model-viewer>
-    <p class="warning">Drop the GLTF (e.g. <code>{_e(project)}-scene.gltf</code>) next to this HTML file or set its URL on the &lt;model-viewer&gt; src.</p>
+    <p class="warning" id="model_status">{_e(model_status)}</p>
   </div>
 </section>
 
@@ -386,8 +419,12 @@ function recalc() {{
 }});
 recalc();
 
-// Model viewer — try the canonical GLTF filename next to this page.
-$('viewer').setAttribute('src', '{_e(project)}-scene.gltf');
+// Model viewer — Stage 14 embeds the GLTF as a data URI so the
+// viewer is fully self-contained. Hide the "preview pending" hint
+// once the model element actually has a src.
+if ($('viewer').getAttribute('src')) {{
+  $('model_status').style.display = 'none';
+}}
 
 // Shareable link.
 $('link').value = window.location.href;

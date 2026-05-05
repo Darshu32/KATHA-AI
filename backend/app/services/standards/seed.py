@@ -253,8 +253,15 @@ def _hospitality_space_rows() -> list[dict[str, Any]]:
 
 
 def build_standards_seed_rows() -> list[dict[str, Any]]:
-    """Every Stage 3B standards row, ready for ``op.bulk_insert``."""
-    return [
+    """Every Stage 3B standards row, ready for ``op.bulk_insert``.
+
+    Post-processed so every row carries the same set of keys —
+    SQLAlchemy's ``bulk_insert`` requires uniform bind parameters
+    across the batch. A handful of legacy row builders omit the
+    optional ``notes`` field; we backfill it here as ``None`` so
+    no row is rejected at insert time.
+    """
+    rows = [
         *_door_rows(),
         *_window_rows(),
         *_corridor_rows(),
@@ -266,3 +273,9 @@ def build_standards_seed_rows() -> list[dict[str, Any]]:
         *_commercial_space_rows(),
         *_hospitality_space_rows(),
     ]
+    for r in rows:
+        r.setdefault("notes", None)
+        r.setdefault("subcategory", None)
+        r.setdefault("source_section", None)
+        r.setdefault("source_doc", None)
+    return rows

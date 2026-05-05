@@ -1,6 +1,7 @@
 """Route registry — import all routers here."""
 
 from app.routes.admin import (
+    feeds_admin_router,
     pricing_admin_router,
     standards_admin_router,
     suggestions_admin_router,
@@ -18,12 +19,15 @@ from app.routes.diagrams import router as diagrams_router
 from app.routes.drawings import router as drawings_router
 from app.routes.estimates import router as estimates_router
 from app.routes.generation import router as generation_router
+from app.routes.images import router as images_router
 from app.routes.imports import router as imports_router
 from app.routes.knowledge import router as knowledge_router
 from app.routes.parametric import router as parametric_router
+from app.routes.project_types import router as project_types_router
 from app.routes.prompts import router as prompts_router
 from app.routes.projects import router as projects_router
 from app.routes.specs import router as specs_router
+from app.routes.themes import router as themes_router
 from app.routes.uploads import router as uploads_router
 from app.routes.working_drawings import router as working_drawings_router
 
@@ -36,6 +40,9 @@ all_routers = [
     diagrams_router,
     drawings_router,
     projects_router,
+    project_types_router,
+    themes_router,
+    images_router,
     generation_router,
     estimates_router,
     imports_router,
@@ -59,4 +66,6 @@ all_routers = [
     uploads_router,
     # Stage 11 decisions + challenge surface (reasoning transparency)
     decisions_router,
+    # Stage 12 live data feeds admin
+    feeds_admin_router,
 ]

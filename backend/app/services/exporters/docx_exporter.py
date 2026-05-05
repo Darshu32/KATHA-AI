@@ -12,6 +12,11 @@ from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.shared import Cm, Pt, RGBColor
 
+from app.services.exporters._synthesis import (
+    derive_assembly_instructions,
+    derive_maintenance_guide,
+)
+
 
 def _fmt_range(v) -> str:
     if isinstance(v, (list, tuple)) and len(v) == 2:
@@ -160,6 +165,12 @@ def export(spec: dict, graph: dict) -> dict:
     for a in c.get("assumptions", [])[:10]:
         doc.add_paragraph(f"• {a}")
 
+    # Stage 14 — BRD §5A explicitly asks for assembly instructions and a
+    # maintenance & care guide in the DOCX deliverable. Both sections
+    # synthesize from spec content via app.services.exporters._synthesis.
+    _build_assembly_section(doc, spec, graph)
+    _build_maintenance_section(doc, spec, graph)
+
     buffer = io.BytesIO()
     doc.save(buffer)
     buffer.seek(0)
@@ -172,3 +183,102 @@ def export(spec: dict, graph: dict) -> dict:
 
 def _safe_name(name: str) -> str:
     return "".join(c if c.isalnum() or c in "-_" else "-" for c in name).strip("-") or "project"
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Stage 14 — Assembly Instructions + Maintenance & Care Guide
+# ─────────────────────────────────────────────────────────────────────
+
+
+def _build_assembly_section(doc, spec: dict, graph: dict) -> None:
+    guide = derive_assembly_instructions(spec, graph)
+    doc.add_page_break()
+    _h1(doc, "Assembly Instructions")
+
+    summary = doc.add_paragraph(guide["summary"])
+    summary.runs[0].font.size = Pt(10)
+
+    if guide["tolerance_notes"]:
+        _h2(doc, "Tolerances at a glance")
+        for note in guide["tolerance_notes"]:
+            p = doc.add_paragraph(f"• {note}")
+            p.runs[0].font.size = Pt(9)
+
+    _h2(doc, "Step-by-step")
+    if not guide["steps"]:
+        doc.add_paragraph(
+            "Sequence not yet generated; run the manufacturing spec to populate."
+        )
+    else:
+        for step in guide["steps"]:
+            p = doc.add_paragraph()
+            run = p.add_run(f"Step {step['step_number']}. ")
+            run.bold = True
+            run.font.size = Pt(11)
+            p.add_run(step["action"]).font.size = Pt(11)
+
+            tools_p = doc.add_paragraph(f"Tools: {', '.join(step['tools'])}")
+            tools_p.runs[0].font.size = Pt(9)
+            tools_p.runs[0].italic = True
+
+            safety_p = doc.add_paragraph(f"Note: {step['safety']}")
+            safety_p.runs[0].font.size = Pt(9)
+
+    if guide["qa_gates"]:
+        _h2(doc, "QA gates (sign-off required)")
+        _table(
+            doc,
+            ["Gate", "What to verify"],
+            [[g.get("gate", "—"), g.get("description", "—") if isinstance(g, dict) else str(g)]
+             for g in guide["qa_gates"]],
+        )
+
+    _h2(doc, "Packaging")
+    p = doc.add_paragraph(guide["packaging"])
+    p.runs[0].font.size = Pt(10)
+
+
+def _build_maintenance_section(doc, spec: dict, graph: dict) -> None:
+    guide = derive_maintenance_guide(spec, graph)
+    doc.add_page_break()
+    _h1(doc, "Maintenance & Care Guide")
+
+    intro = doc.add_paragraph(guide["intro"])
+    intro.runs[0].font.size = Pt(10)
+
+    if not guide["categories"]:
+        doc.add_paragraph(
+            "No materials matched the care matrix — contact the studio for "
+            "a customised care plan."
+        )
+    else:
+        for entry in guide["categories"]:
+            _h2(
+                doc,
+                f"{entry['category'].title()}  —  {', '.join(entry['applies_to'])}",
+            )
+            for label, items in (
+                ("Daily", entry["daily"]),
+                ("Weekly", entry["weekly"]),
+                ("Monthly", entry["monthly"]),
+                ("Annually", entry["annually"]),
+            ):
+                if not items:
+                    continue
+                p = doc.add_paragraph()
+                run = p.add_run(f"{label}: ")
+                run.bold = True
+                run.font.size = Pt(10)
+                p.add_run("; ".join(items)).font.size = Pt(10)
+            if entry["warnings"]:
+                p = doc.add_paragraph()
+                run = p.add_run("Warnings: ")
+                run.bold = True
+                run.font.color.rgb = RGBColor(0x9B, 0x2C, 0x2C)
+                run.font.size = Pt(10)
+                p.add_run("; ".join(entry["warnings"])).font.size = Pt(10)
+
+    _h2(doc, "General notes")
+    for note in guide["general_notes"]:
+        p = doc.add_paragraph(f"• {note}")
+        p.runs[0].font.size = Pt(9)

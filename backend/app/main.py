@@ -11,6 +11,7 @@ from app.config import get_settings
 from app.db import AuditEvent  # noqa: F401  (registers table on Base.metadata)
 from app.middleware import RateLimitMiddleware
 from app.models import architecture  # noqa: F401
+from app.models import feeds  # noqa: F401  (Stage 12 live data feeds)
 from app.models import orm  # noqa: F401
 from app.models import pricing  # noqa: F401  (Stage 1 pricing tables)
 from app.models import standards as standard_models  # noqa: F401  (Stage 3B building_standards table)

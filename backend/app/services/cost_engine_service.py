@@ -989,3 +989,14 @@ async def generate_cost_engine(
         "validation": validation,
         "pricing_snapshot_id": recorded_snapshot_id,
     }
+
+
+# ─────────────────────────────────────────────────────────────────────
+# Backwards-compat re-export: TRADE_HOURS_BY_COMPLEXITY
+# ─────────────────────────────────────────────────────────────────────
+# The constant moved to app.services.pricing.seed during the Stage 1
+# pricing externalisation. Some legacy consumers
+# (recommendations_service, knowledge_integration_service) still
+# import it from here. Re-export to keep them booting until they're
+# migrated to the DB-backed pricing.knowledge_service.
+from app.services.pricing.seed import _TRADE_HOURS_BY_COMPLEXITY as TRADE_HOURS_BY_COMPLEXITY  # noqa: E402, F401
