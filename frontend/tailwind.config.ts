@@ -1,13 +1,17 @@
 import type { Config } from "tailwindcss";
 
-/* KATHA AI — Editorial design system tokens (Claude-inspired).
- * Sans body (Inter) for UI density and readability.
- * Serif display (Newsreader) for hero / page-title moments only.
- * Mono (IBM Plex Mono) for technical surfaces — cost terminal, code, labels.
+/* KATHA AI — Design tokens.
  *
- * Palette is warm-cream paper with near-black warm ink, terracotta as the
- * single primary accent, brass for data, indigo as a quiet secondary.
- * No gridpaper on UI surfaces — that lives only on the design canvas.
+ * Chat surface (white-AI-agent register): pure-white surfaces, neutral
+ * cool grays for hierarchy, near-black ink, Inter throughout. Single
+ * pencil-red accent (the red architects mark drawings with) for live
+ * links, cited values, and destructive states. Mono scoped to numeric
+ * data and callout numerals.
+ *
+ * Design surface (`/design`) retains the editorial register — Newsreader
+ * via `.font-display`, terracotta/brass/indigo accents, paper-card and
+ * brass-rule primitives. Those tokens stay defined so design keeps
+ * rendering until its own redesign pass.
  */
 const config: Config = {
   content: ["./app/**/*.{ts,tsx}", "./components/**/*.{ts,tsx}"],
@@ -31,29 +35,40 @@ const config: Config = {
         ],
       },
       colors: {
-        // Paper — backgrounds. White theme: main is #FFFFFF; layered
-        // surfaces use neutral grays for hierarchy.
+        // Paper — backgrounds. Pure-white canvas with neutral cool grays
+        // for inset surfaces. The 4-level scale supports surface
+        // elevation without warm tints.
         paper: {
           DEFAULT: "#FFFFFF",
-          soft: "#FAFAF9",
-          deep: "#F2F2F0",
-          edge: "#E8E8E5",
+          soft: "#FAFAFA",
+          deep: "#F2F2F2",
+          edge: "#E8E8E8",
         },
-        // Ink — text. Warm near-black so the page reads editorial
-        // rather than clinical despite the white background.
+        // Ink — text. Four neutral levels: primary, secondary, tertiary,
+        // muted. Cool near-black, not warm; pairs with white surfaces.
         ink: {
-          DEFAULT: "#2A2620",
-          deep: "#1A1814",
-          soft: "#5A554F",
-          mute: "#8B867F",
+          DEFAULT: "#1A1A1A",
+          deep: "#0A0A0A",
+          soft: "#6B6B6B",
+          mute: "#A0A0A0",
         },
-        // Hairlines / fine rules — neutral gray.
-        hairline: "#E5E5E2",
+        // Hairlines / rules — cool neutral gray. Three weights for the
+        // border progression; chat leans on the softest two.
+        hairline: "#EAEAEA",
         graphite: {
-          DEFAULT: "#D0D0CC",
-          soft: "#ECECE9",
+          DEFAULT: "#D4D4D4",
+          soft: "#F0F0F0",
         },
-        // Accents — kept from existing palette but used sparingly.
+        // Pencil — the single accent on chat. The red architects use
+        // for markup and as-built notes. Reserved for live links, cited
+        // dimensional data, and destructive actions.
+        pencil: {
+          DEFAULT: "#C8362D",
+          soft: "#D86054",
+          bg: "#FAEAE7",
+        },
+        // Editorial accents — kept defined for the /design surface
+        // until it receives its own redesign. Not used on chat.
         terracotta: {
           DEFAULT: "#A8451B",
           soft: "#D77A50",

@@ -1,11 +1,16 @@
 import type { Metadata } from "next";
-import { Inter, Newsreader, IBM_Plex_Mono } from "next/font/google";
+import { Inter, Newsreader, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 
-/* Type system — Claude-inspired editorial.
- * Inter      → UI body / chat / labels (clean sans, dense, neutral)
- * Newsreader → display headlines only (editorial serif, optical-sized)
- * Plex Mono  → technical surfaces (cost terminal, code, mono labels)
+/* Type system.
+ * Inter         → UI chrome (chat, labels, controls, headings).
+ * Newsreader    → opt-in editorial serif via `.font-display`. Retained
+ *                 for the /design surface's remaining editorial moments
+ *                 until that surface's redesign lands; not used on chat.
+ * JetBrains Mono → technical surfaces (terminal, cost stream, generation
+ *                 log, citation refs, dimensional data, code refs).
+ *                 Purpose-built for engineering tools — precise letter-
+ *                 forms, strong tabular numbers, less branded than Plex.
  *
  * All three are loaded via next/font/google for performance and to keep
  * Google Fonts requests on the build side rather than the client (better
@@ -25,9 +30,9 @@ const newsreader = Newsreader({
   display: "swap",
 });
 
-const plexMono = IBM_Plex_Mono({
+const jetbrainsMono = JetBrains_Mono({
   subsets: ["latin"],
-  weight: ["300", "400", "500"],
+  weight: ["400", "500", "600"],
   variable: "--font-mono",
   display: "swap",
 });
@@ -44,7 +49,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${newsreader.variable} ${plexMono.variable}`}
+      className={`${inter.variable} ${newsreader.variable} ${jetbrainsMono.variable}`}
     >
       <body className="antialiased">{children}</body>
     </html>

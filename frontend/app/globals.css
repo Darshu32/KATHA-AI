@@ -1,9 +1,14 @@
-/* KATHA AI — Editorial design system (Claude-inspired).
+/* KATHA AI — Design tokens.
  *
- * Sans body, serif display, mono technical. Warm cream paper, near-black
- * warm ink, terracotta as the single accent. Whitespace does the work;
- * decoration is rare. Gridpaper exists only on the design canvas surface,
- * never on chat or generic UI.
+ * Chat surface: pure-white canvas, neutral cool grays for surface
+ * elevation, near-black ink, Inter throughout. Single pencil-red
+ * accent (the red architects mark drawings with). Mono is scoped to
+ * numeric data and callout numerals.
+ *
+ * Design surface (`/design`) keeps the editorial register — Newsreader
+ * via `.font-display`, terracotta/brass primitives — until its own
+ * redesign pass. Gridpaper exists only on the design canvas, never on
+ * chat or generic UI.
  */
 
 @tailwind base;
@@ -14,27 +19,36 @@
 :root {
   color-scheme: light;
 
-  /* Paper — backgrounds. Pure-white theme: main is #FFFFFF, with
-     progressively darker neutrals for layered surfaces (sidebars,
-     inset cards, edges). Warmth comes from text + accents, not bg. */
+  /* Paper — backgrounds. Pure white canvas with neutral cool grays for
+     hierarchy. Sidebars use the same canvas color as content; only a
+     hairline border separates them. Inset surfaces step one level up. */
   --paper:       #FFFFFF;
-  --paper-soft:  #FAFAF9;
-  --paper-deep:  #F2F2F0;
-  --paper-edge:  #E8E8E5;
+  --paper-soft:  #FAFAFA;
+  --paper-deep:  #F2F2F2;
+  --paper-edge:  #E8E8E8;
 
-  /* Ink — text. Keep warm near-black so the editorial register is
-     preserved and the page doesn't feel clinical. */
-  --ink:         #2A2620;
-  --ink-deep:    #1A1814;
-  --ink-soft:    #5A554F;
-  --ink-mute:    #8B867F;
+  /* Ink — text. Four neutral levels: primary, secondary, tertiary,
+     muted. Cool near-black; pairs with white surfaces. */
+  --ink:         #1A1A1A;
+  --ink-deep:    #0A0A0A;
+  --ink-soft:    #6B6B6B;
+  --ink-mute:    #A0A0A0;
 
-  /* Lines — neutral gray, not cream */
-  --hairline:        #E5E5E2;
-  --graphite:        #D0D0CC;
-  --graphite-soft:   #ECECE9;
+  /* Rules — hairlines for separation. Progression: standard, soft,
+     emphasis. Matched to the importance of the boundary. */
+  --hairline:        #EAEAEA;
+  --graphite:        #D4D4D4;
+  --graphite-soft:   #F0F0F0;
 
-  /* Accents — used sparingly */
+  /* Pencil — the single accent on chat. The red architects mark
+     drawings with. Reserved for live links, cited dimensional data,
+     and destructive actions. */
+  --pencil:          #C8362D;
+  --pencil-soft:     #D86054;
+  --pencil-bg:       #FAEAE7;
+
+  /* Editorial accents — retained for the /design surface until its
+     own redesign. Not used on chat. */
   --terracotta:      #A8451B;
   --terracotta-soft: #D77A50;
   --terracotta-bg:   #F2DFCE;
@@ -83,7 +97,7 @@ body {
 * { box-sizing: border-box; }
 
 ::selection {
-  background: var(--terracotta);
+  background: var(--pencil);
   color: var(--paper);
 }
 
@@ -92,14 +106,19 @@ body {
 .font-sans    { font-family: var(--sans-stack); }
 .font-mono    { font-family: var(--mono-stack); }
 
-/* Editorial display — Newsreader. Used for hero / page titles only. */
+/* Headings inherit Inter from body. Pages that want the editorial
+   serif moment opt in explicitly via `.font-display`. Tracking and
+   weight do the hierarchy on chat; the typeface stays consistent. */
 h1, h2, h3, h4, h5, h6 {
-  font-family: var(--display-stack);
-  font-weight: 500;
-  letter-spacing: -0.015em;
+  font-weight: 600;
+  letter-spacing: -0.02em;
   color: var(--ink-deep);
   line-height: 1.18;
   margin: 0;
+}
+.font-display {
+  font-weight: 500;
+  letter-spacing: -0.015em;
 }
 
 /* ── Components ─────────────────────────────────────────────────────── */
@@ -278,13 +297,13 @@ h1, h2, h3, h4, h5, h6 {
 .message-prose h2,
 .message-prose h3,
 .message-prose h4 {
-  font-family: var(--display-stack);
-  font-weight: 500;
+  font-family: var(--sans-stack);
+  font-weight: 600;
   color: var(--ink-deep);
-  letter-spacing: -0.015em;
+  letter-spacing: -0.02em;
   margin-top: 1.6em;
   margin-bottom: 0.4em;
-  line-height: 1.22;
+  line-height: 1.25;
 }
 .message-prose h1 { font-size: 1.625rem; }
 .message-prose h2 { font-size: 1.375rem; }
@@ -302,7 +321,6 @@ h1, h2, h3, h4, h5, h6 {
   padding-left: 1em;
   margin: 1.2em 0;
   color: var(--ink-soft);
-  font-family: var(--display-stack);
   font-style: italic;
 }
 .message-prose code {
@@ -354,13 +372,13 @@ h1, h2, h3, h4, h5, h6 {
   margin: 1.8em 0;
 }
 .message-prose a {
-  color: var(--terracotta);
+  color: var(--pencil);
   text-decoration: underline;
   text-decoration-thickness: 1px;
   text-underline-offset: 3px;
   transition: color 160ms var(--ease-snap);
 }
-.message-prose a:hover { color: var(--terracotta-soft); }
+.message-prose a:hover { color: var(--pencil-soft); }
 .message-prose strong { color: var(--ink-deep); font-weight: 600; }
 
 /* ── Motion ─────────────────────────────────────────────────────────── */

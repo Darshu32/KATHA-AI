@@ -12,6 +12,7 @@ import remarkGfm from "remark-gfm";
 import { useChatStore, useNotesStore } from "@/lib/store";
 import { chat as chatApi } from "@/lib/api-client";
 import { parseDeepModeToNotes } from "@/lib/notes-parser";
+import { useNotesPersist } from "@/lib/use-notes-persist";
 import type { ChatMode, Message } from "@/lib/types";
 import {
   Annotation,
@@ -46,6 +47,11 @@ export default function ChatWorkspaceMvp1() {
 
   const notesPanelOpen = useNotesStore((s) => s.notesPanelOpen);
   const setNotesPanelOpen = useNotesStore((s) => s.setNotesPanelOpen);
+
+  // Phase 1 sync: pushes localStorage notes to server on first run,
+  // hydrates each conversation's notebook on switch, and debounce-
+  // syncs every edit. No-op when not logged in.
+  useNotesPersist();
 
   const abortRef = useRef<AbortController | null>(null);
   const [input, setInput] = useState("");
@@ -127,11 +133,56 @@ export default function ChatWorkspaceMvp1() {
                       | "other") ?? "other",
                 })),
               });
-              if (chatMode === "deep") {
+              // Deep Mode answers become auto-saved notes, scoped to
+              // the originating conversation. The persist hook syncs
+              // the new section to the server.
+              //
+              // The check on ``data.mode`` rather than ``chatMode`` is
+              // deliberate: when chatMode is "auto", the backend is the
+              // one that decides quick vs. deep, and reports its choice
+              // back in ``data.mode``. Trusting the local toggle would
+              // miss auto-promoted deep answers.
+              if (data.mode === "deep" && data.content && convoId) {
                 try {
-                  parseDeepModeToNotes(data.content);
+                  const section = parseDeepModeToNotes(
+                    data.content,
+                    placeholder.id,
+                    convoId,
+                  );
+                  useNotesStore.getState().addSection(section);
+
+                  // Phase 4 — auto-generate the section image in
+                  // the background. We deliberately *don't* await
+                  // this: the section is already visible, the user
+                  // can keep typing, and the image just fades in
+                  // when ready (typically 5–15s). On failure we
+                  // swallow silently — the section stays imageless
+                  // rather than showing an error chrome the user
+                  // can't act on.
+                  const sectionId = section.id;
+                  if (data.image_prompt) {
+                    chatApi
+                      .generateImage(data.image_prompt)
+                      .then((res) => {
+                        if (res?.image?.url) {
+                          useNotesStore
+                            .getState()
+                            .setSectionImage(sectionId, res.image.url);
+                        }
+                      })
+                      .catch((err) => {
+                        // eslint-disable-next-line no-console
+                        console.warn(
+                          "[notes] image generation failed for section",
+                          sectionId,
+                          err,
+                        );
+                      });
+                  }
                 } catch {
-                  // notes parser failure is non-fatal
+                  // Notes parser failure is non-fatal — the chat
+                  // answer is already rendered, just no notebook
+                  // section gets created this turn.
                 }
               }
             },
@@ -250,7 +301,7 @@ function TopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
           </button>
           <Link
             href="/chat"
-            className="font-display text-[1.35rem] text-ink-deep tracking-tight font-medium leading-none"
+            className="text-[1.05rem] text-ink-deep tracking-tight font-semibold leading-none"
           >
             Katha
           </Link>
@@ -398,15 +449,13 @@ function EmptyHero({ onPick }: { onPick: (prompt: string) => void }) {
     "Explain ECBC envelope U-value targets for warm-humid climates.",
   ];
   return (
-    <div className="px-6 md:px-10 py-16 max-w-chat mx-auto">
-      <h1 className="font-display text-4xl md:text-5xl text-ink-deep leading-[1.1] tracking-tight font-medium">
-        Good to see you,
-        <br />
-        <span className="italic text-ink-soft">architect.</span>
+    <div className="px-6 md:px-10 py-20 max-w-chat mx-auto">
+      <h1 className="text-[2rem] md:text-[2.25rem] text-ink-deep leading-[1.15] tracking-[-0.02em] font-semibold">
+        Good to see you, architect.
       </h1>
-      <p className="mt-6 text-ink-soft text-[1.0625rem] leading-relaxed max-w-xl">
+      <p className="mt-5 text-ink-soft text-[15px] leading-relaxed max-w-xl">
         Ask anything about codes, materials, ergonomics, structural logic,
-        manufacturing, or cost. Switch to <em>Deep</em> for a long-form
+        manufacturing, or cost. Switch to Deep for a long-form
         conversation with a notes pane that writes itself.
       </p>
 
@@ -416,7 +465,7 @@ function EmptyHero({ onPick }: { onPick: (prompt: string) => void }) {
             key={s}
             type="button"
             onClick={() => onPick(s)}
-            className="w-full text-left px-4 py-3 border border-hairline bg-paper-soft/60 hover:bg-paper-soft hover:border-graphite rounded-md transition-colors text-[15px] text-ink leading-snug"
+            className="w-full text-left px-4 py-3 border border-hairline bg-paper hover:bg-paper-soft hover:border-graphite rounded-md transition-colors text-[15px] text-ink leading-snug"
           >
             {s}
           </button>
@@ -482,7 +531,7 @@ function MessageRow({ message }: { message: Message }) {
                         href={r.url}
                         target="_blank"
                         rel="noreferrer"
-                        className="text-terracotta hover:text-terracotta-soft underline underline-offset-2"
+                        className="text-pencil hover:text-pencil-soft underline underline-offset-2"
                       >
                         {r.title}
                       </a>
@@ -616,7 +665,7 @@ function NotesPane({ onClose }: { onClose: () => void }) {
       <div className="flex-1 overflow-y-auto draft-scroll px-5 py-5">
         <PaperCard className="p-5">
           <div className="flex items-center justify-between">
-            <h3 className="font-display text-lg text-ink-deep font-medium">
+            <h3 className="text-[15px] text-ink-deep font-semibold tracking-[-0.01em]">
               Session notes
             </h3>
             <Annotation>auto-generated</Annotation>
