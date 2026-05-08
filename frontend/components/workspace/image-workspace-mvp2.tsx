@@ -80,6 +80,15 @@ export default function ImageWorkspaceMvp2() {
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [generateNotice, setGenerateNotice] = useState<string | null>(null);
 
+  // ── Pass 2: edit-loop UX state ──────────────────────────────────────
+  // Which object the architect has selected for editing, plus the
+  // prompt they're typing and whether a submit is in flight. Cleared
+  // after a successful edit so the popover collapses on its own.
+  const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
+  const [editPrompt, setEditPrompt] = useState("");
+  const [isEditing, setIsEditing] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
   // Bootstrap dynamic config (themes + project types) on mount.
   useEffect(() => {
     void loadAll();
@@ -104,6 +113,86 @@ export default function ImageWorkspaceMvp2() {
     () => projectTypeDefs.find((d) => d.slug === projectType) ?? null,
     [projectTypeDefs, projectType],
   );
+
+  /* Latest generation drives the editable-objects panel + the edit
+     submission context. Older generations remain in the gallery as
+     read-only history; only the latest version can be edited (the
+     /edit endpoint always operates on get_latest_version). */
+  const latestGeneration = generations[0] ?? null;
+  const editableObjects = useMemo(() => {
+    const data = latestGeneration?.graphData as
+      | { objects?: Array<{ id: string; type: string; name?: string; material?: string; dimensions?: { length: number; width: number; height: number } | null }> }
+      | undefined;
+    return data?.objects ?? [];
+  }, [latestGeneration]);
+
+  /* submitEdit — Pass 2 of the edit loop.
+   *
+   * Operates on whichever object the architect has selected. Calls
+   * /projects/{id}/edit (graph + new version), and in parallel asks
+   * /images/generate for a fresh render that reflects the change.
+   * The new version becomes the gallery's latest; the user's prompt
+   * is concatenated to the original so the audit trail reads as a
+   * sentence ("…walnut top → swap legs to brass"). */
+  const submitEdit = async () => {
+    if (
+      !selectedObjectId ||
+      !editPrompt.trim() ||
+      editPrompt.trim().length < 5 ||
+      !activeProjectId ||
+      !token ||
+      !latestGeneration ||
+      isEditing
+    ) {
+      return;
+    }
+    setEditError(null);
+    setIsEditing(true);
+    try {
+      const [editRes, imageRes] = await Promise.all([
+        designApi.editObject(token, activeProjectId, {
+          object_id: selectedObjectId,
+          prompt: editPrompt.trim(),
+        }),
+        imagesApi.generate(token, {
+          prompt: `${latestGeneration.prompt} — ${editPrompt.trim()}`,
+          project_type: projectType,
+          theme,
+          ratio,
+        }),
+      ]);
+
+      addGeneration({
+        id: crypto.randomUUID(),
+        prompt: `${latestGeneration.prompt} — ${editPrompt.trim()}`,
+        url: imageRes.image?.url,
+        timestamp: new Date().toISOString(),
+        theme,
+        ratio,
+        quality: latestGeneration.quality,
+        drawingType: latestGeneration.drawingType,
+        camera: latestGeneration.camera,
+        lighting: latestGeneration.lighting,
+        width: latestGeneration.width,
+        height: latestGeneration.height,
+        projectId: activeProjectId,
+        version: editRes.version,
+        graphData: editRes.graph_data,
+        estimate: editRes.estimate,
+      });
+      setActiveProject(activeProjectId, editRes.version);
+      setEditPrompt("");
+      setSelectedObjectId(null);
+    } catch (e) {
+      if (e instanceof ApiError) {
+        setEditError(`Backend rejected the edit (${e.status}).`);
+      } else {
+        setEditError("Couldn't reach the backend for the edit.");
+      }
+    } finally {
+      setIsEditing(false);
+    }
+  };
 
   /* generate() — Pass 1 of the edit loop.
    *
@@ -294,6 +383,15 @@ export default function ImageWorkspaceMvp2() {
           hasDesign={generations.length > 0}
           dim={dim}
           theme={theme}
+          objects={editableObjects}
+          selectedObjectId={selectedObjectId}
+          onSelectObject={setSelectedObjectId}
+          editPrompt={editPrompt}
+          onEditPromptChange={setEditPrompt}
+          onSubmitEdit={submitEdit}
+          isEditing={isEditing}
+          editError={editError}
+          canEdit={!!token && !!activeProjectId}
         />
       </div>
 
@@ -721,15 +819,42 @@ function CanvasGallery({
 
 // ── Right: spec summary + citations ────────────────────────────────────
 
+type GraphObject = {
+  id: string;
+  type: string;
+  name?: string;
+  material?: string;
+  dimensions?: { length: number; width: number; height: number } | null;
+};
+
 function RightSummary({
   hasDesign,
   dim,
   theme,
+  objects,
+  selectedObjectId,
+  onSelectObject,
+  editPrompt,
+  onEditPromptChange,
+  onSubmitEdit,
+  isEditing,
+  editError,
+  canEdit,
 }: {
   hasDesign: boolean;
   dim: Dim;
   theme: ArchTheme;
+  objects: GraphObject[];
+  selectedObjectId: string | null;
+  onSelectObject: (id: string | null) => void;
+  editPrompt: string;
+  onEditPromptChange: (v: string) => void;
+  onSubmitEdit: () => void;
+  isEditing: boolean;
+  editError: string | null;
+  canEdit: boolean;
 }) {
+  const hasGraph = objects.length > 0;
   return (
     <aside className="w-80 shrink-0 bg-paper-soft border-l border-hairline overflow-y-auto draft-scroll">
       <div className="px-5 py-5">
@@ -739,7 +864,37 @@ function RightSummary({
             Specs, materials, and BOQ will appear here once you generate a
             design. Every value carries its source inline.
           </p>
+        ) : hasGraph ? (
+          // Project-pipeline path — graph_data present, objects are
+          // editable. The architect clicks any row to open an inline
+          // prompt below it; submit calls /projects/{id}/edit and
+          // pushes a new version into the gallery.
+          <div className="mt-4 space-y-5">
+            <ObjectsPanel
+              objects={objects}
+              selectedObjectId={selectedObjectId}
+              onSelect={onSelectObject}
+              editPrompt={editPrompt}
+              onEditPromptChange={onEditPromptChange}
+              onSubmit={onSubmitEdit}
+              isEditing={isEditing}
+              editError={editError}
+              canEdit={canEdit}
+            />
+            <div>
+              <h4 className="font-mono text-[10px] tracking-[0.14em] uppercase text-ink-mute mb-2">
+                Meta
+              </h4>
+              <div className="border-t border-hairline">
+                <CitedKV k="Dim" v={dim.toUpperCase()} />
+                <CitedKV k="Theme" v={theme} />
+              </div>
+            </div>
+          </div>
         ) : (
+          // Anonymous / image-only fallback — no graph_data was
+          // returned. Keep the static specification surfaces so the
+          // page stays informative without an editable graph.
           <div className="mt-4 space-y-5">
             <div>
               <h4 className="font-mono text-[10px] tracking-[0.14em] uppercase text-ink-mute mb-2">
@@ -806,6 +961,188 @@ function RightSummary({
       </div>
     </aside>
   );
+}
+
+/* ObjectsPanel — Pass 2 of the edit loop.
+   Shows every object the AI named in the design graph as a clickable
+   row. Selecting a row opens an inline edit popover directly beneath
+   it; submit fires /projects/{id}/edit and the gallery grows by one
+   version. Architects iterate the design without re-prompting from
+   scratch. */
+function ObjectsPanel({
+  objects,
+  selectedObjectId,
+  onSelect,
+  editPrompt,
+  onEditPromptChange,
+  onSubmit,
+  isEditing,
+  editError,
+  canEdit,
+}: {
+  objects: GraphObject[];
+  selectedObjectId: string | null;
+  onSelect: (id: string | null) => void;
+  editPrompt: string;
+  onEditPromptChange: (v: string) => void;
+  onSubmit: () => void;
+  isEditing: boolean;
+  editError: string | null;
+  canEdit: boolean;
+}) {
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-2">
+        <h4 className="font-mono text-[10px] tracking-[0.14em] uppercase text-ink-mute">
+          Objects
+        </h4>
+        <span className="font-mono text-[10px] tnum text-ink-mute">
+          {String(objects.length).padStart(2, "0")}
+        </span>
+      </div>
+      <div className="border-t border-hairline">
+        {objects.map((obj) => {
+          const selected = obj.id === selectedObjectId;
+          return (
+            <div key={obj.id}>
+              <button
+                type="button"
+                onClick={() => onSelect(selected ? null : obj.id)}
+                disabled={!canEdit}
+                className={`w-full text-left flex items-baseline justify-between border-b border-hairline py-2 font-mono text-[12px] transition-colors ${
+                  selected
+                    ? "bg-pencil-bg/60 -mx-2 px-2"
+                    : canEdit
+                    ? "hover:bg-paper -mx-2 px-2"
+                    : "opacity-60 cursor-not-allowed"
+                }`}
+                aria-pressed={selected}
+              >
+                <span className="flex items-baseline gap-2">
+                  {selected ? (
+                    <span className="text-pencil text-[10px]" aria-hidden>
+                      ●
+                    </span>
+                  ) : null}
+                  <span className="text-ink-deep font-medium">
+                    {obj.name?.trim() || formatObjectType(obj.type)}
+                  </span>
+                </span>
+                <span className="text-ink-mute uppercase tracking-[0.08em] text-[10px]">
+                  {obj.type}
+                </span>
+              </button>
+              {selected ? (
+                <EditPopover
+                  prompt={editPrompt}
+                  onPromptChange={onEditPromptChange}
+                  onSubmit={onSubmit}
+                  onCancel={() => onSelect(null)}
+                  isEditing={isEditing}
+                  editError={editError}
+                  canEdit={canEdit}
+                  objectName={obj.name?.trim() || formatObjectType(obj.type)}
+                />
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+      {!canEdit ? (
+        <p className="mt-2 text-[11px] font-mono text-ink-mute">
+          Sign in to enable per-object edits.
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+/* EditPopover — inline prompt + submit, opens directly beneath the
+   selected object row. Pencil-red marker on the left edge marks it as
+   the active edit context; pressing Esc or clicking another row closes
+   it. Validation matches the backend schema (≥5 chars). */
+function EditPopover({
+  prompt,
+  onPromptChange,
+  onSubmit,
+  onCancel,
+  isEditing,
+  editError,
+  canEdit,
+  objectName,
+}: {
+  prompt: string;
+  onPromptChange: (v: string) => void;
+  onSubmit: () => void;
+  onCancel: () => void;
+  isEditing: boolean;
+  editError: string | null;
+  canEdit: boolean;
+  objectName: string;
+}) {
+  const ref = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => {
+    ref.current?.focus();
+  }, []);
+  const valid = prompt.trim().length >= 5;
+  return (
+    <div className="border-b border-hairline -mx-2 px-3 py-3 bg-paper border-l-2 border-l-pencil">
+      <div className="flex items-baseline justify-between mb-1.5">
+        <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute">
+          Edit · {objectName}
+        </span>
+        <button
+          type="button"
+          onClick={onCancel}
+          className="text-ink-mute hover:text-ink text-[11px] font-mono"
+          aria-label="Cancel edit"
+        >
+          ✕
+        </button>
+      </div>
+      <textarea
+        ref={ref}
+        value={prompt}
+        onChange={(e) => onPromptChange(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") onCancel();
+          if (e.key === "Enter" && (e.metaKey || e.ctrlKey) && valid) {
+            e.preventDefault();
+            onSubmit();
+          }
+        }}
+        placeholder="Change material, dimensions, position, finish…"
+        rows={2}
+        disabled={isEditing || !canEdit}
+        className="w-full resize-none outline-none bg-paper border border-hairline focus:border-graphite rounded-sm py-1.5 px-2 text-[12px] text-ink leading-relaxed font-mono placeholder:text-ink-mute"
+      />
+      {editError ? (
+        <p className="mt-1.5 text-[11px] font-mono text-brick">{editError}</p>
+      ) : null}
+      <div className="mt-2 flex items-center justify-between">
+        <span className="text-[10px] font-mono uppercase tracking-[0.1em] text-ink-mute">
+          ⌘↵ to apply
+        </span>
+        <button
+          type="button"
+          onClick={onSubmit}
+          disabled={!valid || isEditing || !canEdit}
+          className="text-[11px] font-medium px-3 py-1.5 bg-ink-deep text-paper hover:bg-ink rounded-sm transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          {isEditing ? "Editing…" : "Apply edit"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/* Pretty-print snake_case object types as Title-cased phrases.
+   "dining_table" → "Dining table", "tv_unit" → "Tv unit". Used as a
+   fallback when the AI didn't supply a `name` for an object. */
+function formatObjectType(type: string): string {
+  if (!type) return "Object";
+  const first = type.replace(/_/g, " ");
+  return first.charAt(0).toUpperCase() + first.slice(1);
 }
 
 /* Cited key-value row for the right summary (light surface).
