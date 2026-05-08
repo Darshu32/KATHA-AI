@@ -4,7 +4,7 @@
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 
-type Method = "GET" | "POST" | "PATCH" | "DELETE";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export class ApiError extends Error {
   constructor(
@@ -38,6 +38,14 @@ async function request<T>(
   if (!res.ok) {
     const errorBody = await res.json().catch(() => null);
     throw new ApiError(res.status, errorBody);
+  }
+
+  // 204 No Content (and any other body-less success) — return undefined
+  // cast to T. Endpoints that actually need a typed body should not
+  // return 204; this branch keeps DELETE-style calls from crashing
+  // on res.json() of an empty body.
+  if (res.status === 204) {
+    return undefined as unknown as T;
   }
 
   return res.json() as Promise<T>;
@@ -286,6 +294,48 @@ export const chat = {
     ),
 };
 
+// ── Projects (CRUD) ──────────────────────────────────────────────────────
+//
+// A project is the unit that owns a design graph + its version history.
+// Every generation/edit/theme-switch is scoped to a project so the
+// architect can iterate on a single design instead of starting over.
+
+export interface ProjectOut {
+  id: string;
+  name: string;
+  description: string | null;
+  status: string;
+  project_type: string;
+  project_sub_type: string | null;
+  project_scale: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export const projects = {
+  create: (
+    token: string,
+    body: {
+      name: string;
+      description?: string | null;
+      project_type: string;
+      project_sub_type?: string | null;
+      project_scale?: string | null;
+    },
+  ) => request<ProjectOut>("/projects", "POST", body, token),
+
+  list: (token: string) =>
+    request<{ projects: ProjectOut[]; total: number }>(
+      "/projects",
+      "GET",
+      undefined,
+      token,
+    ),
+
+  get: (token: string, projectId: string) =>
+    request<ProjectOut>(`/projects/${projectId}`, "GET", undefined, token),
+};
+
 // ── Design (Generation & Editing) ────────────────────────────────────────
 
 export const design = {
@@ -407,7 +457,99 @@ export const design = {
   },
 };
 
+// ── Notes (Phase 1 — per-conversation server-side notebooks) ───────────────
+//
+// Wire shape mirrors the backend ``app.models.schemas`` notes section.
+// Block payloads are passed through as ``unknown[]`` because their
+// structure evolves on the frontend; the source of truth for block
+// shape is ``./types.ts``.
+
+export interface NoteSectionWire {
+  id: string;
+  conversation_id: string;
+  source_message_id: string | null;
+  title: string;
+  blocks: unknown[];
+  // Phase 3 — server canonicalises these (trimmed, deduped). The
+  // server may return a server-default empty list for older rows
+  // that pre-date the column.
+  tags: string[];
+  // Phase 4 — auto-generated image (base64 data URI today).
+  image_url: string | null;
+  client_created_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface NoteSectionUpsertBody {
+  conversation_id: string;
+  source_message_id?: string | null;
+  title: string;
+  blocks: unknown[];
+  tags?: string[];
+  image_url?: string | null;
+  client_created_at?: string | null;
+}
+
+export interface NoteImportItem {
+  id: string;
+  conversation_id: string;
+  source_message_id?: string | null;
+  title: string;
+  blocks: unknown[];
+  tags?: string[];
+  image_url?: string | null;
+  client_created_at?: string | null;
+}
+
+export interface NoteImportResult {
+  imported: number;
+  skipped: number;
+}
+
+export const notes = {
+  /** All sections in one conversation's notebook, newest-first. */
+  list: (conversationId: string, token?: string) =>
+    request<{ sections: NoteSectionWire[] }>(
+      `/notes/sections?conversation_id=${encodeURIComponent(conversationId)}`,
+      "GET",
+      undefined,
+      token,
+    ),
+
+  /** Create-or-update a section by client-supplied ID. */
+  upsert: (sectionId: string, body: NoteSectionUpsertBody, token?: string) =>
+    request<NoteSectionWire>(
+      `/notes/sections/${encodeURIComponent(sectionId)}`,
+      "PUT",
+      body,
+      token,
+    ),
+
+  /** Delete a section. Resolves on 204; throws ApiError on 404. */
+  delete: (sectionId: string, token?: string) =>
+    request<void>(
+      `/notes/sections/${encodeURIComponent(sectionId)}`,
+      "DELETE",
+      undefined,
+      token,
+    ),
+
+  /**
+   * One-time bulk push of localStorage notes to the server.
+   * Already-existing IDs are skipped on the server side, not
+   * overwritten — see backend route for rationale.
+   */
+  import: (sections: NoteImportItem[], token?: string) =>
+    request<NoteImportResult>(
+      `/notes/import`,
+      "POST",
+      { sections },
+      token,
+    ),
+};
+
 // ── Default export ─────────────────────────────────────────────────────────
 
-const api = { auth, architecture, chat, design };
+const api = { auth, architecture, chat, projects, design, notes };
 export default api;

@@ -130,16 +130,33 @@ export interface GeneratedImage {
   createdAt: string;
 }
 
+/* What the design workspace stores for each generation in memory.
+   Project-pipeline fields (projectId, version, graphData, estimate)
+   are optional so legacy flat generations from the old image-only
+   path continue to load cleanly; new generations carry them. */
 export interface ImageGeneration {
   id: string;
   prompt: string;
-  negativePrompt: string;
+  url?: string;
+  timestamp: string;
   theme: ArchTheme;
   drawingType: DrawingType;
   ratio: ImageRatio;
   quality: ImageQuality;
-  images: GeneratedImage[];
-  createdAt: string;
+  camera: CameraMode;
+  lighting: LightingMode;
+  width?: number;
+  height?: number;
+
+  // ── Project pipeline (Pass 1 of edit loop) ─────────────────────────
+  // Present when a generation came from POST /projects/{id}/generate
+  // rather than the legacy POST /images/generate. The graphData is the
+  // structured design (objects + dimensions) that /edit operates on.
+  projectId?: string;
+  version?: number;
+  versionId?: string;
+  graphData?: unknown;
+  estimate?: unknown;
 }
 
 // ── Design Graph Types (mirrors backend DesignObjectSchema) ───────────────
@@ -391,6 +408,16 @@ export interface NoteSection {
   sourceMessageId: string;
   sourceConversationId: string;
   blocks: NoteBlock[];
+  // Phase 3 — user-applied tags. Always present; empty array for
+  // newly auto-generated sections. Backend canonicalises (trim,
+  // dedupe case-insensitive, max 20 tags / 40 chars each).
+  tags: string[];
+  // Phase 4 — auto-generated illustration for this section.
+  // Currently a base64 data URI (Gemini); the field name is generic
+  // so a future migration to a stored CDN URL is a value swap.
+  // ``null`` when no image has been generated (or when the user
+  // removed it). Capped at ~4MB on the wire.
+  imageUrl: string | null;
 }
 
 export interface Notebook {

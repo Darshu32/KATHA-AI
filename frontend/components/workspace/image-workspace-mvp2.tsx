@@ -10,7 +10,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useAuthStore, useConfigStore, useImageGenStore } from "@/lib/store";
-import { ApiError, images as imagesApi } from "@/lib/api-client";
+import {
+  ApiError,
+  design as designApi,
+  images as imagesApi,
+  projects as projectsApi,
+} from "@/lib/api-client";
 import type {
   ArchTheme,
   ImageRatio,
@@ -60,6 +65,8 @@ export default function ImageWorkspaceMvp2() {
     addGeneration,
     terminalOpen,
     toggleTerminal,
+    activeProjectId,
+    setActiveProject,
   } = useImageGenStore();
 
   const projectTypeDefs = useConfigStore((s) => s.projectTypeDefs);
@@ -98,6 +105,23 @@ export default function ImageWorkspaceMvp2() {
     [projectTypeDefs, projectType],
   );
 
+  /* generate() — Pass 1 of the edit loop.
+   *
+   * Old flow: one call to /images/generate returned a flat render with
+   * no graph, no objects, no project. Could not be edited.
+   *
+   * New flow:
+   *   1. Ensure an active project exists (create one on first generation).
+   *   2. Run /projects/{id}/generate — yields the structured design graph
+   *      + cost estimate. This is what /edit later operates on.
+   *   3. In parallel, run /images/generate to obtain the photoreal render
+   *      pixels. The backend project pipeline does not yet emit a render;
+   *      combining client-side keeps Pass 1 backend-untouched.
+   *   4. Push the combined record to the gallery.
+   *
+   * If the user has no auth token we fall back to the legacy image-only
+   * call so something still renders — the edit loop just won't be wired.
+   */
   const generate = async () => {
     if (!prompt.trim() || isGenerating) return;
     setGenerateError(null);
@@ -105,35 +129,92 @@ export default function ImageWorkspaceMvp2() {
     setIsGenerating(true);
 
     try {
-      const res = await imagesApi.generate(token, {
-        prompt: prompt.trim(),
-        project_type: projectType,
-        theme,
-        ratio,
-      });
-
-      if (res.status === "provider_unconfigured") {
-        // Clean signal — backend reachable, but GEMINI_API_KEY isn't set.
-        // Surface as a notice rather than an error; everything else works.
-        setGenerateNotice(
-          "Image generation is wired but waiting on the GEMINI_API_KEY in .env. Pipeline verified end-to-end.",
-        );
-      } else if (res.image?.url) {
-        addGeneration({
-          id: crypto.randomUUID(),
+      // Anonymous fallback: project pipeline requires auth. Keep the
+      // demo experience working while edit support waits on login.
+      if (!token) {
+        const res = await imagesApi.generate(undefined, {
           prompt: prompt.trim(),
-          url: res.image.url,
-          timestamp: new Date().toISOString(),
+          project_type: projectType,
           theme,
           ratio,
-          quality: "standard",
-          drawingType: "3d-render",
-          camera: "front",
-          lighting: "daylight",
-          width: 1024,
-          height: 576,
         });
+        if (res.status === "provider_unconfigured") {
+          setGenerateNotice(
+            "Image generation is wired but waiting on the GEMINI_API_KEY in .env. Pipeline verified end-to-end.",
+          );
+        } else if (res.image?.url) {
+          addGeneration({
+            id: crypto.randomUUID(),
+            prompt: prompt.trim(),
+            url: res.image.url,
+            timestamp: new Date().toISOString(),
+            theme,
+            ratio,
+            quality: "standard",
+            drawingType: "3d-render",
+            camera: "front",
+            lighting: "daylight",
+            width: 1024,
+            height: 576,
+          });
+        }
+        return;
       }
+
+      // 1 — ensure active project
+      let projectId = activeProjectId;
+      if (!projectId) {
+        const project = await projectsApi.create(token, {
+          name: prompt.trim().slice(0, 60) || "Untitled design",
+          project_type: projectType,
+        });
+        projectId = project.id;
+        setActiveProject(projectId);
+      }
+
+      // 2 + 3 — fan out: graph generation + render
+      const [graphRes, imageRes] = await Promise.all([
+        designApi.generate(token, projectId, {
+          prompt: prompt.trim(),
+          room_type: "living_room",
+          style: theme,
+          ratio,
+          drawing_type: "3d-render",
+        }),
+        imagesApi.generate(token, {
+          prompt: prompt.trim(),
+          project_type: projectType,
+          theme,
+          ratio,
+        }),
+      ]);
+
+      if (imageRes.status === "provider_unconfigured") {
+        setGenerateNotice(
+          "Design graph generated. Render skipped — GEMINI_API_KEY not set in .env.",
+        );
+      }
+
+      // 4 — push combined record
+      addGeneration({
+        id: crypto.randomUUID(),
+        prompt: prompt.trim(),
+        url: imageRes.image?.url,
+        timestamp: new Date().toISOString(),
+        theme,
+        ratio,
+        quality: "standard",
+        drawingType: "3d-render",
+        camera: "front",
+        lighting: "daylight",
+        width: 1024,
+        height: 576,
+        projectId,
+        version: graphRes.version,
+        graphData: graphRes.graph_data,
+        estimate: graphRes.estimate,
+      });
+      setActiveProject(projectId, graphRes.version);
     } catch (e) {
       if (e instanceof ApiError) {
         setGenerateError(
@@ -570,7 +651,7 @@ function CanvasGallery({
   generations,
   dim,
 }: {
-  generations: { id: string; prompt: string; timestamp: string }[];
+  generations: import("@/lib/types").ImageGeneration[];
   dim: Dim;
 }) {
   return (
@@ -578,9 +659,20 @@ function CanvasGallery({
       {generations.map((g, i) => (
         <PaperCard key={g.id} className="p-5 anim-fade-in">
           <div className="flex items-baseline justify-between mb-3">
-            <SectionTag>
-              Render · {String(generations.length - i).padStart(2, "0")}
-            </SectionTag>
+            <div className="flex items-baseline gap-3">
+              <SectionTag>
+                Render · {String(generations.length - i).padStart(2, "0")}
+              </SectionTag>
+              {g.version != null ? (
+                <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-pencil tnum">
+                  v{String(g.version).padStart(2, "0")}
+                </span>
+              ) : (
+                <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute">
+                  unversioned
+                </span>
+              )}
+            </div>
             <Annotation>
               {new Date(g.timestamp).toLocaleString([], {
                 hour: "2-digit",
@@ -590,17 +682,36 @@ function CanvasGallery({
               })}
             </Annotation>
           </div>
-          <div className="aspect-video bg-paper-deep border border-hairline rounded-md flex items-center justify-center grid-paper">
-            <div className="text-center">
-              <SectionTag>Render placeholder</SectionTag>
-              <div className="mt-2 text-[12px] text-ink-soft">
-                {dim.toUpperCase()} · {g.prompt.slice(0, 60)}
-                {g.prompt.length > 60 ? "…" : ""}
-              </div>
-              <div className="mt-3 text-[11px] font-mono text-ink-mute">
-                Wire Nano Banana Pro at /api/v1/projects/&lt;id&gt;/generate
+          {g.url ? (
+            // Real render — rounded inset on white card. The image carries
+            // its own pixels; no grid-paper background underneath.
+            <div className="aspect-video bg-paper-deep border border-hairline rounded-md overflow-hidden">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={g.url}
+                alt={g.prompt}
+                className="w-full h-full object-cover"
+              />
+            </div>
+          ) : (
+            // Render absent — graph generated but Gemini key missing, or
+            // legacy entry that never had a render. Show a quiet card so
+            // the cost stream + spec rows still make sense.
+            <div className="aspect-video bg-paper-deep border border-hairline rounded-md flex items-center justify-center grid-paper">
+              <div className="text-center">
+                <SectionTag>Render unavailable</SectionTag>
+                <div className="mt-2 text-[12px] text-ink-soft">
+                  {dim.toUpperCase()} · {g.prompt.slice(0, 60)}
+                  {g.prompt.length > 60 ? "…" : ""}
+                </div>
+                <div className="mt-3 text-[11px] font-mono text-ink-mute">
+                  GEMINI_API_KEY not set — graph saved, image skipped.
+                </div>
               </div>
             </div>
+          )}
+          <div className="mt-3 text-[12px] text-ink-soft leading-relaxed">
+            {g.prompt}
           </div>
         </PaperCard>
       ))}
