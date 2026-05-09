@@ -41,11 +41,17 @@ export function Annotation({ children }: { children: ReactNode }) {
 export function PaperCard({
   children,
   className = "",
+  id,
 }: {
   children: ReactNode;
   className?: string;
+  id?: string;
 }) {
-  return <div className={`paper-card ${className}`}>{children}</div>;
+  return (
+    <div id={id} className={`paper-card ${className}`}>
+      {children}
+    </div>
+  );
 }
 
 // BrassRule — warm horizontal divider for major sectioning.

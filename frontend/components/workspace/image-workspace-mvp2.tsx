@@ -26,6 +26,7 @@ import {
   PaperCard,
   SectionTag,
 } from "@/components/primitives";
+import { ImportDialog } from "@/components/workspace/import-dialog";
 
 type Scope = "architecture" | "interior" | "furniture" | "product";
 type Dim = "2d" | "3d" | "4d";
@@ -89,6 +90,18 @@ export default function ImageWorkspaceMvp2() {
   const [isEditing, setIsEditing] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
 
+  // ── Pass 3: theme-switch state ──────────────────────────────────────
+  // A single in-flight flag is enough — the chip itself owns its
+  // open/closed state. Errors surface as a transient notice strip.
+  const [isSwitchingTheme, setIsSwitchingTheme] = useState(false);
+  const [themeSwitchError, setThemeSwitchError] = useState<string | null>(null);
+
+  // ── BRD 5B: import dialog open/close ────────────────────────────────
+  // The dialog owns its file-queue + parse state internally; the
+  // workspace just toggles visibility and receives the parsed brief
+  // text on apply, which gets appended to the prompt textarea.
+  const [importOpen, setImportOpen] = useState(false);
+
   // Bootstrap dynamic config (themes + project types) on mount.
   useEffect(() => {
     void loadAll();
@@ -125,6 +138,70 @@ export default function ImageWorkspaceMvp2() {
       | undefined;
     return data?.objects ?? [];
   }, [latestGeneration]);
+
+  /* submitThemeSwitch — Pass 3 of the edit loop.
+   *
+   * Reskins the active project to a new theme without re-prompting.
+   * preserve_layout=true keeps the floor plan + object positions and
+   * just swaps materials / finishes / palette. As with submitEdit we
+   * also re-run the render so the gallery shows the visual change
+   * alongside the bumped version.
+   */
+  const submitThemeSwitch = async (newStyle: string) => {
+    if (
+      !activeProjectId ||
+      !token ||
+      !latestGeneration ||
+      isSwitchingTheme ||
+      newStyle === theme
+    ) {
+      return;
+    }
+    setThemeSwitchError(null);
+    setIsSwitchingTheme(true);
+    try {
+      const [switchRes, imageRes] = await Promise.all([
+        designApi.switchTheme(token, activeProjectId, {
+          new_style: newStyle,
+          preserve_layout: true,
+        }),
+        imagesApi.generate(token, {
+          prompt: latestGeneration.prompt,
+          project_type: projectType,
+          theme: newStyle,
+          ratio,
+        }),
+      ]);
+      addGeneration({
+        id: crypto.randomUUID(),
+        prompt: latestGeneration.prompt,
+        url: imageRes.image?.url,
+        timestamp: new Date().toISOString(),
+        theme: newStyle as ArchTheme,
+        ratio,
+        quality: latestGeneration.quality,
+        drawingType: latestGeneration.drawingType,
+        camera: latestGeneration.camera,
+        lighting: latestGeneration.lighting,
+        width: latestGeneration.width,
+        height: latestGeneration.height,
+        projectId: activeProjectId,
+        version: switchRes.version,
+        graphData: switchRes.graph_data,
+        estimate: switchRes.estimate,
+      });
+      setActiveProject(activeProjectId, switchRes.version);
+      setTheme(newStyle as ArchTheme);
+    } catch (e) {
+      if (e instanceof ApiError) {
+        setThemeSwitchError(`Backend rejected the theme switch (${e.status}).`);
+      } else {
+        setThemeSwitchError("Couldn't reach the backend for the theme switch.");
+      }
+    } finally {
+      setIsSwitchingTheme(false);
+    }
+  };
 
   /* submitEdit — Pass 2 of the edit loop.
    *
@@ -321,7 +398,23 @@ export default function ImageWorkspaceMvp2() {
 
   return (
     <div className="h-screen w-full flex flex-col bg-paper">
-      <TopBar onToggleTerminal={toggleTerminal} terminalOpen={terminalOpen} />
+      <TopBar
+        onToggleTerminal={toggleTerminal}
+        terminalOpen={terminalOpen}
+        onOpenImport={() => setImportOpen(true)}
+      />
+      <ImportDialog
+        open={importOpen}
+        onClose={() => setImportOpen(false)}
+        onApply={(briefText) => {
+          // Append to the prompt textarea. If the architect already
+          // typed something we keep it as the lead and append the
+          // imported brief beneath; otherwise the brief becomes the
+          // prompt outright.
+          setPrompt(prompt.trim() ? `${prompt.trim()}\n\n${briefText}` : briefText);
+        }}
+        token={token}
+      />
 
       <div className="flex-1 flex min-h-0">
         <LeftControls
@@ -345,6 +438,13 @@ export default function ImageWorkspaceMvp2() {
             dim={dim}
             projectType={projectType}
             projectTypeLabel={activeTypeDef?.label ?? projectType}
+            theme={theme}
+            themesList={themesList}
+            onThemeSwitch={submitThemeSwitch}
+            isSwitchingTheme={isSwitchingTheme}
+            themeSwitchError={themeSwitchError}
+            generations={generations}
+            canSwitchTheme={!!token && !!activeProjectId && !!latestGeneration}
           />
           <div className="flex-1 overflow-auto draft-scroll grid-paper">
             {generations.length === 0 ? (
@@ -414,9 +514,11 @@ export default function ImageWorkspaceMvp2() {
 function TopBar({
   onToggleTerminal,
   terminalOpen,
+  onOpenImport,
 }: {
   onToggleTerminal: () => void;
   terminalOpen: boolean;
+  onOpenImport: () => void;
 }) {
   return (
     <header className="border-b border-hairline bg-paper">
@@ -430,6 +532,30 @@ function TopBar({
           </Link>
         </div>
         <nav className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={onOpenImport}
+            className="text-[12px] text-ink-soft hover:text-ink transition-colors px-2 py-1 inline-flex items-center gap-1"
+            aria-label="Import files"
+            title="Import briefs, plans, references"
+          >
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 13 13"
+              fill="none"
+              aria-hidden="true"
+            >
+              <path
+                d="M6.5 1.5v6.5M3.5 5l3 3 3-3M2 11h9"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+            </svg>
+            Import
+          </button>
           <button
             type="button"
             onClick={onToggleTerminal}
@@ -640,21 +766,207 @@ function CanvasHeader({
   dim,
   projectType,
   projectTypeLabel,
+  theme,
+  themesList,
+  onThemeSwitch,
+  isSwitchingTheme,
+  themeSwitchError,
+  generations,
+  canSwitchTheme,
 }: {
   scope: Scope;
   dim: Dim;
   projectType: ProjectType;
   projectTypeLabel: string;
+  theme: ArchTheme;
+  themesList: import("@/lib/api-client").ThemeDef[];
+  onThemeSwitch: (newStyle: string) => void;
+  isSwitchingTheme: boolean;
+  themeSwitchError: string | null;
+  generations: import("@/lib/types").ImageGeneration[];
+  canSwitchTheme: boolean;
 }) {
   void projectType; // explicitly unused — kept on signature for future telemetry
+  const projectGenerations = generations.filter((g) => g.version != null);
   return (
-    <div className="px-6 py-2.5 border-b border-hairline bg-paper/85 backdrop-blur-sm flex items-center justify-between">
-      <div className="flex items-center gap-3">
+    <div className="px-6 py-2 border-b border-hairline bg-paper/85 backdrop-blur-sm flex items-center justify-between gap-4">
+      <div className="flex items-center gap-3 min-w-0">
         <SectionTag>Canvas</SectionTag>
-        <span className="text-[12px] text-ink-mute">
+        <span className="text-[12px] text-ink-mute truncate">
           {projectTypeLabel} ·{" "}
           {SCOPES.find((s) => s.id === scope)?.label} · {dim.toUpperCase()}
         </span>
+        {themeSwitchError ? (
+          <span className="text-[11px] font-mono text-brick">
+            {themeSwitchError}
+          </span>
+        ) : null}
+      </div>
+      <div className="flex items-center gap-3 shrink-0">
+        <ThemeSwitchChip
+          theme={theme}
+          themesList={themesList}
+          onSwitch={onThemeSwitch}
+          isSwitching={isSwitchingTheme}
+          canSwitch={canSwitchTheme}
+        />
+        {projectGenerations.length > 0 ? (
+          <VersionTimeline generations={projectGenerations} />
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+/* ThemeSwitchChip — Pass 3.
+   A small "Theme: Modern ▾" trigger that opens a dropdown listing
+   every theme in the registry. Selecting one fires submitThemeSwitch
+   → /projects/{id}/theme with preserve_layout=true so the layout is
+   preserved and only materials/finishes/palette change. Disabled
+   until the architect has an active project to switch. */
+function ThemeSwitchChip({
+  theme,
+  themesList,
+  onSwitch,
+  isSwitching,
+  canSwitch,
+}: {
+  theme: ArchTheme;
+  themesList: import("@/lib/api-client").ThemeDef[];
+  onSwitch: (newStyle: string) => void;
+  isSwitching: boolean;
+  canSwitch: boolean;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement | null>(null);
+  // Close on outside click — keeps the chip from sticking open when
+  // the architect's attention moves to the canvas.
+  useEffect(() => {
+    if (!open) return;
+    const onDoc = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) {
+        setOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", onDoc);
+    return () => document.removeEventListener("mousedown", onDoc);
+  }, [open]);
+  const activeLabel =
+    themesList.find((t) => t.slug === theme)?.display_name ?? theme;
+  return (
+    <div className="relative" ref={ref}>
+      <button
+        type="button"
+        onClick={() => canSwitch && setOpen((v) => !v)}
+        disabled={!canSwitch || isSwitching}
+        className={`flex items-baseline gap-1.5 font-mono text-[11px] uppercase tracking-[0.1em] px-2 py-1 rounded-sm border transition-colors ${
+          canSwitch
+            ? "border-hairline hover:border-graphite text-ink"
+            : "border-hairline text-ink-mute cursor-not-allowed"
+        } ${isSwitching ? "opacity-60" : ""}`}
+        title={canSwitch ? "Switch theme · preserves layout" : "Generate a design first"}
+      >
+        <span className="text-ink-mute">Theme</span>
+        <span className="text-ink-deep font-medium">
+          {isSwitching ? "Switching…" : activeLabel}
+        </span>
+        <span className="text-ink-mute">▾</span>
+      </button>
+      {open ? (
+        <div className="absolute right-0 top-full mt-1 z-30 min-w-[14rem] bg-paper border border-graphite rounded-sm shadow-card overflow-hidden">
+          <div className="px-3 py-2 border-b border-hairline">
+            <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute">
+              Switch theme · layout preserved
+            </span>
+          </div>
+          <div className="max-h-60 overflow-y-auto draft-scroll">
+            {themesList.length === 0 ? (
+              <div className="px-3 py-2 text-[12px] text-ink-mute">
+                Loading themes…
+              </div>
+            ) : (
+              themesList.map((t) => {
+                const active = t.slug === theme;
+                return (
+                  <button
+                    key={t.slug}
+                    type="button"
+                    onClick={() => {
+                      onSwitch(t.slug);
+                      setOpen(false);
+                    }}
+                    className={`w-full text-left px-3 py-1.5 font-mono text-[12px] flex items-baseline justify-between transition-colors ${
+                      active
+                        ? "bg-pencil-bg/60 text-ink-deep"
+                        : "hover:bg-paper-soft text-ink"
+                    }`}
+                  >
+                    <span>{t.display_name}</span>
+                    {active ? (
+                      <span className="text-pencil text-[10px]">●</span>
+                    ) : null}
+                  </button>
+                );
+              })
+            )}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+/* VersionTimeline — Pass 3.
+   Horizontal strip of v01 / v02 / v03 chips for the active project's
+   versions. Clicking a chip scrolls the matching gallery card into
+   view; the latest version is rendered in pencil-red as a reminder
+   that edits always operate on it (the backend always loads
+   get_latest_version, so older versions are read-only history). */
+function VersionTimeline({
+  generations,
+}: {
+  generations: import("@/lib/types").ImageGeneration[];
+}) {
+  // Generations are stored newest-first; the timeline reads
+  // oldest-first so the eye scans left-to-right as a project grows.
+  const ordered = useMemo(
+    () => [...generations].reverse(),
+    [generations],
+  );
+  const latestVersion = generations[0]?.version ?? null;
+  return (
+    <div className="flex items-baseline gap-1.5 font-mono text-[11px] tnum">
+      <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute">
+        ver
+      </span>
+      <div className="flex items-baseline gap-0.5 max-w-[20rem] overflow-x-auto draft-scroll">
+        {ordered.map((g) => {
+          const isLatest = g.version === latestVersion;
+          return (
+            <button
+              key={g.id}
+              type="button"
+              onClick={() => {
+                const el = document.getElementById(`gen-${g.id}`);
+                if (!el) return;
+                el.scrollIntoView({ behavior: "smooth", block: "start" });
+                // Quick pencil-bg flash so the user sees what loaded.
+                el.classList.add("ring-2", "ring-pencil-bg");
+                setTimeout(() => {
+                  el.classList.remove("ring-2", "ring-pencil-bg");
+                }, 1400);
+              }}
+              className={`px-1.5 py-0.5 rounded-sm transition-colors ${
+                isLatest
+                  ? "text-pencil font-medium"
+                  : "text-ink-soft hover:text-ink hover:bg-paper-soft"
+              }`}
+              title={`v${String(g.version).padStart(2, "0")} · ${new Date(g.timestamp).toLocaleString()}`}
+            >
+              v{String(g.version).padStart(2, "0")}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
@@ -755,7 +1067,11 @@ function CanvasGallery({
   return (
     <div className="px-6 md:px-10 py-8 max-w-5xl mx-auto space-y-5">
       {generations.map((g, i) => (
-        <PaperCard key={g.id} className="p-5 anim-fade-in">
+        <PaperCard
+          key={g.id}
+          id={`gen-${g.id}`}
+          className="p-5 anim-fade-in scroll-mt-4 transition-shadow"
+        >
           <div className="flex items-baseline justify-between mb-3">
             <div className="flex items-baseline gap-3">
               <SectionTag>

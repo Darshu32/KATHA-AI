@@ -294,6 +294,74 @@ export const chat = {
     ),
 };
 
+// ── Imports (BRD Layer 5B — file upload + parse) ────────────────────────
+//
+// Two-stage flow on the backend:
+//   POST /imports/parse    — deterministic parser returns one payload
+//                            per file (text, dimensions, geometry…).
+//   POST /imports/advisor  — optional LLM stage that turns parsed
+//                            payloads into a project-merge manifest.
+//
+// `parse` is multipart, so it bypasses the JSON `request<T>` helper
+// and assembles a FormData body manually.
+
+export interface ImportedFilePayload {
+  format: string;
+  filename: string;
+  size_bytes: number;
+  summary: string;
+  extracted: Record<string, unknown>;
+  warnings: string[];
+}
+
+export interface ImportParseResponse {
+  count: number;
+  imports: ImportedFilePayload[];
+}
+
+export const imports = {
+  /** List the file extensions the deterministic parsers support. */
+  formats: () =>
+    request<{ extensions: string[] }>("/imports/formats"),
+
+  /** Upload one or more files; backend runs each through its
+   *  importer and returns the structured payload. Multipart-only;
+   *  bypasses the JSON request helper. */
+  parse: async (
+    token: string | undefined,
+    files: File[],
+  ): Promise<ImportParseResponse> => {
+    const fd = new FormData();
+    for (const f of files) fd.append("files", f, f.name);
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(`${API_BASE}/imports/parse`, {
+      method: "POST",
+      headers,
+      body: fd,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new ApiError(res.status, body);
+    }
+    return res.json() as Promise<ImportParseResponse>;
+  },
+
+  /** Run the LLM advisor over already-parsed payloads to produce a
+   *  project-merge manifest. Currently unused from the UI; kept for
+   *  the eventual "Apply to current project" flow. */
+  advisor: (
+    token: string | undefined,
+    body: { imports: ImportedFilePayload[] },
+  ) =>
+    request<{ status: string; manifest: unknown }>(
+      "/imports/advisor",
+      "POST",
+      body,
+      token,
+    ),
+};
+
 // ── Projects (CRUD) ──────────────────────────────────────────────────────
 //
 // A project is the unit that owns a design graph + its version history.
@@ -551,5 +619,5 @@ export const notes = {
 
 // ── Default export ─────────────────────────────────────────────────────────
 
-const api = { auth, architecture, chat, projects, design, notes };
+const api = { auth, architecture, chat, projects, design, imports, notes };
 export default api;
