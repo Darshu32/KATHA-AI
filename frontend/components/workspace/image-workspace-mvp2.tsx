@@ -14,6 +14,7 @@ import {
   ApiError,
   design as designApi,
   projects as projectsApi,
+  resolveAssetUrl,
 } from "@/lib/api-client";
 import type {
   ArchTheme,
@@ -1037,11 +1038,13 @@ function CanvasGallery({
           </div>
           {g.url ? (
             // Real render — rounded inset on white card. The image carries
-            // its own pixels; no grid-paper background underneath.
+            // its own pixels; no grid-paper background underneath. URL
+            // resolver normalises legacy data:/http: URLs and prefixes
+            // backend-relative paths with the API origin.
             <div className="aspect-video bg-paper-deep border border-hairline rounded-md overflow-hidden">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={g.url}
+                src={resolveAssetUrl(g.url)}
                 alt={g.prompt}
                 className="w-full h-full object-cover"
               />

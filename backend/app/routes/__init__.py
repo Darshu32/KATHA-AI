@@ -10,6 +10,7 @@ from app.routes.admin import (
 from app.routes.agent import router as agent_router
 from app.routes.suggestions import router as suggestions_router
 from app.routes.architecture import router as architecture_router
+from app.routes.assets import router as assets_router
 from app.routes.auth import router as auth_router
 from app.routes.brief import router as brief_router
 from app.routes.chat import router as chat_router
@@ -22,6 +23,7 @@ from app.routes.generation import router as generation_router
 from app.routes.images import router as images_router
 from app.routes.imports import router as imports_router
 from app.routes.knowledge import router as knowledge_router
+from app.routes.notes import router as notes_router
 from app.routes.parametric import router as parametric_router
 from app.routes.project_types import router as project_types_router
 from app.routes.prompts import router as prompts_router
@@ -33,6 +35,7 @@ from app.routes.working_drawings import router as working_drawings_router
 
 all_routers = [
     architecture_router,
+    assets_router,
     auth_router,
     brief_router,
     chat_router,
@@ -47,6 +50,7 @@ all_routers = [
     estimates_router,
     imports_router,
     knowledge_router,
+    notes_router,
     parametric_router,
     prompts_router,
     specs_router,

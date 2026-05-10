@@ -63,3 +63,10 @@ generated/
 *.sqlite
 *.sqlite3
 *.db
+
+# ── Object storage (renders + future asset blobs) ───────────────────────────
+# `backend/app/services/storage.py` writes generated PNGs here in
+# prototype mode. Anchored to repo root so the source path
+# ``backend/app/storage/`` (if anything else lands there) isn't
+# matched accidentally.
+/backend/storage/

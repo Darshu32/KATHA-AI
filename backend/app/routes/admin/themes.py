@@ -17,7 +17,7 @@ from __future__ import annotations
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -41,6 +41,30 @@ class _RulePackUpdate(BaseModel):
     description: Optional[str] = Field(default=None, max_length=2000)
     aliases: Optional[list[str]] = Field(default=None)
     reason: Optional[str] = Field(default=None, max_length=500)
+
+    @field_validator("rule_pack")
+    @classmethod
+    def _require_visual_hint(cls, v: dict[str, Any]) -> dict[str, Any]:
+        """Block theme updates that don't supply a visual hint.
+
+        ``rule_pack.visual_hint`` is the English description the image
+        generator gets when this theme is selected. Without it the
+        prompt falls back to the display name and the render comes out
+        generic. Requiring the field on write keeps the dropdown and
+        the image path in sync — admins can't ship a theme that looks
+        like nothing.
+        """
+        hint = v.get("visual_hint")
+        if not isinstance(hint, str) or not hint.strip():
+            raise ValueError(
+                "rule_pack.visual_hint is required — supply a short "
+                "English description of the theme's visual signature "
+                "(e.g. 'clean lines, neutral palette, natural "
+                "materials'). This text is fed to the image-generation "
+                "prompt; without it the render falls back to a generic "
+                "interpretation of the display name."
+            )
+        return v
 
 
 class _StatusUpdate(BaseModel):

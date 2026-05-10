@@ -1,5 +1,6 @@
 """Generation Pipeline — orchestrates the full flow from prompt to design graph + assets."""
 
+import base64
 import logging
 
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -16,7 +17,8 @@ from app.services.design_graph_service import (
 )
 from app.services.estimation_engine import compute_estimate
 from app.services.graph_describer import describe_graph_for_render
-from app.services.image_service import generate_image
+from app.services.image_service import generate_image, resolve_theme_visual_hint
+from app.services.storage import key_to_url, make_key, save_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -31,17 +33,31 @@ async def _attach_render(
     graph_data: dict | None = None,
     theme_label: str | None = None,
 ) -> str | None:
-    """Best-effort: render an image for the just-saved version and persist
-    it as a GeneratedAsset of type 'render_2d'. Returns the storage_key
-    (data URI) on success or None when the provider is unconfigured /
-    failed. Never raises — graph is already saved at this point.
+    """Best-effort: render an image for the just-saved version, persist
+    the bytes to object storage, and write a GeneratedAsset row pointing
+    at the storage key. Returns a clean URL the frontend can GET, or
+    None when the provider is unconfigured / failed. Never raises —
+    graph is already saved at this point.
 
-    When ``graph_data`` is supplied, we append a structured description
-    of the graph (objects, materials, dimensions, positions) to the
-    prompt so the image model is conditioned on the actual geometry,
-    not just the user's brief. This is the structured-text path of
-    graph-driven rendering — the load-bearing step that lets edits
-    like "move the table 30cm right" surface in the next render.
+    Storage flow
+    ------------
+    Gemini hands back a base64 ``data:`` URI. Embedding that in the DB
+    (and shipping it on every read) was the prior fragility — single
+    renders pushed multi-hundred KB through every request and ate
+    localStorage quota on the client. Now we:
+
+      1. Decode the data URI to raw bytes.
+      2. Write them to ``storage`` under a stable key
+         (``renders/{graph_version_id}/{uuid}.png``).
+      3. Persist only the *key* on the GeneratedAsset row.
+      4. Return a short ``/api/v1/assets/{key}`` URL the browser can
+         cache like any normal image.
+
+    When ``graph_data`` is supplied, we also append a structured
+    description of the graph (objects, materials, dimensions,
+    positions) to the prompt so the image model is conditioned on the
+    actual geometry — the load-bearing step that lets edits like
+    "move the table 30cm right" surface in the next render.
     """
     if not prompt or not prompt.strip():
         return None
@@ -50,12 +66,17 @@ async def _attach_render(
         graph_desc = describe_graph_for_render(graph_data)
         if graph_desc:
             enriched_prompt = f"{enriched_prompt}\n\n{graph_desc}"
+    # Resolve the visual hint from DB first — admin-defined themes
+    # carry their hint in rule_pack.visual_hint, with the legacy
+    # Python dict as a fallback for the 10 stock themes.
+    resolved_hint = await resolve_theme_visual_hint(db, theme)
     try:
         result = await generate_image(
             enriched_prompt,
             project_type=project_type,
             theme=theme,
             theme_label=theme_label,
+            theme_visual_hint=resolved_hint,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Render generation failed for version %s: %s",
@@ -63,24 +84,89 @@ async def _attach_render(
         return None
     if not result or not result.get("url"):
         return None
-    storage_key = result["url"]
+
+    raw_url = result["url"]
+    image_bytes, mime_from_url = _decode_data_url(raw_url)
+    mime_type = mime_from_url or str(result.get("mime_type") or "image/png")
+    if image_bytes is None:
+        # Provider returned something other than a base64 data URI
+        # (e.g. an HTTP URL from a future CDN-backed provider). Persist
+        # whatever it is verbatim as the key and skip the storage hop.
+        logger.info(
+            "Render returned non-data URL — passing through as key (version=%s)",
+            graph_version_id,
+        )
+        storage_key = raw_url
+        final_url = raw_url
+    else:
+        ext = _ext_for_mime(mime_type)
+        storage_key = make_key("renders", graph_version_id, ext=ext)
+        try:
+            await save_bytes(storage_key, image_bytes)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "Storage write failed for render version=%s: %s",
+                graph_version_id, exc,
+            )
+            return None
+        final_url = key_to_url(storage_key)
+
     try:
         await save_render_asset(
             db,
             graph_version_id=graph_version_id,
             storage_key=storage_key,
-            mime_type=str(result.get("mime_type") or "image/png"),
+            mime_type=mime_type,
             metadata={
                 "source": result.get("source", "gemini"),
                 "title": result.get("title", ""),
+                "bytes": len(image_bytes) if image_bytes is not None else None,
             },
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Persisting render asset failed for version %s: %s",
                        graph_version_id, exc)
-        # Asset row didn't save, but the URL itself is still useful to
-        # the caller — return it so the response can carry the render.
-    return storage_key
+        # Asset row didn't save, but the bytes are on disk and the URL
+        # still resolves — return it so the response carries the render.
+    return final_url
+
+
+def _decode_data_url(value: str) -> tuple[bytes | None, str | None]:
+    """Decode a base64 ``data:`` URI into bytes + the declared MIME type.
+
+    Returns ``(None, None)`` when ``value`` isn't a base64 data URL —
+    callers should treat that as "already an HTTP URL, pass through".
+    """
+    if not isinstance(value, str) or not value.startswith("data:"):
+        return None, None
+    header, _, payload = value.partition(",")
+    if not payload:
+        return None, None
+    # header looks like "data:image/png;base64"
+    mime: str | None = None
+    is_base64 = False
+    for part in header[5:].split(";"):
+        part = part.strip()
+        if part == "base64":
+            is_base64 = True
+        elif "/" in part and not mime:
+            mime = part
+    if not is_base64:
+        return None, None
+    try:
+        return base64.b64decode(payload), mime
+    except Exception:  # noqa: BLE001
+        return None, mime
+
+
+def _ext_for_mime(mime: str) -> str:
+    """Map a MIME type to a file extension we'd use in storage keys."""
+    return {
+        "image/png": "png",
+        "image/jpeg": "jpg",
+        "image/webp": "webp",
+        "image/gif": "gif",
+    }.get((mime or "").lower(), "png")
 
 
 async def run_initial_generation(

@@ -4,6 +4,33 @@
 
 const API_BASE = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000/api/v1";
 
+/**
+ * Resolve a backend-issued asset URL against the API host.
+ *
+ * The render-storage path on the backend (`POST /projects/{id}/generate`
+ * etc.) returns `image_url` as a relative path like
+ * `/api/v1/assets/renders/abc/v01.png`. If we set that directly as an
+ * `<img src>` the browser resolves it against the Next dev server
+ * (`localhost:3001`) and 404s — assets live on the API host
+ * (`localhost:8000` in dev). This helper normalises:
+ *
+ *   - `data:` and `http(s)://` URLs pass through (legacy renders,
+ *     future CDN URLs).
+ *   - `/api/v1/...` paths get prefixed with the API origin.
+ *   - `null`/`undefined` returns `undefined`.
+ */
+export function resolveAssetUrl(url: string | null | undefined): string | undefined {
+  if (!url) return undefined;
+  if (/^(data:|https?:|blob:)/i.test(url)) return url;
+  if (url.startsWith("/")) {
+    // Strip the /api/v1 suffix from API_BASE to get the bare origin,
+    // then re-attach whatever absolute path the backend returned.
+    const origin = API_BASE.replace(/\/api\/v\d+\/?$/, "");
+    return `${origin}${url}`;
+  }
+  return url;
+}
+
 type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 export class ApiError extends Error {

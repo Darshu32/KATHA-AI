@@ -67,12 +67,55 @@ _THEME_VISUAL_HINTS: dict[str, str] = {
 }
 
 
+async def resolve_theme_visual_hint(db, theme_slug: str | None) -> str | None:
+    """Resolve a theme's visual hint with DB-first precedence.
+
+    Order:
+      1. Published theme row's ``rule_pack.visual_hint`` (the source of
+         truth — admin can edit this without touching code).
+      2. The legacy ``_THEME_VISUAL_HINTS`` Python dict (covers the 10
+         stock themes even when the data migration hasn't run yet or
+         the DB is unreachable).
+      3. ``None`` — caller falls back to ``theme_label`` or no clause.
+
+    Async because step 1 hits the DB. ``db`` may be a real
+    ``AsyncSession`` (production / pipeline path) or ``None`` (callers
+    without a DB context — they skip step 1 and rely on the legacy
+    dict).
+    """
+    key = (theme_slug or "").lower().strip()
+    if not key:
+        return None
+
+    if db is not None:
+        try:
+            from app.repositories.themes import ThemeRepository
+
+            repo = ThemeRepository(db)
+            row = await repo.get_active_by_slug(key)
+            if row is not None:
+                rule_pack = row.get("rule_pack") or {}
+                hint = rule_pack.get("visual_hint")
+                if isinstance(hint, str) and hint.strip():
+                    return hint.strip()
+        except Exception as exc:  # noqa: BLE001
+            # DB lookup is best-effort. Network/transient errors fall
+            # through to the legacy dict so renders still work.
+            logger.warning("Theme hint DB lookup failed for %s: %s", key, exc)
+
+    legacy = _THEME_VISUAL_HINTS.get(key)
+    if legacy and legacy.strip():
+        return legacy.strip()
+    return None
+
+
 async def generate_image(
     prompt: str,
     *,
     project_type: str | None = None,
     theme: str | None = None,
     theme_label: str | None = None,
+    theme_visual_hint: str | None = None,
 ) -> dict[str, Any] | None:
     """Generate an architecture image using Google Nano Banana (Gemini Image API).
 
@@ -83,10 +126,11 @@ async def generate_image(
     - ``Project type: <visual hint>`` — e.g. "hospitality interior — hotel
       / restaurant aesthetic..."  Resolved against the canonical
       definitions in :mod:`app.services.project_types`.
-    - ``Style: <theme hint>`` — e.g. "modern style — clean lines, neutral
-      palette..."  Resolved against the in-process map below; falls
-      back to ``theme_label`` when the slug is unknown (e.g. an admin-
-      defined theme).
+    - ``Style: <theme hint>`` — when the caller has already resolved a
+      hint from DB (preferred path; pass via ``theme_visual_hint``),
+      we use it directly. Otherwise we fall back to the legacy
+      in-process dict, then to ``theme_label`` for admin-defined
+      themes the dict doesn't know about.
 
     Returns {"url": str, "title": str, ...} or None when API key absent.
     """
@@ -103,12 +147,19 @@ async def generate_image(
     type_hint = _project_hint(project_type)
     type_clause = f"Project type: {type_hint}. " if type_hint else ""
 
-    theme_key = (theme or "").lower().strip()
-    theme_hint = _THEME_VISUAL_HINTS.get(theme_key, "")
-    if not theme_hint and theme_label:
-        # Admin-defined theme not in the static map — degrade gracefully
-        # to the display name so the prompt still carries the signal.
-        theme_hint = f"{theme_label} style"
+    # Resolved-hint path (preferred): caller already did the DB lookup
+    # via ``resolve_theme_visual_hint``. Avoids re-querying for callers
+    # that don't have a DB session.
+    if theme_visual_hint and theme_visual_hint.strip():
+        theme_hint: str = theme_visual_hint.strip()
+    else:
+        theme_key = (theme or "").lower().strip()
+        theme_hint = _THEME_VISUAL_HINTS.get(theme_key, "")
+        if not theme_hint and theme_label:
+            # Admin-defined theme not in the static map — degrade
+            # gracefully to the display name so the prompt still
+            # carries the signal.
+            theme_hint = f"{theme_label} style"
     theme_clause = f"Style: {theme_hint}. " if theme_hint else ""
 
     arch_prompt = (
