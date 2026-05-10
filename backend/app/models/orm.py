@@ -145,6 +145,12 @@ class DesignGraphVersion(Base, UUIDMixin, TimestampMixin):
     # The full design graph snapshot (JSONB)
     graph_data: Mapped[dict] = mapped_column(JSONB, default=dict)
 
+    # The originating user prompt — captured on initial generation,
+    # preserved across edits + theme switches so the pipeline can
+    # re-render any version with full text context. Nullable for
+    # back-compat with versions written before migration 0028.
+    prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
+
     project: Mapped["Project"] = relationship(back_populates="versions")
     estimates: Mapped[list["EstimateSnapshot"]] = relationship(
         back_populates="graph_version"
@@ -968,3 +974,107 @@ class HapticFeedbackLoop(Base, UUIDMixin, TimestampMixin):
     trigger: Mapped[dict] = mapped_column(JSONB, default=dict)
     response: Mapped[dict] = mapped_column(JSONB, default=dict)
     formula: Mapped[str] = mapped_column(Text, default="")
+
+
+# ── Notes (auto-generated study notebook from Deep Mode) ─────────────────────
+
+
+class NoteSection(Base, TimestampMixin):
+    """One auto-generated note section, scoped to a chat conversation.
+
+    Per the v1 product decision: every chat conversation has its own
+    notebook. A notebook is *implicit* — it is the set of all
+    ``NoteSection`` rows where ``conversation_id`` matches. We don't
+    materialise a ``Notebook`` parent row because that would buy nothing
+    we couldn't get from the section query.
+
+    Why ``conversation_id`` is a plain string, not a foreign key
+    ------------------------------------------------------------
+    Today the frontend mints conversation IDs client-side
+    (``crypto.randomUUID()``) and never persists them server-side. A
+    strict FK to ``chat_sessions`` would therefore reject every insert.
+    A future "sync conversations" task will backfill those rows; until
+    then we trade strict referential integrity for forward-compat with
+    the existing client-only chat history.
+
+    Why the primary key is supplied by the client
+    ---------------------------------------------
+    The frontend already generates section IDs locally so the UI can
+    render new sections optimistically before the server round-trips.
+    Accepting the same ID server-side keeps the offline-first /
+    debounced-sync model honest: the client's ID *is* the canonical
+    ID; we upsert on it.
+
+    Blocks live in JSONB
+    --------------------
+    A note's blocks are small (≪1 MB), edited together as a group,
+    and never queried by inner field. A separate ``note_blocks`` table
+    would add joins and a migration burden for no upside at this scale.
+    """
+
+    __tablename__ = "note_sections"
+    __table_args__ = (
+        Index(
+            "ix_note_sections_owner_conversation",
+            "owner_id",
+            "conversation_id",
+        ),
+    )
+
+    # Client-supplied UUID (hex or hyphenated). String(64) is generous
+    # enough for either format without needing normalisation.
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+
+    owner_id: Mapped[str] = mapped_column(
+        String(32), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+
+    # Frontend-generated conversation UUID. Intentionally NOT a FK —
+    # see class docstring.
+    conversation_id: Mapped[str] = mapped_column(String(64), index=True)
+
+    # The chat message this note was auto-generated from. Nullable
+    # because user-initiated sections (future feature) won't have one.
+    source_message_id: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )
+
+    title: Mapped[str] = mapped_column(String(300), default="Notes")
+
+    # NoteBlock[] — see frontend/lib/types.ts for the shape.
+    blocks: Mapped[list] = mapped_column(JSONB, default=list)
+
+    # User-applied tags (Phase 3). JSONB string-array. We considered a
+    # join table but rejected it: tag membership for one section is
+    # always loaded with the section, never queried independently, and
+    # JSONB lets us reuse the existing ``upsert`` path without a
+    # cascading INSERT/DELETE dance per save. A future "search by tag
+    # across all conversations" feature could revisit this if the
+    # query patterns change.
+    tags: Mapped[list] = mapped_column(
+        JSONB, default=list, server_default="[]", nullable=False,
+    )
+
+    # Phase 4 — auto-generated image associated with this section.
+    # Currently a base64 data URI returned directly from the image
+    # provider (Gemini); the field is named ``image_url`` rather than
+    # ``image_data_uri`` so a future migration to R2/CDN-hosted URLs
+    # is a value-shape swap, not a schema change.
+    #
+    # Why store the full data URI inline (not a storage_key)
+    # ------------------------------------------------------
+    # The image provider returns ephemeral data URIs, not persistent
+    # storage refs. Persisting the bytes ourselves would mean a new
+    # upload pipeline + a delete-when-section-deleted cascade. At our
+    # scale (low thousands of sections, ~200KB images) JSONB-adjacent
+    # text columns handle this comfortably; we revisit if median image
+    # sizes grow or notebooks balloon past ~10MB.
+    image_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Original creation time as reported by the client. We keep this
+    # alongside ``created_at`` (DB-side) so the UI can preserve the
+    # exact timestamp the user saw at creation, even if the row was
+    # synced to the server seconds or hours later.
+    client_created_at: Mapped[str | None] = mapped_column(
+        String(64), nullable=True
+    )

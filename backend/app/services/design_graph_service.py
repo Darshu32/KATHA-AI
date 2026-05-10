@@ -5,7 +5,7 @@ import logging
 from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.orm import DesignGraphVersion, Project
+from app.models.orm import DesignGraphVersion, GeneratedAsset, Project
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +43,15 @@ async def save_graph_version(
     change_summary: str = "",
     changed_object_ids: list[str] | None = None,
     parent_version_id: str | None = None,
+    prompt: str | None = None,
 ) -> DesignGraphVersion:
-    """Persist a new design graph version and bump the project counter."""
+    """Persist a new design graph version and bump the project counter.
+
+    The optional ``prompt`` is the originating user text — captured on
+    initial generation and propagated through edits and theme switches
+    so any version can be re-rendered with full context. Pre-migration-
+    0028 rows have NULL prompts; the pipeline tolerates that.
+    """
 
     # Determine version number
     result = await db.execute(
@@ -63,6 +70,7 @@ async def save_graph_version(
         change_summary=change_summary,
         changed_object_ids=changed_object_ids or [],
         graph_data=graph_data,
+        prompt=prompt,
     )
     db.add(version)
 
@@ -77,6 +85,35 @@ async def save_graph_version(
     await db.flush()
     logger.info("Saved version %d for project %s", new_version, project_id)
     return version
+
+
+async def save_render_asset(
+    db: AsyncSession,
+    *,
+    graph_version_id: str,
+    storage_key: str,
+    mime_type: str = "image/png",
+    metadata: dict | None = None,
+) -> GeneratedAsset:
+    """Persist a 2D render as a GeneratedAsset linked to a graph version.
+
+    The ``storage_key`` is whatever the image provider returned — today
+    a base64 data URI from Gemini. Field name is generic so a later
+    migration to a CDN/S3 reference is a value-shape change, not a
+    schema change. Always best-effort: callers should treat this as
+    advisory and never fail the surrounding op if asset persistence
+    raises (the graph is already saved at that point).
+    """
+    asset = GeneratedAsset(
+        graph_version_id=graph_version_id,
+        asset_type="render_2d",
+        storage_key=storage_key,
+        mime_type=mime_type,
+        metadata_=metadata or {},
+    )
+    db.add(asset)
+    await db.flush()
+    return asset
 
 
 async def get_latest_version(

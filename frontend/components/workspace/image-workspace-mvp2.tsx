@@ -13,7 +13,6 @@ import { useAuthStore, useConfigStore, useImageGenStore } from "@/lib/store";
 import {
   ApiError,
   design as designApi,
-  images as imagesApi,
   projects as projectsApi,
 } from "@/lib/api-client";
 import type {
@@ -150,7 +149,6 @@ export default function ImageWorkspaceMvp2() {
   const submitThemeSwitch = async (newStyle: string) => {
     if (
       !activeProjectId ||
-      !token ||
       !latestGeneration ||
       isSwitchingTheme ||
       newStyle === theme
@@ -160,22 +158,14 @@ export default function ImageWorkspaceMvp2() {
     setThemeSwitchError(null);
     setIsSwitchingTheme(true);
     try {
-      const [switchRes, imageRes] = await Promise.all([
-        designApi.switchTheme(token, activeProjectId, {
-          new_style: newStyle,
-          preserve_layout: true,
-        }),
-        imagesApi.generate(token, {
-          prompt: latestGeneration.prompt,
-          project_type: projectType,
-          theme: newStyle,
-          ratio,
-        }),
-      ]);
+      const switchRes = await designApi.switchTheme(token, activeProjectId, {
+        new_style: newStyle,
+        preserve_layout: true,
+      });
       addGeneration({
         id: crypto.randomUUID(),
         prompt: latestGeneration.prompt,
-        url: imageRes.image?.url,
+        url: switchRes.image_url ?? undefined,
         timestamp: new Date().toISOString(),
         theme: newStyle as ArchTheme,
         ratio,
@@ -217,7 +207,6 @@ export default function ImageWorkspaceMvp2() {
       !editPrompt.trim() ||
       editPrompt.trim().length < 5 ||
       !activeProjectId ||
-      !token ||
       !latestGeneration ||
       isEditing
     ) {
@@ -226,23 +215,15 @@ export default function ImageWorkspaceMvp2() {
     setEditError(null);
     setIsEditing(true);
     try {
-      const [editRes, imageRes] = await Promise.all([
-        designApi.editObject(token, activeProjectId, {
-          object_id: selectedObjectId,
-          prompt: editPrompt.trim(),
-        }),
-        imagesApi.generate(token, {
-          prompt: `${latestGeneration.prompt} — ${editPrompt.trim()}`,
-          project_type: projectType,
-          theme,
-          ratio,
-        }),
-      ]);
+      const editRes = await designApi.editObject(token, activeProjectId, {
+        object_id: selectedObjectId,
+        prompt: editPrompt.trim(),
+      });
 
       addGeneration({
         id: crypto.randomUUID(),
         prompt: `${latestGeneration.prompt} — ${editPrompt.trim()}`,
-        url: imageRes.image?.url,
+        url: editRes.image_url ?? undefined,
         timestamp: new Date().toISOString(),
         theme,
         ratio,
@@ -271,22 +252,20 @@ export default function ImageWorkspaceMvp2() {
     }
   };
 
-  /* generate() — Pass 1 of the edit loop.
+  /* generate() — runs the full project pipeline.
    *
-   * Old flow: one call to /images/generate returned a flat render with
-   * no graph, no objects, no project. Could not be edited.
+   * Prototype mode: the backend middleware attributes anonymous
+   * requests to a shared dev user, so we always go through the
+   * project pipeline (no auth-gated branching). When auth is
+   * reintroduced, the only change here is the optional token thread
+   * regaining a real value.
    *
-   * New flow:
-   *   1. Ensure an active project exists (create one on first generation).
-   *   2. Run /projects/{id}/generate — yields the structured design graph
-   *      + cost estimate. This is what /edit later operates on.
-   *   3. In parallel, run /images/generate to obtain the photoreal render
-   *      pixels. The backend project pipeline does not yet emit a render;
-   *      combining client-side keeps Pass 1 backend-untouched.
-   *   4. Push the combined record to the gallery.
-   *
-   * If the user has no auth token we fall back to the legacy image-only
-   * call so something still renders — the edit loop just won't be wired.
+   * Flow:
+   *   1. Ensure an active project exists (create one on first run).
+   *   2. POST /projects/{id}/generate — yields the design graph,
+   *      cost estimate, and the photoreal render in one round trip
+   *      (render baked in by the backend pipeline as of phase 0).
+   *   3. Push the result to the gallery.
    */
   const generate = async () => {
     if (!prompt.trim() || isGenerating) return;
@@ -295,38 +274,6 @@ export default function ImageWorkspaceMvp2() {
     setIsGenerating(true);
 
     try {
-      // Anonymous fallback: project pipeline requires auth. Keep the
-      // demo experience working while edit support waits on login.
-      if (!token) {
-        const res = await imagesApi.generate(undefined, {
-          prompt: prompt.trim(),
-          project_type: projectType,
-          theme,
-          ratio,
-        });
-        if (res.status === "provider_unconfigured") {
-          setGenerateNotice(
-            "Image generation is wired but waiting on the GEMINI_API_KEY in .env. Pipeline verified end-to-end.",
-          );
-        } else if (res.image?.url) {
-          addGeneration({
-            id: crypto.randomUUID(),
-            prompt: prompt.trim(),
-            url: res.image.url,
-            timestamp: new Date().toISOString(),
-            theme,
-            ratio,
-            quality: "standard",
-            drawingType: "3d-render",
-            camera: "front",
-            lighting: "daylight",
-            width: 1024,
-            height: 576,
-          });
-        }
-        return;
-      }
-
       // 1 — ensure active project
       let projectId = activeProjectId;
       if (!projectId) {
@@ -338,34 +285,26 @@ export default function ImageWorkspaceMvp2() {
         setActiveProject(projectId);
       }
 
-      // 2 + 3 — fan out: graph generation + render
-      const [graphRes, imageRes] = await Promise.all([
-        designApi.generate(token, projectId, {
-          prompt: prompt.trim(),
-          room_type: "living_room",
-          style: theme,
-          ratio,
-          drawing_type: "3d-render",
-        }),
-        imagesApi.generate(token, {
-          prompt: prompt.trim(),
-          project_type: projectType,
-          theme,
-          ratio,
-        }),
-      ]);
+      // 2 — single backend call: graph + render baked together
+      const graphRes = await designApi.generate(token, projectId, {
+        prompt: prompt.trim(),
+        room_type: "living_room",
+        style: theme,
+        ratio,
+        drawing_type: "3d-render",
+      });
 
-      if (imageRes.status === "provider_unconfigured") {
+      if (!graphRes.image_url) {
         setGenerateNotice(
-          "Design graph generated. Render skipped — GEMINI_API_KEY not set in .env.",
+          "Design graph generated. Render skipped — GEMINI_API_KEY not set or provider failed.",
         );
       }
 
-      // 4 — push combined record
+      // 3 — push combined record (image_url comes from the same response)
       addGeneration({
         id: crypto.randomUUID(),
         prompt: prompt.trim(),
-        url: imageRes.image?.url,
+        url: graphRes.image_url ?? undefined,
         timestamp: new Date().toISOString(),
         theme,
         ratio,
@@ -444,7 +383,7 @@ export default function ImageWorkspaceMvp2() {
             isSwitchingTheme={isSwitchingTheme}
             themeSwitchError={themeSwitchError}
             generations={generations}
-            canSwitchTheme={!!token && !!activeProjectId && !!latestGeneration}
+            canSwitchTheme={!!activeProjectId && !!latestGeneration}
           />
           <div className="flex-1 overflow-auto draft-scroll grid-paper">
             {generations.length === 0 ? (
@@ -491,7 +430,7 @@ export default function ImageWorkspaceMvp2() {
           onSubmitEdit={submitEdit}
           isEditing={isEditing}
           editError={editError}
-          canEdit={!!token && !!activeProjectId}
+          canEdit={!!activeProjectId}
         />
       </div>
 
@@ -1364,11 +1303,6 @@ function ObjectsPanel({
           );
         })}
       </div>
-      {!canEdit ? (
-        <p className="mt-2 text-[11px] font-mono text-ink-mute">
-          Sign in to enable per-object edits.
-        </p>
-      ) : null}
     </div>
   );
 }

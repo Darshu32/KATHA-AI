@@ -66,6 +66,7 @@ async def generate_design(
         ratio=payload.ratio,
         quality=payload.quality,
         drawing_type=payload.drawing_type,
+        project_type=project.project_type,
     )
     return result
 
@@ -86,6 +87,7 @@ async def local_edit(
         project_id=project_id,
         object_id=payload.object_id,
         edit_prompt=payload.prompt,
+        project_type=project.project_type,
     )
     return result
 
@@ -106,6 +108,7 @@ async def switch_theme_route(
         project_id=project_id,
         new_style=payload.new_style,
         preserve_layout=payload.preserve_layout,
+        project_type=project.project_type,
     )
     return result
 

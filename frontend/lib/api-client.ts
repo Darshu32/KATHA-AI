@@ -381,8 +381,12 @@ export interface ProjectOut {
 }
 
 export const projects = {
+  /* All project endpoints accept an optional token. The backend
+     middleware short-circuits to a shared dev user when the header
+     is absent (prototype mode). When auth is reintroduced, callers
+     can start passing tokens again without changing call sites. */
   create: (
-    token: string,
+    token: string | undefined,
     body: {
       name: string;
       description?: string | null;
@@ -392,7 +396,7 @@ export const projects = {
     },
   ) => request<ProjectOut>("/projects", "POST", body, token),
 
-  list: (token: string) =>
+  list: (token?: string) =>
     request<{ projects: ProjectOut[]; total: number }>(
       "/projects",
       "GET",
@@ -400,15 +404,20 @@ export const projects = {
       token,
     ),
 
-  get: (token: string, projectId: string) =>
+  get: (token: string | undefined, projectId: string) =>
     request<ProjectOut>(`/projects/${projectId}`, "GET", undefined, token),
 };
 
 // ── Design (Generation & Editing) ────────────────────────────────────────
+//
+// Like `projects`, every design endpoint now accepts an optional token.
+// The backend middleware attributes anonymous traffic to a shared dev
+// user (prototype mode). When auth comes back, callers thread real
+// tokens in without touching call signatures.
 
 export const design = {
   generate: (
-    token: string,
+    token: string | undefined,
     projectId: string,
     body: {
       prompt: string;
@@ -423,26 +432,26 @@ export const design = {
       drawing_type?: string;
     },
   ) =>
-    request<{ project_id: string; version: number; graph_data: unknown; estimate: unknown; status: string }>(
+    request<{ project_id: string; version: number; graph_data: unknown; estimate: unknown; image_url: string | null; status: string }>(
       `/projects/${projectId}/generate`, "POST", body, token,
     ),
 
-  editObject: (token: string, projectId: string, body: { object_id: string; prompt: string }) =>
-    request<{ project_id: string; version: number; graph_data: unknown; estimate: unknown; status: string }>(
+  editObject: (token: string | undefined, projectId: string, body: { object_id: string; prompt: string }) =>
+    request<{ project_id: string; version: number; graph_data: unknown; estimate: unknown; image_url: string | null; status: string }>(
       `/projects/${projectId}/edit`, "POST", body, token,
     ),
 
-  switchTheme: (token: string, projectId: string, body: { new_style: string; preserve_layout: boolean }) =>
-    request<{ project_id: string; version: number; graph_data: unknown; estimate: unknown; status: string }>(
+  switchTheme: (token: string | undefined, projectId: string, body: { new_style: string; preserve_layout: boolean }) =>
+    request<{ project_id: string; version: number; graph_data: unknown; estimate: unknown; image_url: string | null; status: string }>(
       `/projects/${projectId}/theme`, "POST", body, token,
     ),
 
-  getFloorPlan: (token: string, projectId: string, version?: number) =>
+  getFloorPlan: (token: string | undefined, projectId: string, version?: number) =>
     request<{ drawing_type: string; floor_plan: unknown; drawing: unknown; preview_svg: string; summary: string }>(
       `/projects/${projectId}/drawings/floor-plan${version ? `?version=${version}` : ""}`, "GET", undefined, token,
     ),
 
-  getLatest: (token: string, projectId: string) =>
+  getLatest: (token: string | undefined, projectId: string) =>
     request<{ version: number; graph_data: unknown }>(
       `/projects/${projectId}/latest`, "GET", undefined, token,
     ),
