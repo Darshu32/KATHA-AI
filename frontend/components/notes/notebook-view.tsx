@@ -2,21 +2,40 @@
 
 import { useCallback } from "react";
 import { NotebookPen } from "lucide-react";
-import { useNotesStore } from "@/lib/store";
+import { useActiveNotebookSections, useNotesStore } from "@/lib/store";
 import type { NoteBlockType } from "@/lib/types";
 import NoteSectionHeader from "./note-section-header";
+import NoteSectionImage from "./note-section-image";
+import NoteSectionTags from "./note-section-tags";
 import NoteBlock from "./note-block";
 import AddBlockMenu from "./add-block-menu";
 
 export default function NotebookView() {
-  const { notebook, searchQuery, addBlock } = useNotesStore();
+  const sections = useActiveNotebookSections();
+  const { searchQuery, addBlock, activeTagFilters } = useNotesStore();
 
-  const filtered = searchQuery
-    ? notebook.sections.filter((s) =>
+  // Filter pipeline: search ⨯ tags. Both filters are AND-combined,
+  // but the *tag* filter itself is OR-combined across the active
+  // tags (a section is included if any of its tags appears in the
+  // active filter set). This matches the dominant convention in
+  // tag-based note apps (Notion, Bear, Obsidian) and feels less
+  // restrictive than AND-across-tags.
+  const filteredBySearch = searchQuery
+    ? sections.filter((s) =>
         s.title.toLowerCase().includes(searchQuery.toLowerCase()) ||
         s.blocks.some((b) => b.content.toLowerCase().includes(searchQuery.toLowerCase())),
       )
-    : notebook.sections;
+    : sections;
+
+  const filtered = activeTagFilters.length > 0
+    ? filteredBySearch.filter((s) => {
+        if (!s.tags || s.tags.length === 0) return false;
+        const sectionTagsLower = s.tags.map((t) => t.toLowerCase());
+        return activeTagFilters.some((f) =>
+          sectionTagsLower.includes(f.toLowerCase()),
+        );
+      })
+    : filteredBySearch;
 
   const handleAddBlock = useCallback(
     (sectionId: string, afterBlockId: string | null, type: NoteBlockType) => {
@@ -37,15 +56,17 @@ export default function NotebookView() {
     return (
       <div className="flex-1 flex items-center justify-center p-6">
         <div className="text-center">
-          <div className="w-12 h-12 rounded-xl bg-gray-50 border border-gray-100 flex items-center justify-center mx-auto mb-3">
-            <NotebookPen size={20} className="text-gray-300" />
+          <div className="w-12 h-12 rounded-xl bg-paper-soft border border-hairline flex items-center justify-center mx-auto mb-3">
+            <NotebookPen size={20} className="text-ink-mute" />
           </div>
-          <p className="text-sm font-medium text-gray-600 mb-1">
-            {searchQuery ? "No matching notes" : "No notes yet"}
+          <p className="text-sm font-medium text-ink-soft mb-1">
+            {searchQuery || activeTagFilters.length > 0
+              ? "No matching notes"
+              : "No notes yet"}
           </p>
-          <p className="text-xs text-gray-400 leading-relaxed max-w-[200px]">
-            {searchQuery
-              ? "Try a different search term"
+          <p className="text-xs text-ink-mute leading-relaxed max-w-[200px]">
+            {searchQuery || activeTagFilters.length > 0
+              ? "Try a different search term or clear filters"
               : "Ask a deep question in the chat and notes will be auto-generated here"}
           </p>
         </div>
@@ -54,7 +75,7 @@ export default function NotebookView() {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto chat-scrollbar px-3 pb-6">
+    <div className="flex-1 overflow-y-auto draft-scroll px-3 pb-6">
       {filtered.map((section) => (
         <div key={section.id} className="mb-4">
           <NoteSectionHeader
@@ -63,7 +84,17 @@ export default function NotebookView() {
             date={section.date}
           />
 
-          <div className="mt-1.5 pl-1">
+          {section.imageUrl && (
+            <NoteSectionImage
+              sectionId={section.id}
+              imageUrl={section.imageUrl}
+              alt={section.title}
+            />
+          )}
+
+          <NoteSectionTags sectionId={section.id} tags={section.tags ?? []} />
+
+          <div className="pl-1">
             {/* Add block at top */}
             <AddBlockMenu onAdd={(type) => handleAddBlock(section.id, null, type)} />
 

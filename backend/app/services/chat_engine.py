@@ -62,12 +62,12 @@ When discussing dimensions, use both metric and imperial. Reference Indian and i
 
 IMPORTANT: At the end of your response, output a JSON block on a new line in this exact format:
 ```json
-{"suggestions": ["suggestion 1", "suggestion 2", "suggestion 3"], "image_prompt": "a detailed prompt to generate an architectural image specific to this query, e.g. 'photorealistic 3D render of a modern cantilever balcony with glass railing, tropical setting, golden hour lighting'", "video_query": "YouTube search query for a short architecture video about this topic, e.g. 'cantilever balcony construction detail animation'"}
+{"suggestions": ["suggestion 1", "suggestion 2", "suggestion 3"], "video_query": "YouTube search query for a short architecture video about this topic, e.g. 'cantilever balcony construction detail animation'"}
 ```
 Rules for the JSON:
 - **suggestions**: 2-3 natural follow-up actions the user might want
-- **image_prompt**: A rich, detailed prompt to generate a custom architectural visualization. Be specific about style, materials, angles, lighting. Never set to null — every architecture topic can be visualized.
-- **video_query**: A YouTube search query to find a short (< 4 min) video clip showing this concept in practice. Be specific."""
+- **video_query**: A YouTube search query to find a short (< 4 min) video clip showing this concept in practice. Be specific.
+- Do NOT include an image_prompt field — Quick Mode does not generate images. Image generation is reserved for Deep Mode."""
 
 DEEP_MODE_SYSTEM_PROMPT = """You are KATHA AI — an Architecture Knowledge Intelligence System.
 
@@ -207,10 +207,15 @@ async def stream_chat_response(
         # Parse metadata from the response
         metadata, clean_content = _parse_response_metadata(full_response)
 
+        # Image generation is reserved for Deep Mode only.
+        # If the LLM ignored the prompt rules and emitted an image_prompt in
+        # Quick Mode, drop it here so the frontend never tries to render one.
+        image_prompt = metadata.image_prompt if mode == "deep" else None
+
         yield _sse_event("done", {
             "content": clean_content,
             "suggestions": metadata.suggestions,
-            "image_prompt": metadata.image_prompt,
+            "image_prompt": image_prompt,
             "video_query": metadata.video_query,
             "youtube_query": metadata.youtube_query,
             "research_query": metadata.research_query,

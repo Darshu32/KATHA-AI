@@ -18,6 +18,7 @@ from app.services.design_graph_service import (
 from app.services.estimation_engine import compute_estimate
 from app.services.graph_describer import describe_graph_for_render
 from app.services.image_service import generate_image, resolve_theme_visual_hint
+from app.services.object_bboxes import compute_object_bboxes
 from app.services.storage import key_to_url, make_key, save_bytes
 
 logger = logging.getLogger(__name__)
@@ -249,6 +250,7 @@ async def run_initial_generation(
         "graph_data": graph_data,
         "estimate": estimate,
         "image_url": image_url,
+        "objects_bbox": compute_object_bboxes(graph_data),
         "status": "completed",
     }
 
@@ -324,6 +326,7 @@ async def run_local_edit(
         "estimate": estimate,
         "changed_objects": [object_id],
         "image_url": image_url,
+        "objects_bbox": compute_object_bboxes(updated_graph),
         "status": "completed",
     }
 
@@ -391,6 +394,7 @@ async def run_theme_switch(
         "graph_data": updated_graph_data,
         "estimate": estimate,
         "image_url": image_url,
+        "objects_bbox": compute_object_bboxes(updated_graph_data),
         "status": "completed",
     }
 

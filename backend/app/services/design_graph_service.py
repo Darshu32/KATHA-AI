@@ -129,6 +129,29 @@ async def get_latest_version(
     return result.scalar_one_or_none()
 
 
+async def get_latest_render_for_version(
+    db: AsyncSession,
+    graph_version_id: str,
+) -> GeneratedAsset | None:
+    """Most recent ``render_2d`` asset for a graph version, if any.
+
+    A version can carry multiple render assets over time (an admin
+    re-render, a future "regenerate without changing graph" affordance).
+    The newest one wins — that's what the gallery should display when
+    re-opening a project.
+    """
+    result = await db.execute(
+        select(GeneratedAsset)
+        .where(
+            GeneratedAsset.graph_version_id == graph_version_id,
+            GeneratedAsset.asset_type == "render_2d",
+        )
+        .order_by(GeneratedAsset.created_at.desc())
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
+
+
 async def get_version(
     db: AsyncSession,
     project_id: str,

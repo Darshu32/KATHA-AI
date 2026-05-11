@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Inter, Newsreader, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
+import ToastViewport from "@/components/primitives/toast-viewport";
 
 /* Type system.
  * Inter         → UI chrome (chat, labels, controls, headings).
@@ -51,7 +52,10 @@ export default function RootLayout({
       lang="en"
       className={`${inter.variable} ${newsreader.variable} ${jetbrainsMono.variable}`}
     >
-      <body className="antialiased">{children}</body>
+      <body className="antialiased">
+        {children}
+        <ToastViewport />
+      </body>
     </html>
   );
 }

@@ -110,9 +110,19 @@ const config: Config = {
           "0%": { opacity: "0", transform: "translateY(4px)" },
           "100%": { opacity: "1", transform: "translateY(0)" },
         },
+        // Subtle left-to-right shimmer for skeleton placeholders.
+        // Used by .skeleton-shimmer (in globals.css) to show pending
+        // generation cards without flashy chrome. The gradient is
+        // tuned to barely-noticeable on the paper-deep background;
+        // craft, not spectacle.
+        shimmer: {
+          "0%": { backgroundPosition: "-200% 0" },
+          "100%": { backgroundPosition: "200% 0" },
+        },
       },
       animation: {
         "fade-in": "fadeIn 280ms cubic-bezier(0.32, 0.72, 0, 1) both",
+        shimmer: "shimmer 1.8s linear infinite",
       },
     },
   },

@@ -12,11 +12,14 @@ from app.models.schemas import (
     ThemeSwitchRequest,
 )
 from app.services.design_graph_service import (
+    get_latest_render_for_version,
     get_latest_version,
     get_project,
     get_version,
     list_versions,
 )
+from app.services.object_bboxes import compute_object_bboxes
+from app.services.storage import key_to_url
 from app.services.generation_pipeline import (
     run_initial_generation,
     run_local_edit,
@@ -168,6 +171,11 @@ async def get_latest_route(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
+    """Latest version of a project — graph + render URL.
+
+    Used by the project picker when re-opening an existing project so
+    the gallery can render the most recent state without a re-generation.
+    """
     project = await get_project(db, project_id)
     _check_owner(project, user)
 
@@ -175,10 +183,19 @@ async def get_latest_route(
     if version is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No versions found")
 
+    # Pull the most recent render asset for this version. Stored as a
+    # short key; converted to the frontend-consumable URL here so the
+    # caller doesn't need to know about the storage adapter.
+    render = await get_latest_render_for_version(db, version.id)
+    image_url = key_to_url(render.storage_key) if render and render.storage_key else None
+
     return {
         "id": version.id,
         "version": version.version,
         "graph_data": version.graph_data,
+        "prompt": version.prompt,
+        "image_url": image_url,
+        "objects_bbox": compute_object_bboxes(version.graph_data),
     }
 
 

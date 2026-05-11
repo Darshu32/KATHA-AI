@@ -87,12 +87,20 @@ export const useChatStore = create<ChatState>()(
       createConversation: () => {
         const id = crypto.randomUUID();
         const now = new Date().toISOString();
+        // Auto-bind to the design workspace's active project so the
+        // sidebar can show a project caption under the title. Snapshot
+        // both id and name; if the user later renames the project,
+        // the caption goes briefly stale until the next refresh —
+        // acceptable for a prototype.
+        const imgState = useImageGenStore.getState();
         const conversation: Conversation = {
           id,
           title: "New conversation",
           messages: [],
           createdAt: now,
           updatedAt: now,
+          projectId: imgState.activeProjectId ?? undefined,
+          projectName: imgState.activeProjectName ?? undefined,
         };
         set((state) => ({
           conversations: [conversation, ...state.conversations],
@@ -234,8 +242,12 @@ interface ImageGenState {
   // successful generation via POST /projects (created server-side)
   // and reused for subsequent generations + edits so they all land
   // as new versions of the same project.
+  // ``activeProjectName`` is the snapshotted display name — kept here
+  // so the chat sidebar can render a project caption on conversations
+  // without round-tripping to `/projects/{id}`.
   activeProjectId: string | null;
   activeProjectVersion: number | null;
+  activeProjectName: string | null;
 
   setPrompt: (v: string) => void;
   setNegativePrompt: (v: string) => void;
@@ -251,10 +263,21 @@ interface ImageGenState {
   setLighting: (v: LightingMode) => void;
   setIsGenerating: (v: boolean) => void;
   addGeneration: (gen: ImageGeneration) => void;
+  /** Replace the entire gallery — used by the project picker when
+   *  the architect opens an existing project so the gallery shows
+   *  that project's latest version instead of in-session history. */
+  replaceGenerations: (gens: ImageGeneration[]) => void;
+  /** Clear the gallery — used when the architect creates a new
+   *  project. Resets activeProjectId at the same time. */
+  clearGenerations: () => void;
   setRightSidebarOpen: (v: boolean) => void;
   toggleTerminal: () => void;
   setViewMode: (v: "2d" | "3d") => void;
-  setActiveProject: (projectId: string | null, version?: number | null) => void;
+  setActiveProject: (
+    projectId: string | null,
+    version?: number | null,
+    name?: string | null,
+  ) => void;
 }
 
 export const useImageGenStore = create<ImageGenState>()(
@@ -279,6 +302,7 @@ export const useImageGenStore = create<ImageGenState>()(
       viewMode: "2d",
       activeProjectId: null,
       activeProjectVersion: null,
+      activeProjectName: null,
 
       setPrompt: (v) => set({ prompt: v }),
       setNegativePrompt: (v) => set({ negativePrompt: v }),
@@ -295,11 +319,31 @@ export const useImageGenStore = create<ImageGenState>()(
       setIsGenerating: (v) => set({ isGenerating: v }),
       addGeneration: (gen) =>
         set((state) => ({ generations: [gen, ...state.generations] })),
+      replaceGenerations: (gens) => set({ generations: gens }),
+      clearGenerations: () =>
+        set({
+          generations: [],
+          activeProjectId: null,
+          activeProjectVersion: null,
+          activeProjectName: null,
+        }),
       setRightSidebarOpen: (v) => set({ rightSidebarOpen: v }),
       toggleTerminal: () => set((state) => ({ terminalOpen: !state.terminalOpen })),
       setViewMode: (v) => set({ viewMode: v }),
-      setActiveProject: (projectId, version = null) =>
-        set({ activeProjectId: projectId, activeProjectVersion: version }),
+      setActiveProject: (projectId, version = null, name) =>
+        set((state) => ({
+          activeProjectId: projectId,
+          activeProjectVersion: version,
+          // Keep the previously-known name when the caller doesn't
+          // pass one (e.g. version-bump after an edit), but clear it
+          // whenever the project itself clears.
+          activeProjectName:
+            projectId === null
+              ? null
+              : name !== undefined
+              ? name
+              : state.activeProjectName,
+        })),
     }),
     {
       name: "katha-image-gen",
@@ -319,6 +363,7 @@ export const useImageGenStore = create<ImageGenState>()(
         viewMode: state.viewMode,
         activeProjectId: state.activeProjectId,
         activeProjectVersion: state.activeProjectVersion,
+        activeProjectName: state.activeProjectName,
       }),
     },
   ),

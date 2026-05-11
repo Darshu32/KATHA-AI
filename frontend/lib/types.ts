@@ -69,6 +69,14 @@ export interface Conversation {
   messages: Message[];
   createdAt: string;
   updatedAt: string;
+  // Optional binding to the design workspace's active project at the
+  // moment this conversation was created. Powers the small project
+  // caption under each conversation in the sidebar so the architect
+  // can see at a glance which project a chat belongs to. ``projectName``
+  // is snapshotted at bind-time and may go briefly stale if the user
+  // renames the project — refresh on demand later.
+  projectId?: string;
+  projectName?: string;
 }
 
 export interface SuggestionChip {
@@ -157,6 +165,23 @@ export interface ImageGeneration {
   versionId?: string;
   graphData?: unknown;
   estimate?: unknown;
+
+  // ── Approximate object hotspots for click-to-edit on the image ─────
+  // Each rect is normalised [0,1] over the rendered image. Computed
+  // server-side from the design graph using a top-down projection —
+  // honest about being approximate (Gemini's photoreal camera isn't
+  // known), but stable across versions and clickable everywhere on
+  // the visible canvas. Empty when the graph has no objects or no
+  // resolvable room dimensions.
+  objectsBbox?: Array<{
+    id: string;
+    name: string;
+    type: string;
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+  }>;
 }
 
 // ── Design Graph Types (mirrors backend DesignObjectSchema) ───────────────

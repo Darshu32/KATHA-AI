@@ -11,7 +11,7 @@ import {
   BookOpen,
   Gauge,
 } from "lucide-react";
-import { useChatStore, useNotesStore } from "@/lib/store";
+import { useActiveNotebookSections, useChatStore, useNotesStore } from "@/lib/store";
 import type { ChatMode } from "@/lib/types";
 
 interface ChatHeaderProps {
@@ -35,7 +35,8 @@ export default function ChatHeader({
 }: ChatHeaderProps) {
   const chatMode = useChatStore((s) => s.chatMode);
   const setChatMode = useChatStore((s) => s.setChatMode);
-  const { notesPanelOpen, toggleNotesPanel, notebook } = useNotesStore();
+  const { notesPanelOpen, toggleNotesPanel } = useNotesStore();
+  const activeSections = useActiveNotebookSections();
   const [modeOpen, setModeOpen] = useState(false);
   const modeRef = useRef<HTMLDivElement>(null);
 
@@ -171,7 +172,7 @@ export default function ChatHeader({
           title="Notes"
         >
           <NotebookPen size={15} />
-          {notebook.sections.length > 0 && (
+          {activeSections.length > 0 && (
             <span
               className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full"
               style={{ backgroundColor: "var(--accent)" }}

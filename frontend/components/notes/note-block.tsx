@@ -23,10 +23,10 @@ interface Props {
 }
 
 const CALLOUT_STYLES: Record<CalloutVariant, { bg: string; border: string; icon: typeof Info; iconColor: string }> = {
-  info: { bg: "bg-blue-50", border: "border-blue-300", icon: Info, iconColor: "text-blue-500" },
-  tip: { bg: "bg-green-50", border: "border-green-300", icon: Lightbulb, iconColor: "text-green-600" },
-  warning: { bg: "bg-amber-50", border: "border-amber-300", icon: AlertTriangle, iconColor: "text-amber-500" },
-  important: { bg: "bg-red-50", border: "border-red-300", icon: AlertCircle, iconColor: "text-red-500" },
+  info: { bg: "bg-paper-soft", border: "border-indigo-soft", icon: Info, iconColor: "text-indigo" },
+  tip: { bg: "bg-paper-soft", border: "border-olive", icon: Lightbulb, iconColor: "text-olive" },
+  warning: { bg: "bg-paper-soft", border: "border-mustard", icon: AlertTriangle, iconColor: "text-mustard" },
+  important: { bg: "bg-pencil-bg", border: "border-pencil", icon: AlertCircle, iconColor: "text-pencil" },
 };
 
 const BLOCK_TYPE_OPTIONS: { value: BlockType; label: string }[] = [
@@ -95,7 +95,7 @@ function NoteBlock({ block, sectionId, index, onAddAfter }: Props) {
         onMouseEnter={() => setShowToolbar(true)}
         onMouseLeave={() => setShowToolbar(false)}
       >
-        <hr className="border-gray-200" />
+        <hr className="border-hairline" />
       </div>
     );
   }
@@ -120,7 +120,7 @@ function NoteBlock({ block, sectionId, index, onAddAfter }: Props) {
           onBlur={handleBlur}
           onFocus={handleFocus}
           onKeyDown={handleKeyDown}
-          className="flex-1 text-sm text-gray-700 outline-none leading-relaxed"
+          className="flex-1 text-sm text-ink-deep outline-none leading-relaxed"
         >
           {block.content}
         </div>
@@ -142,7 +142,7 @@ function NoteBlock({ block, sectionId, index, onAddAfter }: Props) {
         <div className="flex items-start gap-1">
           <button
             onClick={() => updateBlock(sectionId, block.id, { collapsed: !isCollapsed })}
-            className="p-0.5 mt-0.5 text-gray-400 hover:text-gray-600 rounded transition-transform"
+            className="p-0.5 mt-0.5 text-ink-mute hover:text-ink rounded transition-transform"
           >
             {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
           </button>
@@ -153,16 +153,16 @@ function NoteBlock({ block, sectionId, index, onAddAfter }: Props) {
             onBlur={handleBlur}
             onFocus={handleFocus}
             onKeyDown={handleKeyDown}
-            className="flex-1 text-sm font-medium text-gray-800 outline-none"
+            className="flex-1 text-sm font-medium text-ink-deep outline-none"
           >
             {block.content}
           </div>
         </div>
         {!isCollapsed && block.children && (
-          <div className="ml-5 mt-1 pl-3 border-l-2 border-gray-200 space-y-0.5">
-            {block.children.map((child, ci) => (
-              <div key={child.id} className="text-sm text-gray-600">
-                {child.type === "bullet-list" && <span className="text-gray-400 mr-1.5">-</span>}
+          <div className="ml-5 mt-1 pl-3 border-l-2 border-hairline space-y-0.5">
+            {block.children.map((child) => (
+              <div key={child.id} className="text-sm text-ink-soft">
+                {child.type === "bullet-list" && <span className="text-ink-mute mr-1.5">-</span>}
                 {child.content}
               </div>
             ))}
@@ -175,27 +175,27 @@ function NoteBlock({ block, sectionId, index, onAddAfter }: Props) {
 
   // Heading, paragraph, bullet, numbered
   const baseClasses: Record<string, string> = {
-    "heading-1": "text-lg font-bold text-gray-900",
-    "heading-2": "text-base font-semibold text-gray-800 mt-2",
-    "heading-3": "text-sm font-semibold text-gray-700",
-    paragraph: "text-sm text-gray-600 leading-relaxed",
-    "bullet-list": "text-sm text-gray-600",
-    "numbered-list": "text-sm text-gray-600",
+    "heading-1": "text-lg font-bold text-ink-deep",
+    "heading-2": "text-base font-semibold text-ink-deep mt-2",
+    "heading-3": "text-sm font-semibold text-ink-deep",
+    paragraph: "text-sm text-ink-soft leading-relaxed",
+    "bullet-list": "text-sm text-ink-soft",
+    "numbered-list": "text-sm text-ink-soft",
   };
 
   return (
     <div
-      className={`group relative flex items-start gap-1 my-0.5 ${isActive ? "bg-blue-50/50 rounded" : ""}`}
+      className={`group relative flex items-start gap-1 my-0.5 ${isActive ? "bg-pencil-bg/40 rounded" : ""}`}
       style={{ paddingLeft: indent }}
       onMouseEnter={() => setShowToolbar(true)}
       onMouseLeave={() => { setShowToolbar(false); setShowTypeMenu(false); }}
     >
       {/* Prefix */}
       {block.type === "bullet-list" && (
-        <span className="text-gray-400 mt-0.5 text-sm flex-shrink-0 w-4 text-center">-</span>
+        <span className="text-ink-mute mt-0.5 text-sm flex-shrink-0 w-4 text-center">-</span>
       )}
       {block.type === "numbered-list" && (
-        <span className="text-gray-400 mt-0.5 text-sm flex-shrink-0 w-4 text-right mr-0.5">{index + 1}.</span>
+        <span className="text-ink-mute mt-0.5 text-sm flex-shrink-0 w-4 text-right mr-0.5 tnum">{index + 1}.</span>
       )}
 
       {/* Content */}
@@ -206,7 +206,7 @@ function NoteBlock({ block, sectionId, index, onAddAfter }: Props) {
         onBlur={handleBlur}
         onFocus={handleFocus}
         onKeyDown={handleKeyDown}
-        className={`flex-1 outline-none ${baseClasses[block.type] ?? "text-sm text-gray-600"}`}
+        className={`flex-1 outline-none ${baseClasses[block.type] ?? "text-sm text-ink-soft"}`}
       >
         {block.content}
       </div>
@@ -216,14 +216,14 @@ function NoteBlock({ block, sectionId, index, onAddAfter }: Props) {
         <div className="absolute -left-6 top-0 flex flex-col gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
           <button
             onClick={() => setShowTypeMenu(!showTypeMenu)}
-            className="p-0.5 text-gray-300 hover:text-gray-500 rounded"
+            className="p-0.5 text-ink-mute hover:text-ink rounded"
             title="Change type"
           >
             <Type size={11} />
           </button>
           <button
             onClick={() => deleteBlock(sectionId, block.id)}
-            className="p-0.5 text-gray-300 hover:text-red-400 rounded"
+            className="p-0.5 text-ink-mute hover:text-pencil rounded"
             title="Delete"
           >
             <Trash2 size={11} />
@@ -233,13 +233,13 @@ function NoteBlock({ block, sectionId, index, onAddAfter }: Props) {
 
       {/* Type menu dropdown */}
       {showTypeMenu && (
-        <div className="absolute -left-6 top-6 z-20 bg-white border border-gray-200 rounded-lg shadow-lg py-1 w-28">
+        <div className="absolute -left-6 top-6 z-20 bg-paper border border-hairline rounded-lg shadow-card py-1 w-28">
           {BLOCK_TYPE_OPTIONS.map((opt) => (
             <button
               key={opt.value}
               onClick={() => handleTypeChange(opt.value)}
-              className={`w-full text-left px-3 py-1 text-xs hover:bg-gray-50 ${
-                block.type === opt.value ? "text-blue-600 font-medium" : "text-gray-600"
+              className={`w-full text-left px-3 py-1 text-xs hover:bg-paper-soft ${
+                block.type === opt.value ? "text-pencil font-medium" : "text-ink-soft"
               }`}
             >
               {opt.label}
@@ -255,7 +255,7 @@ function BlockToolbarInline({ onDelete }: { onDelete: () => void }) {
   return (
     <button
       onClick={onDelete}
-      className="absolute -right-1 top-0 p-0.5 text-gray-300 hover:text-red-400 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+      className="absolute -right-1 top-0 p-0.5 text-ink-mute hover:text-pencil rounded opacity-0 group-hover:opacity-100 transition-opacity"
       title="Delete block"
     >
       <Trash2 size={11} />

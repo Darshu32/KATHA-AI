@@ -433,6 +433,22 @@ export const projects = {
 
   get: (token: string | undefined, projectId: string) =>
     request<ProjectOut>(`/projects/${projectId}`, "GET", undefined, token),
+
+  /* PATCH a project's mutable fields. Any subset of these may be
+     passed; the server preserves anything omitted. Used by the
+     project picker to rename + archive. */
+  update: (
+    token: string | undefined,
+    projectId: string,
+    body: {
+      name?: string;
+      description?: string | null;
+      status?: "draft" | "ready" | "archived" | string;
+      project_type?: string;
+      project_sub_type?: string | null;
+      project_scale?: string | null;
+    },
+  ) => request<ProjectOut>(`/projects/${projectId}`, "PATCH", body, token),
 };
 
 // ── Design (Generation & Editing) ────────────────────────────────────────
@@ -459,17 +475,41 @@ export const design = {
       drawing_type?: string;
     },
   ) =>
-    request<{ project_id: string; version: number; graph_data: unknown; estimate: unknown; image_url: string | null; status: string }>(
+    request<{
+      project_id: string;
+      version: number;
+      graph_data: unknown;
+      estimate: unknown;
+      image_url: string | null;
+      objects_bbox: Array<{ id: string; name: string; type: string; x: number; y: number; w: number; h: number }>;
+      status: string;
+    }>(
       `/projects/${projectId}/generate`, "POST", body, token,
     ),
 
   editObject: (token: string | undefined, projectId: string, body: { object_id: string; prompt: string }) =>
-    request<{ project_id: string; version: number; graph_data: unknown; estimate: unknown; image_url: string | null; status: string }>(
+    request<{
+      project_id: string;
+      version: number;
+      graph_data: unknown;
+      estimate: unknown;
+      image_url: string | null;
+      objects_bbox: Array<{ id: string; name: string; type: string; x: number; y: number; w: number; h: number }>;
+      status: string;
+    }>(
       `/projects/${projectId}/edit`, "POST", body, token,
     ),
 
   switchTheme: (token: string | undefined, projectId: string, body: { new_style: string; preserve_layout: boolean }) =>
-    request<{ project_id: string; version: number; graph_data: unknown; estimate: unknown; image_url: string | null; status: string }>(
+    request<{
+      project_id: string;
+      version: number;
+      graph_data: unknown;
+      estimate: unknown;
+      image_url: string | null;
+      objects_bbox: Array<{ id: string; name: string; type: string; x: number; y: number; w: number; h: number }>;
+      status: string;
+    }>(
       `/projects/${projectId}/theme`, "POST", body, token,
     ),
 
@@ -479,7 +519,14 @@ export const design = {
     ),
 
   getLatest: (token: string | undefined, projectId: string) =>
-    request<{ version: number; graph_data: unknown }>(
+    request<{
+      id: string;
+      version: number;
+      graph_data: unknown;
+      prompt: string | null;
+      image_url: string | null;
+      objects_bbox: Array<{ id: string; name: string; type: string; x: number; y: number; w: number; h: number }>;
+    }>(
       `/projects/${projectId}/latest`, "GET", undefined, token,
     ),
 

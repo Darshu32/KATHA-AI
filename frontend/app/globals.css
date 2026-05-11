@@ -96,6 +96,30 @@ body {
 
 * { box-sizing: border-box; }
 
+/* Global keyboard-focus ring — only on :focus-visible (i.e. tab/keyboard
+ * focus, NOT mouse clicks). Quiet 2px pencil-bg outline + 1px pencil
+ * inner ring so the focused element is unmistakable for keyboard users
+ * without yelling at mouse users. Individual components can override
+ * via ``focus-visible:ring-*`` Tailwind utilities when they need a
+ * different treatment (e.g. inputs with their own border). */
+:focus { outline: none; }
+:focus-visible {
+  outline: 2px solid var(--pencil-bg);
+  outline-offset: 1px;
+  box-shadow: 0 0 0 1px var(--pencil) inset;
+  border-radius: 4px;
+}
+/* contenteditable + form inputs already manage their own focused look
+ * via border-colour; the inset ring would conflict. Suppress the
+ * box-shadow there and let the existing border do the work. */
+input:focus-visible,
+textarea:focus-visible,
+[contenteditable]:focus-visible {
+  outline: 2px solid var(--pencil-bg);
+  outline-offset: 1px;
+  box-shadow: none;
+}
+
 ::selection {
   background: var(--pencil);
   color: var(--paper);
@@ -379,6 +403,49 @@ h1, h2, h3, h4, h5, h6 {
   transition: color 160ms var(--ease-snap);
 }
 .message-prose a:hover { color: var(--pencil-soft); }
+
+/* Inline data callout — dimensional values like "900mm", "0.4 W/m²K",
+   "2.7 m". Brass-color (architectural register), tabular figures so
+   adjacent values align vertically when listed, hairline underline so
+   the eye picks them up without the prose looking decorated. */
+.message-prose .datum {
+  color: var(--pencil);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  text-decoration: underline;
+  text-decoration-color: var(--pencil-bg);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  white-space: nowrap;
+}
+
+/* Inline code-reference callout — NBC §4.2.1, ECBC §6.2, IS 875 etc.
+   Mono so it reads as a citation token; same pencil-red as data but
+   with a hairline box rather than underline. */
+.message-prose .code-ref {
+  font-family: var(--mono-stack);
+  font-size: 0.82em;
+  color: var(--pencil);
+  background: var(--pencil-bg);
+  padding: 0.05em 0.4em;
+  border-radius: 3px;
+  white-space: nowrap;
+  letter-spacing: 0.02em;
+}
+
+/* Reference marker — small numeric badge anchoring a paragraph to a
+   sidenote in the right gutter. Inline-superscript-ish; mono numerals
+   so visually distinct from the prose. */
+.message-prose .ref-marker {
+  display: inline-block;
+  margin-left: 0.25em;
+  font-family: var(--mono-stack);
+  font-size: 0.72em;
+  font-weight: 500;
+  color: var(--pencil);
+  vertical-align: super;
+  line-height: 1;
+}
 .message-prose strong { color: var(--ink-deep); font-weight: 600; }
 
 /* ── Motion ─────────────────────────────────────────────────────────── */
@@ -394,6 +461,41 @@ h1, h2, h3, h4, h5, h6 {
 .typing-dot   { animation: typing-bounce 1.2s infinite; }
 .typing-dot:nth-child(2) { animation-delay: 0.15s; }
 .typing-dot:nth-child(3) { animation-delay: 0.3s; }
+
+/* Skeleton shimmer — a quiet left-to-right gradient sweep over a
+ * paper-deep base. Used by generation skeleton cards and other
+ * pending placeholders. Two stops of paper-deep with a slightly
+ * lighter middle band; eye reads it as "loading" without flashy
+ * chrome that competes with real content. */
+.skeleton-shimmer {
+  background-color: var(--paper-deep);
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    rgba(255, 255, 255, 0.65) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  background-repeat: no-repeat;
+  animation: shimmer 1.8s linear infinite;
+}
+
+/* Reduced-motion users get a static placeholder — no shimmer, no
+ * fade-in, no typing dots. The chrome stays visible; only the
+ * animation is silenced. Lives at the bottom of the file so it
+ * overrides every earlier ``animation`` declaration. */
+@media (prefers-reduced-motion: reduce) {
+  .anim-fade-in,
+  .typing-dot,
+  .skeleton-shimmer {
+    animation: none !important;
+  }
+  .skeleton-shimmer {
+    /* Keep a static "pending" look so it's still visually distinct
+     * from a finished card. */
+    background-image: none;
+  }
+}
 
 /* ── Utility ────────────────────────────────────────────────────────── */
 .tnum { font-feature-settings: "tnum" 1, "lnum" 1; }

@@ -545,3 +545,86 @@ class UserOut(BaseModel):
 class TokenOut(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+# ── Notes (Phase 1 — per-conversation notebooks) ────────────────────────────
+#
+# These mirror ``NoteSection`` from ``frontend/lib/types.ts``. The
+# ``blocks`` payload is intentionally validated as ``list[dict[str, Any]]``
+# rather than a strict block schema — block shape evolves on the
+# frontend (new block types, callout variants), and we don't want a
+# round-trip schema dance every time. The DB stores it as JSONB.
+
+
+class NoteSectionUpsert(BaseModel):
+    """Body for ``PUT /notes/sections/{id}`` — create or update.
+
+    The path ``id`` is the canonical identifier; the body should not
+    repeat it (we ignore it if present). Ownership is established
+    server-side from the authenticated user — the client cannot set it.
+    """
+
+    conversation_id: str = Field(min_length=1, max_length=64)
+    source_message_id: str | None = Field(default=None, max_length=64)
+    title: str = Field(min_length=1, max_length=300)
+    blocks: list[dict[str, Any]] = Field(default_factory=list)
+    # Phase 3 — user-applied tags. We sanitise (trim, dedupe, drop
+    # empties) on the way in via the route layer, so the DB only
+    # ever sees the canonical form.
+    tags: list[str] = Field(default_factory=list)
+    # Phase 4 — auto-generated image, currently a base64 data URI
+    # from the chat image endpoint. Capped at 4MB so a misbehaving
+    # client can't stream arbitrarily large blobs into the DB.
+    image_url: str | None = Field(default=None, max_length=4_000_000)
+    client_created_at: str | None = Field(default=None, max_length=64)
+
+
+class NoteSectionOut(BaseModel):
+    """Response shape for a single note section."""
+
+    id: str
+    conversation_id: str
+    source_message_id: str | None = None
+    title: str
+    blocks: list[dict[str, Any]]
+    tags: list[str] = Field(default_factory=list)
+    image_url: str | None = None
+    client_created_at: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class NoteSectionListOut(BaseModel):
+    """Response shape for ``GET /notes/sections`` listings."""
+
+    sections: list[NoteSectionOut]
+
+
+class NoteSectionImportItem(BaseModel):
+    """One entry in a bulk migration push.
+
+    Used by ``POST /notes/import`` when a logged-in user first hits
+    the new sync — their existing localStorage notebook is uploaded
+    once. Each entry carries its own ``id`` and ``conversation_id``
+    from the local data so we preserve continuity.
+    """
+
+    id: str = Field(min_length=1, max_length=64)
+    conversation_id: str = Field(min_length=1, max_length=64)
+    source_message_id: str | None = Field(default=None, max_length=64)
+    title: str = Field(min_length=1, max_length=300)
+    blocks: list[dict[str, Any]] = Field(default_factory=list)
+    tags: list[str] = Field(default_factory=list)
+    image_url: str | None = Field(default=None, max_length=4_000_000)
+    client_created_at: str | None = Field(default=None, max_length=64)
+
+
+class NoteSectionImportRequest(BaseModel):
+    sections: list[NoteSectionImportItem] = Field(default_factory=list)
+
+
+class NoteSectionImportResult(BaseModel):
+    imported: int
+    skipped: int  # already-existing IDs are not overwritten by import

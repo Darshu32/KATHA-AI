@@ -137,20 +137,13 @@ export default function WorkspaceShell() {
                     }));
                   }
                 } else {
-                  // Quick Mode: AI image + YouTube short clip
-                  const promises = await Promise.allSettled([
-                    data.image_prompt ? chat.generateImage(data.image_prompt) : Promise.resolve(null),
-                    data.video_query ? chat.searchYoutube(data.video_query, 1, "short") : Promise.resolve(null),
-                  ]);
+                  // Quick Mode: YouTube short clip only.
+                  // Image generation is intentionally Deep-Mode-only — keep
+                  // Quick Mode snappy (text + a single short video).
+                  const ytResult = data.video_query
+                    ? await chat.searchYoutube(data.video_query, 1, "short").catch(() => null)
+                    : null;
 
-                  // AI image
-                  const imgResult = promises[0].status === "fulfilled" ? promises[0].value : null;
-                  if (imgResult && "image" in imgResult && imgResult.image) {
-                    images = [{ ...imgResult.image, type: "ai-image" as const, source: imgResult.image.source || "nano-banana" }];
-                  }
-
-                  // YouTube short clip
-                  const ytResult = promises[1].status === "fulfilled" ? promises[1].value : null;
                   if (ytResult && "videos" in ytResult && ytResult.videos.length > 0) {
                     video = { ...ytResult.videos[0], type: "youtube" as const, source: "youtube" };
                   }

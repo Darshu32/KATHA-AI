@@ -28,6 +28,7 @@ export default function SidebarChatItem({
   onSelect,
   onDelete,
 }: SidebarChatItemProps) {
+  const projectName = conversation.projectName?.trim();
   return (
     <div
       role="button"
@@ -36,35 +37,20 @@ export default function SidebarChatItem({
       onKeyDown={(e) => {
         if (e.key === "Enter") onSelect();
       }}
-      className="w-full text-left px-3 py-2 rounded-lg group transition-colors relative cursor-pointer"
-      style={{
-        backgroundColor: isActive ? "var(--paper-2)" : "transparent",
-        fontFamily: "var(--sans)",
-      }}
-      onMouseEnter={(e) => {
-        if (!isActive) e.currentTarget.style.backgroundColor = "var(--paper-2)";
-      }}
-      onMouseLeave={(e) => {
-        if (!isActive) e.currentTarget.style.backgroundColor = "transparent";
-      }}
+      className={`w-full text-left px-3 py-2 rounded-lg group transition-colors relative cursor-pointer font-sans ${
+        isActive ? "bg-paper-soft" : "hover:bg-paper-soft"
+      }`}
     >
       <div className="flex items-center justify-between gap-2">
         <p
-          className="truncate flex-1"
-          style={{
-            fontSize: 13,
-            fontWeight: isActive ? 600 : 500,
-            color: isActive ? "var(--ink)" : "var(--ink-2)",
-            letterSpacing: "-0.005em",
-          }}
+          className={`truncate flex-1 text-[13px] tracking-tight ${
+            isActive ? "text-ink-deep font-semibold" : "text-ink-soft font-medium"
+          }`}
         >
           {conversation.title}
         </p>
         <div className="flex items-center gap-1 flex-shrink-0">
-          <span
-            className="group-hover:hidden"
-            style={{ fontSize: 10.5, color: "var(--ink-3)", fontFamily: "var(--mono)", letterSpacing: "0.04em" }}
-          >
+          <span className="group-hover:hidden text-[10.5px] text-ink-mute font-mono tracking-wider tnum">
             {timeAgo(conversation.updatedAt)}
           </span>
           <button
@@ -72,21 +58,25 @@ export default function SidebarChatItem({
               e.stopPropagation();
               onDelete();
             }}
-            className="hidden group-hover:flex items-center justify-center w-6 h-6 rounded-md transition-colors"
-            style={{ color: "var(--ink-3)" }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.color = "var(--accent)";
-              e.currentTarget.style.backgroundColor = "var(--accent-soft)";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.color = "var(--ink-3)";
-              e.currentTarget.style.backgroundColor = "transparent";
-            }}
+            className="hidden group-hover:flex items-center justify-center w-6 h-6 rounded-md text-ink-mute hover:text-pencil hover:bg-pencil-bg transition-colors"
+            aria-label="Delete conversation"
           >
             <Trash2 size={13} />
           </button>
         </div>
       </div>
+      {/* Project caption — quiet, only when the chat is bound to a
+       *  project. ``▸`` echoes the breadcrumb arrow used elsewhere in
+       *  the design surface. */}
+      {projectName ? (
+        <p
+          className="mt-0.5 truncate font-mono text-[10px] uppercase tracking-tagged text-ink-mute"
+          title={`Project: ${projectName}`}
+        >
+          <span className="mr-1">▸</span>
+          {projectName}
+        </p>
+      ) : null}
     </div>
   );
 }

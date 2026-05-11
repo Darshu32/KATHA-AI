@@ -156,5 +156,14 @@ export function parseDeepModeToNotes(
     sourceMessageId: messageId,
     sourceConversationId: conversationId,
     blocks,
+    // Auto-generated sections start untagged. Tag-by-default heuristics
+    // (e.g. derive from conversation title) deliberately deferred —
+    // suggestions tend to feel noisy until the user has built up
+    // their own tag vocabulary.
+    tags: [],
+    // Image generation runs async after the section is created
+    // (see chat-workspace-mvp1.tsx). Until that resolves, the field
+    // is null and the UI hides the image slot.
+    imageUrl: null,
   };
 }

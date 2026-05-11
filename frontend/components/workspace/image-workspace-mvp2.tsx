@@ -16,6 +16,7 @@ import {
   projects as projectsApi,
   resolveAssetUrl,
 } from "@/lib/api-client";
+import { toastError, useToastStore } from "@/lib/toast-store";
 import type {
   ArchTheme,
   ImageRatio,
@@ -27,6 +28,10 @@ import {
   SectionTag,
 } from "@/components/primitives";
 import { ImportDialog } from "@/components/workspace/import-dialog";
+import {
+  ProjectPicker,
+  type OpenedProject,
+} from "@/components/workspace/project-picker";
 
 type Scope = "architecture" | "interior" | "furniture" | "product";
 type Dim = "2d" | "3d" | "4d";
@@ -68,6 +73,8 @@ export default function ImageWorkspaceMvp2() {
     toggleTerminal,
     activeProjectId,
     setActiveProject,
+    replaceGenerations,
+    clearGenerations,
   } = useImageGenStore();
 
   const projectTypeDefs = useConfigStore((s) => s.projectTypeDefs);
@@ -101,6 +108,60 @@ export default function ImageWorkspaceMvp2() {
   // workspace just toggles visibility and receives the parsed brief
   // text on apply, which gets appended to the prompt textarea.
   const [importOpen, setImportOpen] = useState(false);
+
+  // ── Project picker open/close ──────────────────────────────────────
+  // The picker owns its project-list state; the workspace receives an
+  // OpenedProject callback that swaps the gallery + activeProjectId
+  // in one shot.
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  /* Handle opening an existing project from the picker. The picker
+     has already fetched the latest version; we replace the gallery
+     with a single card for that version (older versions aren't
+     loaded — only one card per re-opened project until the user
+     re-generates / edits). */
+  const handleOpenProject = (p: OpenedProject) => {
+    setActiveProject(p.projectId, p.version || null, p.projectName ?? null);
+    if (p.version > 0) {
+      replaceGenerations([
+        {
+          id: crypto.randomUUID(),
+          prompt: p.prompt || p.projectName,
+          url: p.imageUrl ?? undefined,
+          timestamp: new Date().toISOString(),
+          theme,
+          ratio,
+          quality: "standard",
+          drawingType: "3d-render",
+          camera: "front",
+          lighting: "daylight",
+          width: 1024,
+          height: 576,
+          projectId: p.projectId,
+          version: p.version,
+          graphData: p.graphData,
+          estimate: {},
+          objectsBbox: p.objectsBbox,
+        },
+      ]);
+    } else {
+      // Project exists but has no versions yet — clear gallery so the
+      // user sees the empty hero scoped to this project.
+      replaceGenerations([]);
+    }
+    setPrompt(p.prompt || "");
+    setSelectedObjectId(null);
+    setEditPrompt("");
+  };
+
+  /* Handle "New project" from the picker. Clear everything and let
+     the next Generate create a fresh project. */
+  const handleNewProject = () => {
+    clearGenerations();
+    setPrompt("");
+    setSelectedObjectId(null);
+    setEditPrompt("");
+  };
 
   // Bootstrap dynamic config (themes + project types) on mount.
   useEffect(() => {
@@ -180,15 +241,21 @@ export default function ImageWorkspaceMvp2() {
         version: switchRes.version,
         graphData: switchRes.graph_data,
         estimate: switchRes.estimate,
+        objectsBbox: switchRes.objects_bbox,
       });
       setActiveProject(activeProjectId, switchRes.version);
       setTheme(newStyle as ArchTheme);
     } catch (e) {
-      if (e instanceof ApiError) {
-        setThemeSwitchError(`Backend rejected the theme switch (${e.status}).`);
-      } else {
-        setThemeSwitchError("Couldn't reach the backend for the theme switch.");
-      }
+      // Two surfaces for the same error so the architect can't miss it:
+      // toast for the transient "what just happened" signal, inline
+      // chip on the canvas so the next click on Switch sees the
+      // last-failure context.
+      toastError(e, "Theme switch failed");
+      setThemeSwitchError(
+        e instanceof ApiError
+          ? `Backend rejected the theme switch (${e.status}).`
+          : "Couldn't reach the backend for the theme switch.",
+      );
     } finally {
       setIsSwitchingTheme(false);
     }
@@ -238,16 +305,18 @@ export default function ImageWorkspaceMvp2() {
         version: editRes.version,
         graphData: editRes.graph_data,
         estimate: editRes.estimate,
+        objectsBbox: editRes.objects_bbox,
       });
       setActiveProject(activeProjectId, editRes.version);
       setEditPrompt("");
       setSelectedObjectId(null);
     } catch (e) {
-      if (e instanceof ApiError) {
-        setEditError(`Backend rejected the edit (${e.status}).`);
-      } else {
-        setEditError("Couldn't reach the backend for the edit.");
-      }
+      toastError(e, "Edit failed");
+      setEditError(
+        e instanceof ApiError
+          ? `Backend rejected the edit (${e.status}).`
+          : "Couldn't reach the backend for the edit.",
+      );
     } finally {
       setIsEditing(false);
     }
@@ -283,7 +352,7 @@ export default function ImageWorkspaceMvp2() {
           project_type: projectType,
         });
         projectId = project.id;
-        setActiveProject(projectId);
+        setActiveProject(projectId, null, project.name);
       }
 
       // 2 — single backend call: graph + render baked together
@@ -296,6 +365,14 @@ export default function ImageWorkspaceMvp2() {
       });
 
       if (!graphRes.image_url) {
+        // Soft degraded-service path: graph generated fine but the
+        // render step failed (no key, provider down). Surface as
+        // warning toast + inline notice — not a hard error.
+        useToastStore.getState().notify({
+          type: "warning",
+          title: "Render skipped",
+          message: "Design graph generated, but no image was returned. Check GEMINI_API_KEY.",
+        });
         setGenerateNotice(
           "Design graph generated. Render skipped — GEMINI_API_KEY not set or provider failed.",
         );
@@ -319,18 +396,16 @@ export default function ImageWorkspaceMvp2() {
         version: graphRes.version,
         graphData: graphRes.graph_data,
         estimate: graphRes.estimate,
+        objectsBbox: graphRes.objects_bbox,
       });
       setActiveProject(projectId, graphRes.version);
     } catch (e) {
-      if (e instanceof ApiError) {
-        setGenerateError(
-          `Backend rejected the request (${e.status}). Check the API logs.`,
-        );
-      } else {
-        setGenerateError(
-          "Couldn't reach the backend. Is uvicorn running on :8000?",
-        );
-      }
+      toastError(e, "Generation failed");
+      setGenerateError(
+        e instanceof ApiError
+          ? `Backend rejected the request (${e.status}). Check the API logs.`
+          : "Couldn't reach the backend. Is uvicorn running on :8000?",
+      );
     } finally {
       setIsGenerating(false);
     }
@@ -342,6 +417,7 @@ export default function ImageWorkspaceMvp2() {
         onToggleTerminal={toggleTerminal}
         terminalOpen={terminalOpen}
         onOpenImport={() => setImportOpen(true)}
+        onOpenProjects={() => setPickerOpen(true)}
       />
       <ImportDialog
         open={importOpen}
@@ -355,6 +431,14 @@ export default function ImageWorkspaceMvp2() {
         }}
         token={token}
       />
+      <ProjectPicker
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        onOpenProject={handleOpenProject}
+        onNewProject={handleNewProject}
+        activeProjectId={activeProjectId}
+        token={token}
+      />
 
       <div className="flex-1 flex min-h-0">
         <LeftControls
@@ -365,9 +449,6 @@ export default function ImageWorkspaceMvp2() {
           setScope={setScope}
           dim={dim}
           setDim={setDim}
-          theme={theme}
-          setTheme={setTheme}
-          themesList={themesList}
           ratio={ratio}
           setRatio={setRatio}
         />
@@ -380,11 +461,21 @@ export default function ImageWorkspaceMvp2() {
             projectTypeLabel={activeTypeDef?.label ?? projectType}
             theme={theme}
             themesList={themesList}
-            onThemeSwitch={submitThemeSwitch}
+            onChooseTheme={(slug) => {
+              // When there's an active project with at least one
+              // generation, picking a theme is a *switch* op (backend
+              // round-trip → new version). Otherwise it just stages
+              // the theme for the next Generate.
+              if (activeProjectId && latestGeneration) {
+                void submitThemeSwitch(slug);
+              } else {
+                setTheme(slug as ArchTheme);
+              }
+            }}
             isSwitchingTheme={isSwitchingTheme}
             themeSwitchError={themeSwitchError}
             generations={generations}
-            canSwitchTheme={!!activeProjectId && !!latestGeneration}
+            hasActiveProject={!!activeProjectId && !!latestGeneration}
           />
           <div className="flex-1 overflow-auto draft-scroll grid-paper">
             {generations.length === 0 ? (
@@ -396,7 +487,16 @@ export default function ImageWorkspaceMvp2() {
                 onPickPrompt={setPrompt}
               />
             ) : (
-              <CanvasGallery generations={generations} dim={dim} />
+              <CanvasGallery
+                generations={generations}
+                dim={dim}
+                selectedObjectId={selectedObjectId}
+                onSelectObject={setSelectedObjectId}
+                isGenerating={isGenerating}
+                isEditing={isEditing}
+                isSwitchingTheme={isSwitchingTheme}
+                pendingPrompt={prompt}
+              />
             )}
           </div>
           {generateNotice ? (
@@ -455,10 +555,12 @@ function TopBar({
   onToggleTerminal,
   terminalOpen,
   onOpenImport,
+  onOpenProjects,
 }: {
   onToggleTerminal: () => void;
   terminalOpen: boolean;
   onOpenImport: () => void;
+  onOpenProjects: () => void;
 }) {
   return (
     <header className="border-b border-hairline bg-paper">
@@ -470,6 +572,29 @@ function TopBar({
           >
             Katha
           </Link>
+          <button
+            type="button"
+            onClick={onOpenProjects}
+            className="text-[12px] text-ink-soft hover:text-ink transition-colors px-2 py-1 inline-flex items-center gap-1.5 border border-hairline hover:border-graphite rounded-sm"
+            aria-label="Open projects"
+            title="Switch project, rename, archive"
+          >
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 13 13"
+              fill="none"
+              aria-hidden="true"
+            >
+              <path
+                d="M1.5 3.5h4l1 1h5v6h-10z"
+                stroke="currentColor"
+                strokeWidth="1.4"
+                strokeLinejoin="round"
+              />
+            </svg>
+            Projects
+          </button>
         </div>
         <nav className="flex items-center gap-2">
           <button
@@ -525,9 +650,6 @@ function LeftControls({
   setScope,
   dim,
   setDim,
-  theme,
-  setTheme,
-  themesList,
   ratio,
   setRatio,
 }: {
@@ -538,9 +660,6 @@ function LeftControls({
   setScope: (s: Scope) => void;
   dim: Dim;
   setDim: (d: Dim) => void;
-  theme: ArchTheme;
-  setTheme: (t: ArchTheme) => void;
-  themesList: import("@/lib/api-client").ThemeDef[];
   ratio: ImageRatio;
   setRatio: (r: ImageRatio) => void;
 }) {
@@ -588,30 +707,6 @@ function LeftControls({
           <p className="mt-2 text-[12px] text-ink-mute">
             {DIMS.find((d) => d.id === dim)?.tagline}
           </p>
-        </section>
-
-        <section>
-          <SectionTag>Theme</SectionTag>
-          <div className="mt-2.5 space-y-1.5">
-            {themesList.length === 0 ? (
-              <div className="text-[12px] text-ink-mute px-3 py-2">
-                Loading themes…
-              </div>
-            ) : (
-              themesList.map((t) => (
-                <button
-                  key={t.slug}
-                  type="button"
-                  className="slide-pill w-full text-left"
-                  data-active={t.slug === theme}
-                  onClick={() => setTheme(t.slug as ArchTheme)}
-                  title={t.description || undefined}
-                >
-                  {t.display_name}
-                </button>
-              ))
-            )}
-          </div>
         </section>
 
         <section>
@@ -708,11 +803,11 @@ function CanvasHeader({
   projectTypeLabel,
   theme,
   themesList,
-  onThemeSwitch,
+  onChooseTheme,
   isSwitchingTheme,
   themeSwitchError,
   generations,
-  canSwitchTheme,
+  hasActiveProject,
 }: {
   scope: Scope;
   dim: Dim;
@@ -720,11 +815,11 @@ function CanvasHeader({
   projectTypeLabel: string;
   theme: ArchTheme;
   themesList: import("@/lib/api-client").ThemeDef[];
-  onThemeSwitch: (newStyle: string) => void;
+  onChooseTheme: (newStyle: string) => void;
   isSwitchingTheme: boolean;
   themeSwitchError: string | null;
   generations: import("@/lib/types").ImageGeneration[];
-  canSwitchTheme: boolean;
+  hasActiveProject: boolean;
 }) {
   void projectType; // explicitly unused — kept on signature for future telemetry
   const projectGenerations = generations.filter((g) => g.version != null);
@@ -746,9 +841,9 @@ function CanvasHeader({
         <ThemeSwitchChip
           theme={theme}
           themesList={themesList}
-          onSwitch={onThemeSwitch}
+          onChoose={onChooseTheme}
           isSwitching={isSwitchingTheme}
-          canSwitch={canSwitchTheme}
+          hasActiveProject={hasActiveProject}
         />
         {projectGenerations.length > 0 ? (
           <VersionTimeline generations={projectGenerations} />
@@ -758,24 +853,28 @@ function CanvasHeader({
   );
 }
 
-/* ThemeSwitchChip — Pass 3.
-   A small "Theme: Modern ▾" trigger that opens a dropdown listing
-   every theme in the registry. Selecting one fires submitThemeSwitch
-   → /projects/{id}/theme with preserve_layout=true so the layout is
-   preserved and only materials/finishes/palette change. Disabled
-   until the architect has an active project to switch. */
+/* ThemeSwitchChip — single theme picker for the design surface.
+   "Theme: Modern ▾" trigger; opens a dropdown of every registered
+   theme. Always enabled — the parent decides what the click means:
+     • No active project → onChoose() just sets local theme state,
+       so the next Generate uses it.
+     • Active project    → onChoose() triggers submitThemeSwitch(),
+       which produces a new version with preserve_layout=true.
+   The dropdown header label reflects the mode so the architect knows
+   whether they're staging a theme for the next generation or
+   reskinning the current design. */
 function ThemeSwitchChip({
   theme,
   themesList,
-  onSwitch,
+  onChoose,
   isSwitching,
-  canSwitch,
+  hasActiveProject,
 }: {
   theme: ArchTheme;
   themesList: import("@/lib/api-client").ThemeDef[];
-  onSwitch: (newStyle: string) => void;
+  onChoose: (newStyle: string) => void;
   isSwitching: boolean;
-  canSwitch: boolean;
+  hasActiveProject: boolean;
 }) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement | null>(null);
@@ -793,18 +892,22 @@ function ThemeSwitchChip({
   }, [open]);
   const activeLabel =
     themesList.find((t) => t.slug === theme)?.display_name ?? theme;
+  const headerLabel = hasActiveProject
+    ? "Switch theme · layout preserved"
+    : "Pick theme for next generation";
+  const titleAttr = hasActiveProject
+    ? "Switch theme — preserves layout, re-renders with new materials"
+    : "Pick theme for the next generation";
   return (
     <div className="relative" ref={ref}>
       <button
         type="button"
-        onClick={() => canSwitch && setOpen((v) => !v)}
-        disabled={!canSwitch || isSwitching}
-        className={`flex items-baseline gap-1.5 font-mono text-[11px] uppercase tracking-[0.1em] px-2 py-1 rounded-sm border transition-colors ${
-          canSwitch
-            ? "border-hairline hover:border-graphite text-ink"
-            : "border-hairline text-ink-mute cursor-not-allowed"
-        } ${isSwitching ? "opacity-60" : ""}`}
-        title={canSwitch ? "Switch theme · preserves layout" : "Generate a design first"}
+        onClick={() => setOpen((v) => !v)}
+        disabled={isSwitching}
+        className={`flex items-baseline gap-1.5 font-mono text-[11px] uppercase tracking-[0.1em] px-2 py-1 rounded-sm border border-hairline hover:border-graphite text-ink transition-colors ${
+          isSwitching ? "opacity-60 cursor-wait" : ""
+        }`}
+        title={titleAttr}
       >
         <span className="text-ink-mute">Theme</span>
         <span className="text-ink-deep font-medium">
@@ -816,7 +919,7 @@ function ThemeSwitchChip({
         <div className="absolute right-0 top-full mt-1 z-30 min-w-[14rem] bg-paper border border-graphite rounded-sm shadow-card overflow-hidden">
           <div className="px-3 py-2 border-b border-hairline">
             <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute">
-              Switch theme · layout preserved
+              {headerLabel}
             </span>
           </div>
           <div className="max-h-60 overflow-y-auto draft-scroll">
@@ -832,7 +935,7 @@ function ThemeSwitchChip({
                     key={t.slug}
                     type="button"
                     onClick={() => {
-                      onSwitch(t.slug);
+                      onChoose(t.slug);
                       setOpen(false);
                     }}
                     className={`w-full text-left px-3 py-1.5 font-mono text-[12px] flex items-baseline justify-between transition-colors ${
@@ -1000,13 +1103,43 @@ function CanvasInfoCard({
 function CanvasGallery({
   generations,
   dim,
+  selectedObjectId,
+  onSelectObject,
+  isGenerating,
+  isEditing,
+  isSwitchingTheme,
+  pendingPrompt,
 }: {
   generations: import("@/lib/types").ImageGeneration[];
   dim: Dim;
+  selectedObjectId: string | null;
+  onSelectObject: (id: string | null) => void;
+  isGenerating: boolean;
+  isEditing: boolean;
+  isSwitchingTheme: boolean;
+  pendingPrompt: string;
 }) {
+  // Any of the three async paths shows a skeleton — the user shouldn't
+  // have to mentally map which spinner means what.
+  const pending = isGenerating || isEditing || isSwitchingTheme;
+  const pendingLabel = isGenerating
+    ? "Generating"
+    : isEditing
+    ? "Applying edit"
+    : "Switching theme";
   return (
     <div className="px-6 md:px-10 py-8 max-w-5xl mx-auto space-y-5">
-      {generations.map((g, i) => (
+      {pending ? (
+        <GenerationSkeletonCard
+          label={pendingLabel}
+          version={generations.length + 1}
+          prompt={pendingPrompt}
+          dim={dim}
+        />
+      ) : null}
+      {generations.map((g, i) => {
+        const isLatest = i === 0;
+        return (
         <PaperCard
           key={g.id}
           id={`gen-${g.id}`}
@@ -1040,14 +1173,23 @@ function CanvasGallery({
             // Real render — rounded inset on white card. The image carries
             // its own pixels; no grid-paper background underneath. URL
             // resolver normalises legacy data:/http: URLs and prefixes
-            // backend-relative paths with the API origin.
-            <div className="aspect-video bg-paper-deep border border-hairline rounded-md overflow-hidden">
+            // backend-relative paths with the API origin. ObjectOverlay
+            // sits on top with click-to-edit hotspots when the
+            // generation carries graph-derived bbox data.
+            <div className="relative aspect-video bg-paper-deep border border-hairline rounded-md overflow-hidden">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 src={resolveAssetUrl(g.url)}
                 alt={g.prompt}
-                className="w-full h-full object-cover"
+                className="absolute inset-0 w-full h-full object-cover"
               />
+              {isLatest && g.objectsBbox && g.objectsBbox.length > 0 ? (
+                <ObjectOverlay
+                  bboxes={g.objectsBbox}
+                  selectedObjectId={selectedObjectId}
+                  onSelect={onSelectObject}
+                />
+              ) : null}
             </div>
           ) : (
             // Render absent — graph generated but Gemini key missing, or
@@ -1070,7 +1212,147 @@ function CanvasGallery({
             {g.prompt}
           </div>
         </PaperCard>
-      ))}
+        );
+      })}
+    </div>
+  );
+}
+
+/* GenerationSkeletonCard — placeholder shown above the gallery while
+ * a generation / edit / theme-switch is in flight.
+ *
+ * Purpose: closes the silent-gap problem. Without this, the architect
+ * presses Generate, the prompt input goes "Generating…", and the
+ * canvas just sits there — no visual feedback for the 5-15s the
+ * provider takes. The skeleton fills that gap with a quiet,
+ * shimmering card that shares structure with real PaperCards so the
+ * eye doesn't have to re-orient when the real result lands.
+ *
+ * Honest about being approximate: we don't know the final image's
+ * objects, version, or cost yet. We show what we *do* know — the
+ * prompt the architect typed — and shimmer the rest.
+ */
+function GenerationSkeletonCard({
+  label,
+  version,
+  prompt,
+  dim,
+}: {
+  label: string;
+  version: number;
+  prompt: string;
+  dim: Dim;
+}) {
+  return (
+    <PaperCard
+      className="p-5 anim-fade-in transition-shadow"
+      aria-busy="true"
+      aria-live="polite"
+    >
+      <div className="flex items-baseline justify-between mb-3">
+        <div className="flex items-baseline gap-3">
+          <SectionTag>
+            {label} · {String(version).padStart(2, "0")}
+          </SectionTag>
+          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-pencil tnum">
+            v{String(version).padStart(2, "0")} draft
+          </span>
+        </div>
+        <Annotation>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 rounded-full bg-pencil animate-pulse" />
+            {label.toLowerCase()}…
+          </span>
+        </Annotation>
+      </div>
+      {/* Canvas placeholder — aspect-video shimmer carrying the grid-
+       *  paper underlay so the eye recognises it as "render space"
+       *  even before pixels arrive. */}
+      <div className="relative aspect-video rounded-md overflow-hidden border border-hairline skeleton-shimmer">
+        <div className="absolute inset-0 grid-paper opacity-30" />
+        <div className="absolute inset-0 flex items-center justify-center">
+          <div className="text-center px-6">
+            <p className="font-mono text-[10px] uppercase tracking-[0.18em] text-ink-mute">
+              {dim.toUpperCase()} · {label}
+            </p>
+            <p className="mt-2 text-[12px] text-ink-soft max-w-md mx-auto leading-relaxed line-clamp-2">
+              {prompt.trim() || "…preparing the design graph"}
+            </p>
+          </div>
+        </div>
+      </div>
+      {/* Prose placeholders for the cost stream + spec rows that
+       *  normally sit below the image. Two muted shimmer bars at
+       *  staggered widths mimic the real rhythm. */}
+      <div className="mt-4 space-y-2">
+        <div className="h-2.5 w-3/4 rounded skeleton-shimmer" />
+        <div className="h-2.5 w-1/2 rounded skeleton-shimmer" />
+      </div>
+    </PaperCard>
+  );
+}
+
+/* ObjectOverlay — click-to-edit hotspots over the rendered image.
+   Each bbox is an absolutely-positioned button anchored in normalised
+   coordinates. Default: transparent; on hover or when selected, a
+   pencil-red outline + name label appear. Click triggers the same
+   selection state the right-panel objects list uses, so the edit
+   popover opens consistently regardless of where the architect clicks
+   from.
+   Honest about being approximate — see backend/object_bboxes.py for
+   the projection model. */
+function ObjectOverlay({
+  bboxes,
+  selectedObjectId,
+  onSelect,
+}: {
+  bboxes: NonNullable<import("@/lib/types").ImageGeneration["objectsBbox"]>;
+  selectedObjectId: string | null;
+  onSelect: (id: string | null) => void;
+}) {
+  return (
+    <div
+      className="absolute inset-0 pointer-events-none"
+      aria-label="Object hotspots"
+    >
+      {bboxes.map((b) => {
+        const selected = b.id === selectedObjectId;
+        return (
+          <button
+            key={b.id}
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              onSelect(selected ? null : b.id);
+            }}
+            aria-pressed={selected}
+            aria-label={`Select ${b.name}`}
+            title={b.name}
+            className={`group/hotspot absolute pointer-events-auto rounded-sm transition-all ${
+              selected
+                ? "ring-2 ring-pencil ring-offset-1 ring-offset-paper/0"
+                : "ring-0 hover:ring-2 hover:ring-pencil/70 hover:ring-offset-1 hover:ring-offset-paper/0"
+            } cursor-crosshair`}
+            style={{
+              left: `${b.x * 100}%`,
+              top: `${b.y * 100}%`,
+              width: `${b.w * 100}%`,
+              height: `${b.h * 100}%`,
+              background: selected
+                ? "rgba(200, 54, 45, 0.10)"
+                : "transparent",
+            }}
+          >
+            <span
+              className={`absolute left-0 top-full mt-1 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.1em] bg-ink-deep text-paper rounded-sm whitespace-nowrap transition-opacity ${
+                selected ? "opacity-100" : "opacity-0 group-hover/hotspot:opacity-100"
+              }`}
+            >
+              {b.name}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }

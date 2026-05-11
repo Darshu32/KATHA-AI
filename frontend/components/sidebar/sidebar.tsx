@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useMemo } from "react";
-import { motion, AnimatePresence } from "framer-motion";
+import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import {
   Plus,
   Search,
@@ -41,6 +41,7 @@ function groupByDate(conversations: { updatedAt: string; id: string }[]) {
 }
 
 export default function Sidebar({ isOpen }: SidebarProps) {
+  const reduced = useReducedMotion();
   const [search, setSearch] = useState("");
   const {
     conversations,
@@ -73,61 +74,33 @@ export default function Sidebar({ isOpen }: SidebarProps) {
     <AnimatePresence initial={false}>
       {isOpen && (
         <motion.aside
-          initial={{ width: 0, opacity: 0 }}
+          initial={reduced ? { width: 272, opacity: 1 } : { width: 0, opacity: 0 }}
           animate={{ width: 272, opacity: 1 }}
-          exit={{ width: 0, opacity: 0 }}
-          transition={{ duration: 0.2, ease: "easeInOut" }}
-          className="h-screen flex flex-col overflow-hidden flex-shrink-0"
-          style={{
-            backgroundColor: "var(--paper)",
-            borderRight: "1px solid var(--rule)",
-            fontFamily: "var(--sans)",
-            color: "var(--ink)",
-          }}
+          exit={reduced ? { width: 0, opacity: 1 } : { width: 0, opacity: 0 }}
+          transition={{ duration: reduced ? 0 : 0.2, ease: "easeInOut" }}
+          className="h-screen flex flex-col overflow-hidden flex-shrink-0 bg-paper border-r border-hairline text-ink-deep font-sans"
         >
-          {/* Brand + workspace switch */}
+          {/* Brand */}
           <div className="px-4 pt-5 pb-3 flex items-center justify-between">
             <div className="flex items-center gap-2">
-              <span
-                className="w-7 h-7 rounded-[7px] flex items-center justify-center text-[11px]"
-                style={{
-                  backgroundColor: "var(--ink)",
-                  color: "var(--paper)",
-                  fontFamily: "var(--mono)",
-                  fontWeight: 600,
-                  letterSpacing: "0.06em",
-                }}
-              >
+              <span className="w-7 h-7 rounded-[7px] flex items-center justify-center text-[11px] font-mono font-semibold bg-ink-deep text-paper tracking-tagged">
                 K
               </span>
-              <span style={{ fontWeight: 600, fontSize: 15, letterSpacing: "-0.015em" }}>
+              <span className="text-[15px] font-semibold text-ink-deep tracking-tight">
                 Katha
               </span>
             </div>
           </div>
 
-          {/* New chat + search */}
+          {/* New chat + search + workspace */}
           <div className="px-3 space-y-1">
             <button
               onClick={() => createConversation()}
-              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg transition-colors"
-              style={{
-                backgroundColor: "transparent",
-                border: "1px solid var(--rule)",
-                color: "var(--ink)",
-                fontSize: 13,
-                fontWeight: 500,
-                letterSpacing: "-0.005em",
-              }}
-              onMouseEnter={(e) => (e.currentTarget.style.backgroundColor = "var(--paper-2)")}
-              onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
+              className="w-full flex items-center gap-2 px-3 py-2 rounded-lg border border-hairline text-ink-deep hover:bg-paper-soft transition-colors text-[13px] font-medium"
             >
               <Plus size={14} strokeWidth={2.2} />
               New chat
-              <span
-                className="ml-auto px-1.5 py-0.5 rounded text-[10px] tracking-wider"
-                style={{ color: "var(--ink-3)", fontFamily: "var(--mono)" }}
-              >
+              <span className="ml-auto px-1.5 py-0.5 rounded text-[10px] font-mono text-ink-mute tracking-wider">
                 ⌘K
               </span>
             </button>
@@ -135,29 +108,14 @@ export default function Sidebar({ isOpen }: SidebarProps) {
             <div className="relative">
               <Search
                 size={14}
-                className="absolute left-3 top-1/2 -translate-y-1/2"
-                style={{ color: "var(--ink-3)" }}
+                className="absolute left-3 top-1/2 -translate-y-1/2 text-ink-mute"
               />
               <input
                 type="text"
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search"
-                className="w-full rounded-lg pl-9 pr-3 py-2 focus:outline-none transition-colors"
-                style={{
-                  backgroundColor: "transparent",
-                  border: "1px solid transparent",
-                  fontSize: 13,
-                  color: "var(--ink)",
-                  fontFamily: "var(--sans)",
-                }}
-                onFocus={(e) => (e.currentTarget.style.borderColor = "var(--rule)")}
-                onBlur={(e) => (e.currentTarget.style.borderColor = "transparent")}
-                onMouseEnter={(e) => {
-                  if (document.activeElement !== e.currentTarget)
-                    e.currentTarget.style.backgroundColor = "var(--paper-2)";
-                }}
-                onMouseLeave={(e) => (e.currentTarget.style.backgroundColor = "transparent")}
+                className="w-full rounded-lg pl-9 pr-3 py-2 bg-transparent border border-transparent hover:bg-paper-soft focus:bg-paper-soft focus:border-hairline focus:outline-none transition-colors text-[13px] text-ink-deep placeholder:text-ink-mute"
               />
             </div>
 
@@ -168,19 +126,11 @@ export default function Sidebar({ isOpen }: SidebarProps) {
                 <button
                   key={ws.id}
                   onClick={() => setActiveWorkspace(ws.id)}
-                  className="w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-colors"
-                  style={{
-                    backgroundColor: active ? "var(--paper-2)" : "transparent",
-                    color: "var(--ink)",
-                    fontSize: 13,
-                    fontWeight: active ? 600 : 500,
-                  }}
-                  onMouseEnter={(e) => {
-                    if (!active) e.currentTarget.style.backgroundColor = "var(--paper-2)";
-                  }}
-                  onMouseLeave={(e) => {
-                    if (!active) e.currentTarget.style.backgroundColor = "transparent";
-                  }}
+                  className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-lg transition-colors text-[13px] ${
+                    active
+                      ? "bg-paper-soft text-ink-deep font-semibold"
+                      : "text-ink-soft hover:bg-paper-soft hover:text-ink-deep font-medium"
+                  }`}
                 >
                   <Icon size={15} strokeWidth={1.8} />
                   {ws.label}
@@ -190,11 +140,11 @@ export default function Sidebar({ isOpen }: SidebarProps) {
           </div>
 
           {/* Conversation list */}
-          <div className="flex-1 overflow-y-auto chat-scrollbar px-2 pt-4 pb-2">
+          <div className="flex-1 overflow-y-auto draft-scroll px-2 pt-4 pb-2">
             {filtered.length === 0 ? (
               <div className="text-center py-10 px-4">
-                <MessageSquare size={18} style={{ color: "var(--ink-3)" }} className="mx-auto mb-2 opacity-50" />
-                <p style={{ fontSize: 12, color: "var(--ink-3)" }}>
+                <MessageSquare size={18} className="mx-auto mb-2 text-ink-mute opacity-50" />
+                <p className="text-xs text-ink-mute">
                   {search ? "No matches" : "No conversations yet"}
                 </p>
               </div>
@@ -203,16 +153,7 @@ export default function Sidebar({ isOpen }: SidebarProps) {
                 ([label, ids]) =>
                   ids.length > 0 && (
                     <div key={label} className="mt-4 first:mt-0">
-                      <p
-                        className="px-3 py-1"
-                        style={{
-                          fontFamily: "var(--mono)",
-                          fontSize: 10,
-                          letterSpacing: "0.22em",
-                          textTransform: "uppercase",
-                          color: "var(--ink-3)",
-                        }}
-                      >
+                      <p className="px-3 py-1 font-mono text-[10px] uppercase tracking-tagged text-ink-mute">
                         {label}
                       </p>
                       <div className="space-y-0.5">
@@ -235,34 +176,17 @@ export default function Sidebar({ isOpen }: SidebarProps) {
             )}
           </div>
 
-          {/* Minimal user footer */}
-          <div className="p-3" style={{ borderTop: "1px solid var(--rule)" }}>
+          {/* User footer */}
+          <div className="p-3 border-t border-hairline">
             <div className="flex items-center gap-2.5 px-1">
-              <div
-                className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0"
-                style={{
-                  backgroundColor: "var(--accent-soft)",
-                  color: "var(--accent-2)",
-                  fontFamily: "var(--mono)",
-                  fontSize: 10.5,
-                  fontWeight: 600,
-                  letterSpacing: "0.02em",
-                  border: "1px solid var(--rule)",
-                }}
-              >
+              <div className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0 bg-pencil-bg text-pencil border border-hairline font-mono text-[10.5px] font-semibold">
                 {initials}
               </div>
               <div className="min-w-0 flex-1">
-                <p
-                  className="truncate"
-                  style={{ fontSize: 12.5, color: "var(--ink)", fontWeight: 500, letterSpacing: "-0.005em" }}
-                >
+                <p className="truncate text-[12.5px] text-ink-deep font-medium tracking-tight">
                   {user?.displayName || "Architect"}
                 </p>
-                <p
-                  className="truncate"
-                  style={{ fontSize: 10.5, color: "var(--ink-3)", fontFamily: "var(--mono)", letterSpacing: "0.02em" }}
-                >
+                <p className="truncate text-[10.5px] text-ink-mute font-mono tracking-wider">
                   Free plan
                 </p>
               </div>
