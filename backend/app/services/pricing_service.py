@@ -37,9 +37,11 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import costing, themes
+from app.services.pricing.knowledge_service import load_pricing_bands
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -85,8 +87,29 @@ class PricingRequest(BaseModel):
 # ── Knowledge slice ─────────────────────────────────────────────────────────
 
 
-def build_pricing_knowledge(req: PricingRequest) -> dict[str, Any]:
+_PRICING_BRD_DEFAULTS: dict[str, Any] = {
+    "manufacturer_margin_pct_by_volume": {
+        k: list(v) for k, v in costing.MANUFACTURER_MARGIN_PCT_BY_VOLUME.items()
+    },
+    "designer_margin_pct_band": list(costing.DESIGNER_MARGIN_PCT),
+    "retail_markup_pct_band": list(costing.RETAIL_MARKUP_PCT),
+    "customization_premium_pct_by_level": {
+        k: list(v) for k, v in costing.CUSTOMIZATION_PREMIUM_PCT_BY_LEVEL.items()
+    },
+    "customization_premium_pct_band": list(costing.CUSTOMIZATION_PREMIUM_PCT),
+    "profit_margin_pct_by_segment": {
+        k: list(v) for k, v in costing.PROFIT_MARGIN_PCT.items()
+    },
+}
+
+
+def build_pricing_knowledge(
+    req: PricingRequest,
+    *,
+    pricing_bands: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     pack = themes.get(req.theme) if req.theme else None
+    bands = pricing_bands or _PRICING_BRD_DEFAULTS
     return {
         "project": {
             "name": req.project_name,
@@ -107,18 +130,20 @@ def build_pricing_knowledge(req: PricingRequest) -> dict[str, Any]:
         ),
         "cost_engine": req.cost_engine or {},
         "pricing_brd": {
-            "manufacturer_margin_pct_by_volume": {
-                k: list(v) for k, v in costing.MANUFACTURER_MARGIN_PCT_BY_VOLUME.items()
-            },
-            "designer_margin_pct_band": list(costing.DESIGNER_MARGIN_PCT),
-            "retail_markup_pct_band": list(costing.RETAIL_MARKUP_PCT),
-            "customization_premium_pct_by_level": {
-                k: list(v) for k, v in costing.CUSTOMIZATION_PREMIUM_PCT_BY_LEVEL.items()
-            },
-            "customization_premium_pct_band": list(costing.CUSTOMIZATION_PREMIUM_PCT),
-            "profit_margin_pct_by_segment": {
-                k: list(v) for k, v in costing.PROFIT_MARGIN_PCT.items()
-            },
+            "manufacturer_margin_pct_by_volume": bands[
+                "manufacturer_margin_pct_by_volume"
+            ],
+            "designer_margin_pct_band": bands["designer_margin_pct_band"],
+            "retail_markup_pct_band": bands["retail_markup_pct_band"],
+            "customization_premium_pct_by_level": bands[
+                "customization_premium_pct_by_level"
+            ],
+            "customization_premium_pct_band": bands[
+                "customization_premium_pct_band"
+            ],
+            "profit_margin_pct_by_segment": bands["profit_margin_pct_by_segment"],
+            # Formula structure + applies-when rule stay as Python literal —
+            # they're logical scaffolding, not knob values.
             "pricing_formula_brd": dict(costing.PRICING_FORMULA_BRD),
             "designer_markup_applies_when": (
                 costing.OVERHEAD_MARGIN_BRD_SPEC.get("designer_markup_applies_when")
@@ -703,7 +728,11 @@ class PricingError(RuntimeError):
     """Raised when the LLM pricing stage cannot produce a grounded sheet."""
 
 
-async def generate_pricing_buildup(req: PricingRequest) -> dict[str, Any]:
+async def generate_pricing_buildup(
+    req: PricingRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise PricingError(
             "OpenAI API key is not configured. The pricing stage requires "
@@ -730,7 +759,16 @@ async def generate_pricing_buildup(req: PricingRequest) -> dict[str, Any]:
             f"Pick one of: {', '.join(SALES_CHANNELS_IN_SCOPE)}."
         )
 
-    knowledge = build_pricing_knowledge(req)
+    if session is not None:
+        bands = await load_pricing_bands(session, defaults=_PRICING_BRD_DEFAULTS)
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            bands = await load_pricing_bands(
+                own_session, defaults=_PRICING_BRD_DEFAULTS
+            )
+    knowledge = build_pricing_knowledge(req, pricing_bands=bands)
     user_message = _user_message(req, knowledge)
     client = _client_instance()
 

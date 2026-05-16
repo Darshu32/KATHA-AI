@@ -29,6 +29,7 @@ from app.routes.project_types import router as project_types_router
 from app.routes.prompts import router as prompts_router
 from app.routes.projects import router as projects_router
 from app.routes.specs import router as specs_router
+from app.routes.standards import router as standards_router
 from app.routes.themes import router as themes_router
 from app.routes.uploads import router as uploads_router
 from app.routes.working_drawings import router as working_drawings_router
@@ -54,6 +55,8 @@ all_routers = [
     parametric_router,
     prompts_router,
     specs_router,
+    # Stage 3B public read endpoint (building standards catalogue — BRD §1B)
+    standards_router,
     working_drawings_router,
     # Stage 1 admin endpoints (pricing)
     pricing_admin_router,

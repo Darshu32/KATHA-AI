@@ -7,16 +7,22 @@ POST /parametric/design — runs the LLM-driven parametric design pipeline:
 
 import logging
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.knowledge import themes
+from app.database import get_db
+from app.knowledge import costing, themes
 from app.models.schemas import ErrorResponse
 from app.services.parametric_design_service import (
     ParametricDesignError,
     ParametricDesignRequest,
+    _materials_in_use_for,
     build_parametric_knowledge,
     generate_parametric_design,
 )
+from app.services.pricing.knowledge_service import load_labor_rate_bands
+from app.services.standards.variations_lookup import variations_for_item
+from app.services.themes import get_theme as _get_theme_db
 
 logger = logging.getLogger(__name__)
 
@@ -44,13 +50,31 @@ async def list_themes() -> dict:
 
 
 @router.post("/knowledge")
-async def parametric_knowledge(payload: ParametricDesignRequest) -> dict:
+async def parametric_knowledge(
+    payload: ParametricDesignRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Return only the injected knowledge slice for a (theme, piece) pair.
 
     Useful for the UI to preview what the LLM will see before running
     the more expensive generation call.
     """
-    knowledge = build_parametric_knowledge(payload)
+    theme_pack = await _get_theme_db(db, payload.theme)
+    labor_bands = await load_labor_rate_bands(
+        db, defaults=costing.LABOR_RATES_INR_PER_HOUR
+    )
+    item_variations = await variations_for_item(
+        db,
+        category=payload.piece_category,
+        item=payload.piece_item,
+        materials_in_use=_materials_in_use_for(payload, theme_pack=theme_pack),
+    )
+    knowledge = build_parametric_knowledge(
+        payload,
+        labor_rates_inr_hour=labor_bands,
+        item_variations=item_variations,
+        theme_pack=theme_pack,
+    )
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -67,10 +91,13 @@ async def parametric_knowledge(payload: ParametricDesignRequest) -> dict:
 
 
 @router.post("/design")
-async def parametric_design(payload: ParametricDesignRequest) -> dict:
+async def parametric_design(
+    payload: ParametricDesignRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the parametric design LLM pipeline."""
     try:
-        return await generate_parametric_design(payload)
+        return await generate_parametric_design(payload, session=db)
     except ParametricDesignError as exc:
         # 503 when LLM unavailable, 400 when theme is unknown / inputs unusable.
         msg = str(exc)

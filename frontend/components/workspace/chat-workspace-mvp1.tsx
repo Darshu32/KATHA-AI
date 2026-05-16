@@ -76,6 +76,7 @@ export default function ChatWorkspaceMvp1() {
     setChatMode,
     toggleSidebar,
     deleteConversation,
+    mergeBrief,
   } = useChatStore();
 
   const notesPanelOpen = useNotesStore((s) => s.notesPanelOpen);
@@ -166,6 +167,18 @@ export default function ChatWorkspaceMvp1() {
                       | "other") ?? "other",
                 })),
               });
+              // BRD §1A — fold any brief snapshot from this Deep
+              // response into the conversation. The store no-ops when
+              // ``brief`` is null (i.e. the user was asking a knowledge
+              // question, not briefing a project), so this is safe to
+              // call unconditionally.
+              if (convoId && data.mode === "deep") {
+                mergeBrief(convoId, {
+                  brief: data.brief,
+                  status: data.brief_status,
+                  missing: data.brief_missing,
+                });
+              }
               // Deep Mode answers become auto-saved notes, scoped to
               // the originating conversation. The persist hook syncs
               // the new section to the server.
@@ -258,6 +271,7 @@ export default function ChatWorkspaceMvp1() {
       chatMode,
       createConversation,
       isStreaming,
+      mergeBrief,
       setStreaming,
       updateLastMessageFull,
     ],
@@ -357,7 +371,7 @@ function TopBar({ onToggleSidebar }: { onToggleSidebar: () => void }) {
             href="/chat"
             className="text-[1.05rem] text-ink-deep tracking-tight font-semibold leading-none"
           >
-            Katha
+            KATHA AI
           </Link>
         </div>
         <nav className="flex items-center gap-2">
@@ -893,7 +907,7 @@ function AssistantMessage({
     <div id={`msg-${message.id}`} className="anim-fade-in group/msg scroll-mt-20">
       <div className="mb-2 flex items-center justify-between">
         <span className="font-mono text-[11px] tracking-tagged uppercase text-ink-mute">
-          Katha
+          KATHA AI
         </span>
         {/* Suppress toolbar while the assistant is still streaming —
             Copy/Save on a half-finished message gives garbage. */}
@@ -1042,7 +1056,7 @@ function PromptInput({
                 ? "Ask one thing…"
                 : mode === "deep"
                 ? "Open a discussion. Tell me what you're working on…"
-                : "Message Katha…"
+                : "Message KATHA AI…"
             }
             rows={1}
             onKeyDown={(e) => {

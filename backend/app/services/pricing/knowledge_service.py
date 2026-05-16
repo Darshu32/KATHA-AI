@@ -72,6 +72,227 @@ _DEFAULTS_INR: dict[str, tuple[float, float]] = {
 }
 
 
+async def load_pricing_bands(
+    session: AsyncSession,
+    *,
+    when: Optional[datetime] = None,
+    defaults: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Pre-load the BRD Layer 4B pricing-buildup bands from versioned
+    ``cost_factors``.
+
+    Returns a dict shaped for the ``pricing_brd`` slot in
+    :func:`pricing_service.build_pricing_knowledge`:
+
+    ``{
+        "manufacturer_margin_pct_by_volume": {one_off, small_batch, ...},
+        "designer_margin_pct_band": [25, 50],
+        "retail_markup_pct_band":   [40, 100],
+        "customization_premium_pct_by_level": {none, light_finish, ...},
+        "customization_premium_pct_band":     [10, 25],
+        "profit_margin_pct_by_segment":       {mass_market, luxury},
+    }``
+
+    Falls back to caller-supplied defaults per missing key/sub-key.
+    """
+    defaults = defaults or {}
+    flat = await load_cost_factor_bands(
+        session,
+        [
+            "designer_margin_pct",
+            "retail_markup_pct",
+            "customization_premium_pct",
+        ],
+        defaults={
+            "designer_margin_pct": tuple(
+                defaults.get("designer_margin_pct_band") or (25.0, 50.0)
+            ),
+            "retail_markup_pct": tuple(
+                defaults.get("retail_markup_pct_band") or (40.0, 100.0)
+            ),
+            "customization_premium_pct": tuple(
+                defaults.get("customization_premium_pct_band") or (10.0, 25.0)
+            ),
+        },
+        when=when,
+    )
+    mfg_margin = await load_namespaced_factor_bands(
+        session, "manufacturer_margin_pct", when=when
+    )
+    if not mfg_margin and "manufacturer_margin_pct_by_volume" in defaults:
+        mfg_margin = {
+            k: list(v)
+            for k, v in defaults["manufacturer_margin_pct_by_volume"].items()
+        }
+    cust_premium = await load_namespaced_factor_bands(
+        session, "customization_premium_pct", when=when
+    )
+    if not cust_premium and "customization_premium_pct_by_level" in defaults:
+        cust_premium = {
+            k: list(v)
+            for k, v in defaults["customization_premium_pct_by_level"].items()
+        }
+    profit = await load_namespaced_factor_bands(
+        session, "profit_margin_pct", when=when
+    )
+    if not profit and "profit_margin_pct_by_segment" in defaults:
+        profit = {
+            k: list(v)
+            for k, v in defaults["profit_margin_pct_by_segment"].items()
+        }
+    return {
+        "manufacturer_margin_pct_by_volume": mfg_margin,
+        "designer_margin_pct_band": flat["designer_margin_pct"],
+        "retail_markup_pct_band": flat["retail_markup_pct"],
+        "customization_premium_pct_by_level": cust_premium,
+        "customization_premium_pct_band": flat["customization_premium_pct"],
+        "profit_margin_pct_by_segment": profit,
+    }
+
+
+async def load_sensitivity_bands(
+    session: AsyncSession,
+    *,
+    when: Optional[datetime] = None,
+    defaults: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Pre-load the BRD constants the sensitivity-analysis LLM cites.
+
+    Returns ``{
+        "manufacturer_margin_pct_by_volume": {...},
+        "workshop_overhead_pct_of_direct": [low, high],
+        "qc_pct_of_labor": [low, high],
+        "packaging_logistics_pct_of_product": [low, high],
+    }``.
+    """
+    defaults = defaults or {}
+    flat = await load_cost_factor_bands(
+        session,
+        [
+            "workshop_overhead_pct_of_direct",
+            "qc_pct_of_labor",
+            "packaging_logistics_pct_of_product",
+        ],
+        defaults={
+            k: tuple(defaults.get(k) or _DEFAULTS_PCT[k])
+            for k in (
+                "workshop_overhead_pct_of_direct",
+                "qc_pct_of_labor",
+                "packaging_logistics_pct_of_product",
+            )
+        },
+        when=when,
+    )
+    mfg_margin = await load_namespaced_factor_bands(
+        session, "manufacturer_margin_pct", when=when
+    )
+    if not mfg_margin and "manufacturer_margin_pct_by_volume" in defaults:
+        mfg_margin = {
+            k: list(v)
+            for k, v in defaults["manufacturer_margin_pct_by_volume"].items()
+        }
+    return {
+        "manufacturer_margin_pct_by_volume": mfg_margin,
+        "workshop_overhead_pct_of_direct": flat["workshop_overhead_pct_of_direct"],
+        "qc_pct_of_labor": flat["qc_pct_of_labor"],
+        "packaging_logistics_pct_of_product": flat[
+            "packaging_logistics_pct_of_product"
+        ],
+    }
+
+
+async def load_labor_rate_bands(
+    session: AsyncSession,
+    *,
+    when: Optional[datetime] = None,
+    defaults: Optional[dict[str, tuple[float, float]]] = None,
+) -> dict[str, list[float]]:
+    """Return ``{trade: [low, high]}`` for all active labor rates.
+
+    Reads from versioned ``labor_rates`` rows so a price update flows
+    through every BRD-citing LLM prompt (cost engine, parametric design,
+    manufacturing spec, knowledge integration) without code changes.
+    Falls back to a caller-supplied default per trade when the row is
+    missing — keeps dev environments running on the seed values.
+    """
+    when = when or datetime.now(timezone.utc)
+    labor_repo = LaborRateRepository(session)
+    rows = await labor_repo.list_active(when=when)
+    out: dict[str, list[float]] = {
+        r["trade"]: [
+            float(r["rate_inr_per_hour_low"]),
+            float(r["rate_inr_per_hour_high"]),
+        ]
+        for r in rows
+    }
+    if defaults:
+        for trade, (lo, hi) in defaults.items():
+            out.setdefault(trade, [float(lo), float(hi)])
+    return out
+
+
+async def load_namespaced_factor_bands(
+    session: AsyncSession,
+    prefix: str,
+    *,
+    when: Optional[datetime] = None,
+) -> dict[str, list[float]]:
+    """Return ``{sub_key: [low, high]}`` for all rows whose ``factor_key``
+    matches ``{prefix}.{sub_key}``.
+
+    Used for grouped bands like ``manufacturer_margin_pct.*`` and
+    ``customization_premium_pct.*`` where each level has its own row.
+    """
+    when = when or datetime.now(timezone.utc)
+    factor_repo = CostFactorRepository(session)
+    rows = await factor_repo.list_active(when=when)
+    out: dict[str, list[float]] = {}
+    needle = f"{prefix}."
+    for r in rows:
+        k = r["factor_key"]
+        if not k.startswith(needle):
+            continue
+        sub = k[len(needle):]
+        if not sub or "." in sub:
+            continue
+        out[sub] = [float(r["value_low"]), float(r["value_high"])]
+    return out
+
+
+async def load_cost_factor_bands(
+    session: AsyncSession,
+    keys: list[str],
+    *,
+    when: Optional[datetime] = None,
+    defaults: Optional[dict[str, tuple[float, float]]] = None,
+) -> dict[str, list[float]]:
+    """Return ``{key: [low, high]}`` for the requested factor keys.
+
+    Reads from versioned ``cost_factors`` rows so a price edit through
+    the admin UI flows into every consumer (cost engine + cost-breakdown
+    LLM + material-spec LLM). Falls back to a per-key default tuple when
+    the row is missing — same defensive pattern as
+    :func:`build_pricing_knowledge` so a fresh dev DB doesn't break the
+    flow before seed rows land.
+    """
+    when = when or datetime.now(timezone.utc)
+    factor_repo = CostFactorRepository(session)
+    rows = await factor_repo.list_active(when=when)
+    by_key: dict[str, dict[str, Any]] = {r["factor_key"]: r for r in rows}
+
+    fallback = {**_DEFAULTS_PCT, **_DEFAULTS_INR, **(defaults or {})}
+    out: dict[str, list[float]] = {}
+    for k in keys:
+        row = by_key.get(k)
+        if row is not None:
+            out[k] = [float(row["value_low"]), float(row["value_high"])]
+        elif k in fallback:
+            lo, hi = fallback[k]
+            out[k] = [float(lo), float(hi)]
+        # else: omitted — caller can decide how to handle missing keys
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Public API
 # ─────────────────────────────────────────────────────────────────────

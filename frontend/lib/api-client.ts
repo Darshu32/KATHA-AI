@@ -156,6 +156,63 @@ export const themes = {
     request<{ themes: ThemeDef[]; count: number }>("/themes"),
 };
 
+// ── Building Standards (BRD §1B catalogue, public read-only) ──────────────
+
+export interface StandardRow {
+  slug: string;
+  category: string;
+  subcategory: string | null;
+  jurisdiction: string;
+  display_name: string;
+  notes: string | null;
+  data: Record<string, unknown>;
+  source_section: string | null;
+  source_doc: string | null;
+}
+
+export const standards = {
+  /** List authoritative standards. `category` defaults to `space`. */
+  list: (params: { category?: string; segment?: string; jurisdiction?: string } = {}) => {
+    const qs = new URLSearchParams();
+    qs.set("category", params.category ?? "space");
+    if (params.segment) qs.set("segment", params.segment);
+    if (params.jurisdiction) qs.set("jurisdiction", params.jurisdiction);
+    return request<{
+      standards: StandardRow[];
+      count: number;
+      filter: { category: string; segment: string | null; jurisdiction: string };
+    }>(`/standards?${qs.toString()}`);
+  },
+};
+
+// ── Design Brief (BRD §1A) ────────────────────────────────────────────────
+
+export interface BriefIntakePayload {
+  project_type?: Record<string, unknown>;
+  theme?: Record<string, unknown>;
+  space?: Record<string, unknown>;
+  requirements?: Record<string, unknown>;
+  regulatory?: Record<string, unknown>;
+  notes?: string;
+}
+
+export interface BriefIntakeResponse {
+  brief_id: string;
+  status: string;
+  project_type: Record<string, unknown>;
+  theme: Record<string, unknown>;
+  space: Record<string, unknown>;
+  requirements: Record<string, unknown>;
+  regulatory: Record<string, unknown>;
+  warnings: string[];
+}
+
+export const brief = {
+  /** Validate + normalise a 5-section brief (BRD §1A). */
+  intake: (payload: BriefIntakePayload) =>
+    request<BriefIntakeResponse>("/brief/intake", "POST", payload),
+};
+
 // ── Image generation (Nano Banana / Gemini) ───────────────────────────────
 
 export interface ImageGenerateResponse {
@@ -186,6 +243,28 @@ export const images = {
 
 // ── Chat (Streaming) ──────────────────────────────────────────────────────
 
+// BRD §1A — 5-section design brief progressively captured during Deep-mode chat.
+// The backend prompt fills only what the user has actually said; missing fields
+// remain absent. Status maps each section to "pending" / "partial" / "confirmed".
+export type BriefSectionStatus = "pending" | "partial" | "confirmed";
+
+export interface BriefPayload {
+  project_type?: Record<string, unknown>;
+  theme?: Record<string, unknown>;
+  space?: Record<string, unknown>;
+  requirements?: Record<string, unknown>;
+  regulatory?: Record<string, unknown>;
+  notes?: string;
+}
+
+export interface BriefStatus {
+  project_type?: BriefSectionStatus;
+  theme?: BriefSectionStatus;
+  space?: BriefSectionStatus;
+  requirements?: BriefSectionStatus;
+  regulatory?: BriefSectionStatus;
+}
+
 export interface ChatStreamEvent {
   type: "token" | "done" | "error";
   content?: string;
@@ -195,6 +274,9 @@ export interface ChatStreamEvent {
   youtube_query?: string | null;
   research_query?: string | null;
   reference_links?: Array<{ title: string; url: string; type: string }>;
+  brief?: BriefPayload | null;
+  brief_status?: BriefStatus | null;
+  brief_missing?: string[];
   mode?: string;
 }
 
@@ -211,6 +293,9 @@ export interface ChatDoneData {
   youtube_query: string | null;
   research_query: string | null;
   reference_links: Array<{ title: string; url: string; type: string }>;
+  brief: BriefPayload | null;
+  brief_status: BriefStatus | null;
+  brief_missing: string[];
   mode: string;
 }
 
@@ -281,6 +366,9 @@ export const chat = {
                 youtube_query: event.youtube_query ?? null,
                 research_query: event.research_query ?? null,
                 reference_links: event.reference_links ?? [],
+                brief: event.brief ?? null,
+                brief_status: event.brief_status ?? null,
+                brief_missing: event.brief_missing ?? [],
                 mode: event.mode ?? "quick",
               });
             } else if (event.type === "error") {
@@ -482,6 +570,16 @@ export const design = {
       estimate: unknown;
       image_url: string | null;
       objects_bbox: Array<{ id: string; name: string; type: string; x: number; y: number; w: number; h: number }>;
+      // BRD §1B / §9.1 — validation report runs inline with the
+      // generation pipeline so the Problems terminal tab has real
+      // content from the very first render.
+      validation?: import("./types").ValidationReport;
+      // BRD §1B MEP — system-cost rollup (HVAC + electrical + plumbing
+      // + fire-fighting). null when the graph has no usable room area.
+      mep_cost_estimate?: import("./types").MepCostEstimate | null;
+      // BRD §1B Building Code Integration — pre-rolled compliance
+      // summary (fail / warn / info) for the right sidebar.
+      code_compliance_summary?: import("./types").CodeComplianceEntry[];
       status: string;
     }>(
       `/projects/${projectId}/generate`, "POST", body, token,
@@ -495,6 +593,9 @@ export const design = {
       estimate: unknown;
       image_url: string | null;
       objects_bbox: Array<{ id: string; name: string; type: string; x: number; y: number; w: number; h: number }>;
+      validation?: import("./types").ValidationReport;
+      mep_cost_estimate?: import("./types").MepCostEstimate | null;
+      code_compliance_summary?: import("./types").CodeComplianceEntry[];
       status: string;
     }>(
       `/projects/${projectId}/edit`, "POST", body, token,
@@ -508,6 +609,9 @@ export const design = {
       estimate: unknown;
       image_url: string | null;
       objects_bbox: Array<{ id: string; name: string; type: string; x: number; y: number; w: number; h: number }>;
+      validation?: import("./types").ValidationReport;
+      mep_cost_estimate?: import("./types").MepCostEstimate | null;
+      code_compliance_summary?: import("./types").CodeComplianceEntry[];
       status: string;
     }>(
       `/projects/${projectId}/theme`, "POST", body, token,

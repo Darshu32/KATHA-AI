@@ -31,7 +31,7 @@ from app.services.diagrams import (
     list_available as list_available_diagrams,
 )
 from app.services.exporters import available_formats, export as export_bundle
-from app.services.knowledge_validator import validate_design_graph
+from app.services.knowledge_validator import validate_design_graph_async
 from app.services.recommendations import recommend as build_recommendations
 from app.services.specs import build_spec_bundle
 
@@ -223,7 +223,7 @@ async def validate_route(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
 
     graph = version.graph_data or {}
-    report = validate_design_graph(graph, segment=segment)
+    report = await validate_design_graph_async(graph, segment=segment, session=db)
     recommendations = build_recommendations(graph)
     return {
         "version": version.version,

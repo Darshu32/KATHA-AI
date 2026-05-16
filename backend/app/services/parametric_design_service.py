@@ -29,8 +29,14 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
+from app.services.pricing.knowledge_service import load_labor_rate_bands
+from app.services.standards.variations_lookup import (
+    variations_for_item as _variations_for_item_db,
+)
+from app.services.themes import get_theme as _get_theme_db
 from app.knowledge import (
     costing,
     ergonomics,
@@ -95,9 +101,36 @@ class ParametricDesignRequest(BaseModel):
 # ── Knowledge slice — the textbook page we inject ───────────────────────────
 
 
-def build_parametric_knowledge(req: ParametricDesignRequest) -> dict[str, Any]:
+def _materials_in_use_for(
+    req: ParametricDesignRequest,
+    *,
+    theme_pack: dict[str, Any] | None = None,
+) -> list[str]:
+    """Resolve the 2 primary materials the LLM should reason about for
+    swap-candidate lookup. Used by both the sync builder and the async
+    entry point so the variations payload is consistent across paths.
+
+    ``theme_pack`` may be passed when the caller pre-loaded the rule
+    pack from DB; otherwise falls back to the sync legacy literal.
+    """
+    pack = theme_pack if theme_pack is not None else (themes.get(req.theme) or {})
+    palette = pack.get("material_palette", {})
+    primaries = palette.get("primary", [])
+    custom = req.requirements.custom_inputs if req.requirements.custom_inputs else None
+    if (not primaries) and custom and custom.custom_materials:
+        primaries = list(custom.custom_materials)
+    return primaries[:2] if primaries else []
+
+
+def build_parametric_knowledge(
+    req: ParametricDesignRequest,
+    *,
+    labor_rates_inr_hour: dict[str, list[float]] | None = None,
+    item_variations: dict[str, Any] | None = None,
+    theme_pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Pull the theme + ergonomic + material + variation slices the LLM needs."""
-    pack = themes.get(req.theme) or {}
+    pack = theme_pack if theme_pack is not None else (themes.get(req.theme) or {})
     cat_table = {
         "chair": ergonomics.CHAIRS,
         "table": ergonomics.TABLES,
@@ -105,22 +138,27 @@ def build_parametric_knowledge(req: ParametricDesignRequest) -> dict[str, Any]:
         "storage": ergonomics.STORAGE,
     }.get(req.piece_category.lower(), {})
     ergo_spec = cat_table.get(req.piece_item, {})
-
     palette = pack.get("material_palette", {})
-    primaries = palette.get("primary", [])
 
-    # Custom theme: prefer client-supplied materials over the (empty) palette.
+    materials_in_use = _materials_in_use_for(req, theme_pack=pack)
+    # `primaries` is the candidate-restricted material list the legacy
+    # builder used to look up WOOD envelopes — same source as
+    # materials_in_use but kept distinct so the WOOD candidate dict
+    # below reads against every primary, not just the top 2.
+    primaries = palette.get("primary") or []
     custom = req.requirements.custom_inputs if req.requirements.custom_inputs else None
     if (not primaries) and custom and custom.custom_materials:
         primaries = list(custom.custom_materials)
 
-    materials_in_use = primaries[:2] if primaries else []
-
-    item_variations = variations.variations_for_item(
-        category=req.piece_category,
-        item=req.piece_item,
-        materials_in_use=materials_in_use,
-    )
+    # Caller may pass a pre-loaded DB-backed envelope; fall back to the
+    # legacy Python-literal helper when none supplied (defensive — keeps
+    # dev environments running before the seed migration lands).
+    if item_variations is None:
+        item_variations = variations.variations_for_item(
+            category=req.piece_category,
+            item=req.piece_item,
+            materials_in_use=materials_in_use,
+        )
 
     custom_payload = None
     if custom is not None:
@@ -172,7 +210,9 @@ def build_parametric_knowledge(req: ParametricDesignRequest) -> dict[str, Any]:
         "variations": item_variations,
         "cost_basis": {
             "material": costing.MATERIAL_COST_BRD_SPEC,
-            "labor_inr_hour": costing.LABOR_RATES_INR_PER_HOUR,
+            "labor_inr_hour": labor_rates_inr_hour or {
+                k: list(v) for k, v in costing.LABOR_RATES_INR_PER_HOUR.items()
+            },
             "overhead_margin": costing.OVERHEAD_MARGIN_BRD_SPEC,
             "pricing_formula": costing.PRICING_FORMULA_BRD["formula"],
         },
@@ -529,7 +569,11 @@ class ParametricDesignError(RuntimeError):
     """Raised when the LLM pipeline cannot produce a grounded parametric spec."""
 
 
-async def generate_parametric_design(req: ParametricDesignRequest) -> dict[str, Any]:
+async def generate_parametric_design(
+    req: ParametricDesignRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     """Run the LLM with theme + BRD knowledge injected; validate the output."""
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise ParametricDesignError(
@@ -537,7 +581,39 @@ async def generate_parametric_design(req: ParametricDesignRequest) -> dict[str, 
             "live LLM call; no static fallback is served."
         )
 
-    knowledge = build_parametric_knowledge(req)
+    if session is not None:
+        theme_pack = await _get_theme_db(session, req.theme)
+        materials_in_use = _materials_in_use_for(req, theme_pack=theme_pack)
+        labor_bands = await load_labor_rate_bands(
+            session, defaults=costing.LABOR_RATES_INR_PER_HOUR
+        )
+        item_variations = await _variations_for_item_db(
+            session,
+            category=req.piece_category,
+            item=req.piece_item,
+            materials_in_use=materials_in_use,
+        )
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            theme_pack = await _get_theme_db(own_session, req.theme)
+            materials_in_use = _materials_in_use_for(req, theme_pack=theme_pack)
+            labor_bands = await load_labor_rate_bands(
+                own_session, defaults=costing.LABOR_RATES_INR_PER_HOUR
+            )
+            item_variations = await _variations_for_item_db(
+                own_session,
+                category=req.piece_category,
+                item=req.piece_item,
+                materials_in_use=materials_in_use,
+            )
+    knowledge = build_parametric_knowledge(
+        req,
+        labor_rates_inr_hour=labor_bands,
+        item_variations=item_variations,
+        theme_pack=theme_pack,
+    )
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise ParametricDesignError(
             f"Unknown theme '{req.theme}'. No parametric rule pack available to ground generation."

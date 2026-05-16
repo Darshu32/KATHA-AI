@@ -37,9 +37,12 @@ from typing import Any
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.config import get_settings
 from app.knowledge import mep as mep_kb
 from app.knowledge import regional_materials, themes
+from app.services.themes import get_theme as _get_theme_db
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -189,7 +192,11 @@ def _plumbing_system_for(use: str) -> str:
     } else "plumbing_commercial"
 
 
-def build_mep_spec_knowledge(req: MEPSpecRequest) -> dict[str, Any]:
+def build_mep_spec_knowledge(
+    req: MEPSpecRequest,
+    *,
+    theme_pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     use = _normalise_use(req.room_use_type)
     length = req.dimensions.length_m
     width = req.dimensions.width_m
@@ -247,7 +254,10 @@ def build_mep_spec_knowledge(req: MEPSpecRequest) -> dict[str, Any]:
     outlet_pick = mep_kb.outlet_estimate(use, perimeter) if perimeter else {}
     task_recipe = mep_kb.TASK_LIGHTING_RECIPE.get(use) or []
 
-    pack = themes.get(req.theme) if req.theme else None
+    if theme_pack is not None:
+        pack = theme_pack
+    else:
+        pack = themes.get(req.theme) if req.theme else None
 
     hvac_system = _hvac_system_for(use, area)
     electrical_system = _electrical_system_for(use)
@@ -1907,7 +1917,11 @@ class MEPSpecError(RuntimeError):
     """Raised when the LLM MEP-spec stage cannot produce a grounded sheet."""
 
 
-async def generate_mep_spec(req: MEPSpecRequest) -> dict[str, Any]:
+async def generate_mep_spec(
+    req: MEPSpecRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise MEPSpecError(
             "OpenAI API key is not configured. The MEP-spec stage requires "
@@ -1931,7 +1945,16 @@ async def generate_mep_spec(req: MEPSpecRequest) -> dict[str, Any]:
             f"Pick from: {', '.join(sorted(mep_kb.DFU_PER_FIXTURE.keys()))}."
         )
 
-    knowledge = build_mep_spec_knowledge(req)
+    if session is not None:
+        theme_pack = await _get_theme_db(session, req.theme) if req.theme else None
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            theme_pack = (
+                await _get_theme_db(own_session, req.theme) if req.theme else None
+            )
+    knowledge = build_mep_spec_knowledge(req, theme_pack=theme_pack)
     user_message = _user_message(req, knowledge)
     client = _client_instance()
 

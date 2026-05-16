@@ -17,8 +17,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import get_db
 from app.knowledge import (
     costing,
     ergonomics,
@@ -26,10 +28,10 @@ from app.knowledge import (
     manufacturing,
     materials,
     regional_materials,
-    space_standards,
     structural,
     themes,
 )
+from app.services.standards.knowledge_service import list_standards_by_category
 from app.services.knowledge_integration_service import (
     PIECE_COST_BAND_INR_PER_M2,
     _TOLERANCE_FLOORS_MM,
@@ -42,6 +44,7 @@ from app.services.knowledge_integration_service import (
     build_knowledge_integration_slice,
     generate_knowledge_application,
 )
+from app.services.pricing.knowledge_service import load_labor_rate_bands
 from app.services.recommendations_service import (
     RecommendationsError,
     RecommendationsRequest,
@@ -55,15 +58,33 @@ router = APIRouter(prefix="/knowledge", tags=["knowledge"])
 
 
 @router.get("/events")
-async def list_events() -> dict:
-    """Catalogue of event kinds + the vocabulary the payload may use."""
+async def list_events(db: AsyncSession = Depends(get_db)) -> dict:
+    """Catalogue of event kinds + the vocabulary the payload may use.
+
+    Room-type vocabularies (residential / commercial / hospitality) are
+    now sourced from the ``building_standards`` table (Stage 3B) — the
+    old Python-literal ``space_standards`` module is the deprecated
+    seed source, not the runtime authority.
+    """
+    space_rows = await list_standards_by_category(
+        db, category="space", jurisdiction="india_nbc"
+    )
+    _labor_bands = await load_labor_rate_bands(
+        db, defaults=costing.LABOR_RATES_INR_PER_HOUR
+    )
+
+    def _slugs_for(subcategory: str) -> list[str]:
+        return sorted(
+            r["slug"] for r in space_rows if r.get("subcategory") == subcategory
+        )
+
     return {
         "event_kinds": list(EVENT_KINDS_IN_SCOPE),
         "vocab": {
             "themes_known": themes.list_names(),
-            "room_types_residential": sorted(list(space_standards.RESIDENTIAL.keys())),
-            "room_types_commercial": sorted(list(space_standards.COMMERCIAL.keys())),
-            "room_types_hospitality": sorted(list(space_standards.HOSPITALITY.keys())),
+            "room_types_residential": _slugs_for("residential_room"),
+            "room_types_commercial": _slugs_for("commercial_room"),
+            "room_types_hospitality": _slugs_for("hospitality_room"),
             "wood_species_known": sorted(list(materials.WOOD.keys())),
             "metals_known": sorted(list(materials.METALS.keys())),
             "finishes_known": sorted(list(materials.FINISHES.keys())),
@@ -77,7 +98,7 @@ async def list_events() -> dict:
             "complexity_levels_in_scope": ["simple", "moderate", "complex", "highly_complex"],
             "waste_factor_pct_band_brd": list(costing.WASTE_FACTOR_PCT),
             "finish_pct_of_material_brd": list(costing.FINISH_COST_PCT_OF_MATERIAL),
-            "labor_trades_known": sorted(list(costing.LABOR_RATES_INR_PER_HOUR.keys())),
+            "labor_trades_known": sorted(list(_labor_bands.keys())),
             "cities_known": sorted(list(regional_materials.CITY_PRICE_INDEX.keys())),
             "volume_tiers_known": list(costing.MANUFACTURER_MARGIN_PCT_BY_VOLUME.keys()),
             "load_use_types_known": sorted(list(structural.LIVE_LOADS_KN_PER_M2.keys())),
@@ -90,10 +111,18 @@ async def list_events() -> dict:
 
 
 @router.post("/apply/preview")
-async def apply_preview(payload: KnowledgeIntegrationRequest) -> dict:
+async def apply_preview(
+    payload: KnowledgeIntegrationRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Deterministic slice only — instant inline validation, no LLM call."""
     try:
-        knowledge = build_knowledge_integration_slice(payload)
+        labor_bands = await load_labor_rate_bands(
+            db, defaults=costing.LABOR_RATES_INR_PER_HOUR
+        )
+        knowledge = build_knowledge_integration_slice(
+            payload, labor_rates=labor_bands
+        )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -139,10 +168,13 @@ async def recommendations_endpoint(payload: RecommendationsRequest) -> dict:
 
 
 @router.post("/apply")
-async def apply_event(payload: KnowledgeIntegrationRequest) -> dict:
+async def apply_event(
+    payload: KnowledgeIntegrationRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM knowledge-integration author + return the structured report."""
     try:
-        return await generate_knowledge_application(payload)
+        return await generate_knowledge_application(payload, session=db)
     except KnowledgeIntegrationError as exc:
         msg = str(exc)
         if msg.startswith("Unknown event_kind"):

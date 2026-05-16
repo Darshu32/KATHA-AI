@@ -31,8 +31,14 @@ from typing import Any
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
 
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.config import get_settings
 from app.knowledge import costing
+from app.services.pricing.knowledge_service import (
+    load_cost_factor_bands,
+    load_namespaced_factor_bands,
+)
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -109,8 +115,69 @@ def _extract_components(req: CostBreakdownRequest) -> dict[str, float]:
     }
 
 
-def build_cost_breakdown_knowledge(req: CostBreakdownRequest) -> dict[str, Any]:
+_FLAT_COST_BAND_KEYS: tuple[str, ...] = (
+    "waste_factor_pct",
+    "finish_cost_pct_of_material",
+    "workshop_overhead_pct_of_direct",
+    "qc_pct_of_labor",
+    "packaging_logistics_pct_of_product",
+    "designer_margin_pct",
+    "retail_markup_pct",
+)
+
+
+async def load_cost_breakdown_bands(session: AsyncSession) -> dict[str, Any]:
+    """Pre-load DB-backed cost-factor bands for the cost-breakdown LLM.
+
+    Returns a dict shaped to drop straight into ``brd_constants``.
+    Falls back to the seed defaults (matching ``app.knowledge.costing``)
+    per-key when a row is missing, so a fresh dev DB never crashes the
+    flow.
+    """
+    flat = await load_cost_factor_bands(
+        session,
+        list(_FLAT_COST_BAND_KEYS),
+        defaults={
+            "waste_factor_pct": costing.WASTE_FACTOR_PCT,
+            "finish_cost_pct_of_material": costing.FINISH_COST_PCT_OF_MATERIAL,
+            "workshop_overhead_pct_of_direct": costing.WORKSHOP_OVERHEAD_PCT_OF_DIRECT,
+            "qc_pct_of_labor": costing.QC_PCT_OF_LABOR,
+            "packaging_logistics_pct_of_product": (
+                costing.PACKAGING_LOGISTICS_PCT_OF_PRODUCT
+            ),
+            "designer_margin_pct": costing.DESIGNER_MARGIN_PCT,
+            "retail_markup_pct": costing.RETAIL_MARKUP_PCT,
+        },
+    )
+    mfg_margin = await load_namespaced_factor_bands(
+        session, "manufacturer_margin_pct"
+    )
+    if not mfg_margin:
+        mfg_margin = {
+            k: list(v) for k, v in costing.MANUFACTURER_MARGIN_PCT_BY_VOLUME.items()
+        }
+    cust_premium = await load_namespaced_factor_bands(
+        session, "customization_premium_pct"
+    )
+    if not cust_premium:
+        cust_premium = {
+            k: list(v)
+            for k, v in costing.CUSTOMIZATION_PREMIUM_PCT_BY_LEVEL.items()
+        }
+    return {
+        **flat,
+        "manufacturer_margin_pct_by_volume": mfg_margin,
+        "customization_premium_pct_by_level": cust_premium,
+    }
+
+
+def build_cost_breakdown_knowledge(
+    req: CostBreakdownRequest,
+    *,
+    cost_bands: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     components = _extract_components(req)
+    bands = cost_bands or {}
     return {
         "project": {
             "name": req.project_name,
@@ -150,19 +217,44 @@ def build_cost_breakdown_knowledge(req: CostBreakdownRequest) -> dict[str, Any]:
             ),
         },
         "brd_constants": {
-            "waste_factor_pct": list(costing.WASTE_FACTOR_PCT),
-            "finish_cost_pct_of_material": list(costing.FINISH_COST_PCT_OF_MATERIAL),
-            "workshop_overhead_pct_of_direct": list(costing.WORKSHOP_OVERHEAD_PCT_OF_DIRECT),
-            "qc_pct_of_labor": list(costing.QC_PCT_OF_LABOR),
-            "packaging_logistics_pct_of_product": list(costing.PACKAGING_LOGISTICS_PCT_OF_PRODUCT),
-            "manufacturer_margin_pct_by_volume": {
-                k: list(v) for k, v in costing.MANUFACTURER_MARGIN_PCT_BY_VOLUME.items()
-            },
-            "designer_margin_pct_band": list(costing.DESIGNER_MARGIN_PCT),
-            "retail_markup_pct_band": list(costing.RETAIL_MARKUP_PCT),
-            "customization_premium_pct_by_level": {
-                k: list(v) for k, v in costing.CUSTOMIZATION_PREMIUM_PCT_BY_LEVEL.items()
-            },
+            "waste_factor_pct": bands.get(
+                "waste_factor_pct", list(costing.WASTE_FACTOR_PCT)
+            ),
+            "finish_cost_pct_of_material": bands.get(
+                "finish_cost_pct_of_material",
+                list(costing.FINISH_COST_PCT_OF_MATERIAL),
+            ),
+            "workshop_overhead_pct_of_direct": bands.get(
+                "workshop_overhead_pct_of_direct",
+                list(costing.WORKSHOP_OVERHEAD_PCT_OF_DIRECT),
+            ),
+            "qc_pct_of_labor": bands.get(
+                "qc_pct_of_labor", list(costing.QC_PCT_OF_LABOR)
+            ),
+            "packaging_logistics_pct_of_product": bands.get(
+                "packaging_logistics_pct_of_product",
+                list(costing.PACKAGING_LOGISTICS_PCT_OF_PRODUCT),
+            ),
+            "manufacturer_margin_pct_by_volume": bands.get(
+                "manufacturer_margin_pct_by_volume",
+                {
+                    k: list(v)
+                    for k, v in costing.MANUFACTURER_MARGIN_PCT_BY_VOLUME.items()
+                },
+            ),
+            "designer_margin_pct_band": bands.get(
+                "designer_margin_pct", list(costing.DESIGNER_MARGIN_PCT)
+            ),
+            "retail_markup_pct_band": bands.get(
+                "retail_markup_pct", list(costing.RETAIL_MARKUP_PCT)
+            ),
+            "customization_premium_pct_by_level": bands.get(
+                "customization_premium_pct_by_level",
+                {
+                    k: list(v)
+                    for k, v in costing.CUSTOMIZATION_PREMIUM_PCT_BY_LEVEL.items()
+                },
+            ),
         },
     }
 
@@ -548,7 +640,11 @@ class CostBreakdownError(RuntimeError):
     """Raised when the LLM cost breakdown stage cannot produce a grounded sheet."""
 
 
-async def generate_cost_breakdown(req: CostBreakdownRequest) -> dict[str, Any]:
+async def generate_cost_breakdown(
+    req: CostBreakdownRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise CostBreakdownError(
             "OpenAI API key is not configured. The cost breakdown stage requires "
@@ -568,7 +664,17 @@ async def generate_cost_breakdown(req: CostBreakdownRequest) -> dict[str, Any]:
             "cannot compute cost breakdown."
         )
 
-    knowledge = build_cost_breakdown_knowledge(req)
+    # Pre-load BRD cost bands from versioned cost_factors so any admin
+    # edit flows through to the LLM prompt. Falls back to seed defaults
+    # per-key if rows are missing.
+    if session is not None:
+        bands = await load_cost_breakdown_bands(session)
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            bands = await load_cost_breakdown_bands(own_session)
+    knowledge = build_cost_breakdown_knowledge(req, cost_bands=bands)
     user_message = _user_message(req, knowledge)
     client = _client_instance()
 

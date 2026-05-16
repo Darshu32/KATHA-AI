@@ -8,13 +8,28 @@ table. The cost engine reads them via
 ``app.repositories.pricing.MaterialPriceRepository`` and accepts admin
 updates through the Stage 1 pricing endpoints.
 
-**Physical properties** (density, MOR, MOE, finish_options, durability,
-colourfastness) remain authoritative HERE — they're not market-volatile.
-Stage 3 migrates the remaining cost-related consumers; physical-property
-consumers stay on this module.
+**Physical properties** (density, MOR, MOE, yield, thickness, rubs,
+colourfastness, finish_options) — fully migrated to DB as of
+migration ``0033_materials_finishes_seed``:
+
+  - migration ``0030`` — wood
+  - migration ``0031`` — metals
+  - migration ``0032`` — upholstery (leather / fabric / foam)
+  - migration ``0033`` — finishes (lacquer / melamine / wax-oil /
+                                   powder coat / anodise)
+
+Rows live in ``building_standards`` (category=``materials``,
+subcategory ``wood`` / ``metal`` / ``leather`` / ``fabric`` /
+``foam`` / ``finish`` / ``brd_band``). DB-backed async lookups in
+:mod:`app.services.standards.materials_lookup` cover every family.
+This module is now a *seed source only* for the BRD §1C materials
+catalogue — runtime services read from DB. Cost still goes through
+``material_prices`` (Stage 1 partial-migration, see note above).
 
 DO NOT update cost fields directly — go through the admin pricing
-endpoints so changes are versioned + audited.
+endpoints so changes are versioned + audited. DO NOT update wood
+fields here — they're seed source only; use ``POST /admin/standards/
+materials/<slug>`` for runtime edits.
 
 ---
 

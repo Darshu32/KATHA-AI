@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { motion, AnimatePresence, useReducedMotion } from "framer-motion";
 import {
   Download,
@@ -10,7 +11,7 @@ import {
   Search,
   X,
 } from "lucide-react";
-import { useChatStore } from "@/lib/store";
+import { useChatStore, useImageGenStore } from "@/lib/store";
 import { useActiveNotebookSections, useNotesStore } from "@/lib/store";
 import {
   downloadTextFile,
@@ -18,7 +19,10 @@ import {
   notebookToMarkdown,
   slugifyFilename,
 } from "@/lib/notes-export";
+import { toastError, useToastStore } from "@/lib/toast-store";
+import { brief as briefApi } from "@/lib/api-client";
 import NotebookView from "./notebook-view";
+import ProjectBriefPanel from "./project-brief-panel";
 
 interface Props {
   isOpen: boolean;
@@ -27,6 +31,7 @@ interface Props {
 
 export default function NotesSidebar({ isOpen, onClose }: Props) {
   const reduced = useReducedMotion();
+  const router = useRouter();
   const {
     searchQuery,
     setSearchQuery,
@@ -39,6 +44,42 @@ export default function NotesSidebar({ isOpen, onClose }: Props) {
   const activeConversation = useChatStore((s) =>
     s.conversations.find((c) => c.id === s.activeConversationId) ?? null,
   );
+  const [handoffPending, setHandoffPending] = useState(false);
+
+  // BRD §1A → §3.6 handoff. When all 5 brief sections are confirmed,
+  // ship the partial brief to the backend for canonicalisation, then
+  // route to the design workspace with the resulting brief_id so it
+  // can seed the first generation.
+  async function handleReadyToDesign() {
+    if (!activeConversation?.brief) return;
+    if (handoffPending) return;
+    setHandoffPending(true);
+    try {
+      const result = await briefApi.intake(activeConversation.brief);
+      // Seed the design workspace store before navigating. We pass the
+      // raw canonical-brief sections (already validated/normalised by
+      // the backend) so the prompt-assembly helper has everything in
+      // a known shape and we don't lose data in transit.
+      useImageGenStore.getState().seedFromBrief(result.brief_id, {
+        project_type: result.project_type,
+        theme: result.theme,
+        space: result.space,
+        requirements: result.requirements,
+        regulatory: result.regulatory,
+      });
+      useToastStore.getState().notify({
+        type: "success",
+        title: "Brief locked in",
+        message: `Switching to design workspace (${result.brief_id.slice(0, 8)}…)`,
+        durationMs: 3500,
+      });
+      router.push(`/design?brief_id=${encodeURIComponent(result.brief_id)}`);
+    } catch (err) {
+      toastError(err, "Could not validate brief");
+    } finally {
+      setHandoffPending(false);
+    }
+  }
 
   // Distinct tags across the active notebook, ordered by frequency
   // (most-used first) then alphabetically. Computing here rather than
@@ -247,6 +288,16 @@ export default function NotesSidebar({ isOpen, onClose }: Props) {
               </div>
             )}
           </div>
+
+          {/* BRD §1A — Project Brief panel pinned above the notebook.
+              Self-hides until the agent captures something. */}
+          <ProjectBriefPanel
+            brief={activeConversation?.brief}
+            status={activeConversation?.briefStatus}
+            missing={activeConversation?.briefMissing}
+            onReadyToDesign={handleReadyToDesign}
+            readyDisabled={handoffPending}
+          />
 
           {/* Content */}
           <NotebookView />

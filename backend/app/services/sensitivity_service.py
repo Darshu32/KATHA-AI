@@ -36,9 +36,11 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import costing
+from app.services.pricing.knowledge_service import load_sensitivity_bands
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -250,7 +252,23 @@ def _build_volume_scenario(units: int, inputs: dict[str, Any]) -> dict[str, Any]
 # ── Knowledge slice ─────────────────────────────────────────────────────────
 
 
-def build_sensitivity_knowledge(req: SensitivityRequest) -> dict[str, Any]:
+_SENSITIVITY_BRD_DEFAULTS: dict[str, Any] = {
+    "manufacturer_margin_pct_by_volume": {
+        k: list(v) for k, v in costing.MANUFACTURER_MARGIN_PCT_BY_VOLUME.items()
+    },
+    "workshop_overhead_pct_of_direct": list(costing.WORKSHOP_OVERHEAD_PCT_OF_DIRECT),
+    "qc_pct_of_labor": list(costing.QC_PCT_OF_LABOR),
+    "packaging_logistics_pct_of_product": list(
+        costing.PACKAGING_LOGISTICS_PCT_OF_PRODUCT
+    ),
+}
+
+
+def build_sensitivity_knowledge(
+    req: SensitivityRequest,
+    *,
+    brd_bands: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     inputs = _extract_inputs(req)
     shock = req.shock_pct
     shock_scenarios = [
@@ -290,14 +308,7 @@ def build_sensitivity_knowledge(req: SensitivityRequest) -> dict[str, Any]:
         "shock_scenarios": shock_scenarios,
         "volumes_requested": list(req.volumes),
         "volume_scenarios": volume_scenarios,
-        "brd_constants": {
-            "manufacturer_margin_pct_by_volume": {
-                k: list(v) for k, v in costing.MANUFACTURER_MARGIN_PCT_BY_VOLUME.items()
-            },
-            "workshop_overhead_pct_of_direct": list(costing.WORKSHOP_OVERHEAD_PCT_OF_DIRECT),
-            "qc_pct_of_labor": list(costing.QC_PCT_OF_LABOR),
-            "packaging_logistics_pct_of_product": list(costing.PACKAGING_LOGISTICS_PCT_OF_PRODUCT),
-        },
+        "brd_constants": brd_bands or _SENSITIVITY_BRD_DEFAULTS,
     }
 
 
@@ -672,7 +683,11 @@ class SensitivityError(RuntimeError):
     """Raised when the LLM sensitivity stage cannot produce a grounded sheet."""
 
 
-async def generate_sensitivity_analysis(req: SensitivityRequest) -> dict[str, Any]:
+async def generate_sensitivity_analysis(
+    req: SensitivityRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise SensitivityError(
             "OpenAI API key is not configured. The sensitivity stage requires "
@@ -696,7 +711,18 @@ async def generate_sensitivity_analysis(req: SensitivityRequest) -> dict[str, An
             f"All volumes must be positive integers; got {bad_volumes}."
         )
 
-    knowledge = build_sensitivity_knowledge(req)
+    if session is not None:
+        bands = await load_sensitivity_bands(
+            session, defaults=_SENSITIVITY_BRD_DEFAULTS
+        )
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            bands = await load_sensitivity_bands(
+                own_session, defaults=_SENSITIVITY_BRD_DEFAULTS
+            )
+    knowledge = build_sensitivity_knowledge(req, brd_bands=bands)
     user_message = _user_message(req, knowledge)
     client = _client_instance()
 

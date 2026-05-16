@@ -36,6 +36,11 @@ class ResponseMetadata:
     youtube_query: str | None = None      # Deep mode — YouTube search for tutorials
     research_query: str | None = None     # Deep mode — Semantic Scholar search
     reference_links: list[dict] = field(default_factory=list)  # Deep mode — AI-provided links
+    # Deep mode — BRD §1A 5-section design brief captured from the conversation.
+    # Present only when the user is briefing a project (not asking a knowledge Q).
+    brief: dict | None = None
+    brief_status: dict | None = None      # {section_name: "pending"|"partial"|"confirmed"}
+    brief_missing: list[str] = field(default_factory=list)  # dotted paths still pending
 
 
 # ── System Prompts ──────────────────────────────────────────────────────────
@@ -100,6 +105,26 @@ Suggest what type of visual output would help the user next — diagram type, mo
 ### 7) Next Workflow Step
 Guide toward the next logical architecture action — generate a floor plan, create a facade mood board, estimate material quantities, etc.
 
+## PROJECT BRIEF CAPTURE (BRD §1A)
+
+If — and only if — the user is briefing a real design project (intent to design/build something specific, not a general knowledge question), capture what they have said into the 5-section BRD design brief and emit it in the `brief` field of the metadata JSON. Never invent values; fill only what the user actually said.
+
+The 5 sections (all keys are optional inside each section — fill what you have):
+
+1. **project_type** — `{type, sub_type, scale}`. type ∈ residential / commercial / hospitality / institutional / retail / office / mixed_use / industrial / custom.
+2. **theme** — `{theme, custom_spec}`. theme ∈ pedestal / contemporary / modern / mid_century_modern / custom. If theme=custom, custom_spec is required.
+3. **space** — `{dimensions: {length, width, height?, unit}, constraints[], site_conditions{orientation, floor_level, access, existing_features[], natural_light, ventilation, noise_context}}`. unit ∈ m / ft.
+4. **requirements** — `{functional_needs[], aesthetic_preferences[], narrative, budget, currency, timeline_weeks}`.
+5. **regulatory** — `{country, state, city, postal_code, building_codes[], climatic_zone, compliance_notes}`. climatic_zone ∈ hot_dry / warm_humid / composite / temperate / cold.
+
+Alongside the brief itself, emit two helper fields:
+
+- **brief_status** — one entry per section: `pending` (not discussed), `partial` (some fields captured, more needed), or `confirmed` (all required fields captured).
+  - Required for `partial → confirmed`: project_type.type; theme.theme (+ custom_spec if custom); space.dimensions.{length,width,unit}; requirements has ≥1 of functional_needs/aesthetic_preferences/narrative; regulatory has country OR city.
+- **brief_missing** — array of dotted paths still pending (e.g. `["space.dimensions.height", "requirements.budget", "regulatory.climatic_zone"]`).
+
+If the user is asking a knowledge question (no project intent), omit `brief`, `brief_status`, and `brief_missing` entirely.
+
 ## OUTPUT RULES
 - Never give generic answers. Always push toward real architecture workflows.
 - Use markdown formatting: headings, bold, bullets, tables where useful.
@@ -110,14 +135,22 @@ Guide toward the next logical architecture action — generate a floor plan, cre
 
 IMPORTANT: At the end of your response, output a JSON block on a new line in this exact format:
 ```json
-{"suggestions": ["suggestion 1", "suggestion 2", "suggestion 3"], "image_prompt": "a detailed prompt to generate an architectural image for this concept", "youtube_query": "YouTube search for tutorial or lecture videos about this topic", "research_query": "academic search terms for finding research papers on this topic", "reference_links": [{"title": "relevant standard or article name", "url": "URL if you know it, otherwise empty string", "type": "article or standard or documentation"}]}
+{"suggestions": ["suggestion 1", "suggestion 2", "suggestion 3"], "image_prompt": "a detailed prompt to generate an architectural image for this concept", "youtube_query": "YouTube search for tutorial or lecture videos about this topic", "research_query": "academic search terms for finding research papers on this topic", "reference_links": [{"title": "relevant standard or article name", "url": "URL if you know it, otherwise empty string", "type": "article or standard or documentation"}], "brief": null, "brief_status": null, "brief_missing": []}
 ```
 Rules for the JSON:
 - **suggestions**: 2-3 natural follow-up actions
 - **image_prompt**: A rich, detailed prompt to generate a custom architectural visualization. Be specific.
 - **youtube_query**: Search terms for finding in-depth tutorial/lecture videos (10-20 min) on this topic
 - **research_query**: Academic search terms for Semantic Scholar (e.g., "shear wall seismic design reinforced concrete")
-- **reference_links**: 1-3 relevant standards, articles, or documentation. Include real URLs you are confident about (IS codes, NBC chapters, ASHRAE standards). Use empty string for URL if unsure."""
+- **reference_links**: 1-3 relevant standards, articles, or documentation. Include real URLs you are confident about (IS codes, NBC chapters, ASHRAE standards). Use empty string for URL if unsure.
+- **brief**: BRD §1A 5-section design brief object (project_type / theme / space / requirements / regulatory). Use `null` if this turn is a knowledge question, not a project briefing.
+- **brief_status**: status map (one of pending / partial / confirmed per section). `null` when brief is null.
+- **brief_missing**: array of dotted field paths still pending (empty if no brief or all confirmed).
+
+Example when the user IS briefing a project ("design a small mid-century office in Mumbai, 8x10m, three workstations"):
+```json
+{"suggestions": ["..."], "image_prompt": "...", "youtube_query": "...", "research_query": "...", "reference_links": [], "brief": {"project_type": {"type": "office", "scale": "small"}, "theme": {"theme": "mid_century_modern"}, "space": {"dimensions": {"length": 10, "width": 8, "unit": "m"}}, "requirements": {"functional_needs": ["three workstations"]}, "regulatory": {"city": "Mumbai", "country": "India"}}, "brief_status": {"project_type": "confirmed", "theme": "confirmed", "space": "partial", "requirements": "partial", "regulatory": "partial"}, "brief_missing": ["space.dimensions.height", "requirements.budget", "regulatory.climatic_zone"]}
+```"""
 
 
 def _get_system_prompt(mode: str) -> str:
@@ -212,6 +245,11 @@ async def stream_chat_response(
         # Quick Mode, drop it here so the frontend never tries to render one.
         image_prompt = metadata.image_prompt if mode == "deep" else None
 
+        # Brief capture is Deep-mode only (BRD §1A). Drop any Quick-mode leak.
+        brief = metadata.brief if mode == "deep" else None
+        brief_status = metadata.brief_status if mode == "deep" else None
+        brief_missing = metadata.brief_missing if mode == "deep" else []
+
         yield _sse_event("done", {
             "content": clean_content,
             "suggestions": metadata.suggestions,
@@ -220,6 +258,9 @@ async def stream_chat_response(
             "youtube_query": metadata.youtube_query,
             "research_query": metadata.research_query,
             "reference_links": metadata.reference_links,
+            "brief": brief,
+            "brief_status": brief_status,
+            "brief_missing": brief_missing,
             "mode": mode,
         })
 
@@ -331,6 +372,16 @@ def _extract_metadata(raw: dict) -> ResponseMetadata:
             return None
         return str(val)
 
+    def _dict_or_none(val: object) -> dict | None:
+        if isinstance(val, dict) and val:
+            return val
+        return None
+
+    def _list_of_str(val: object) -> list[str]:
+        if isinstance(val, list):
+            return [str(x) for x in val if x]
+        return []
+
     return ResponseMetadata(
         suggestions=raw.get("suggestions", []),
         # Support both old "image_query" and new "image_prompt"
@@ -339,4 +390,7 @@ def _extract_metadata(raw: dict) -> ResponseMetadata:
         youtube_query=_str_or_none(raw.get("youtube_query")),
         research_query=_str_or_none(raw.get("research_query")),
         reference_links=raw.get("reference_links", []),
+        brief=_dict_or_none(raw.get("brief")),
+        brief_status=_dict_or_none(raw.get("brief_status")),
+        brief_missing=_list_of_str(raw.get("brief_missing")),
     )

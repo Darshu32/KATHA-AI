@@ -87,7 +87,7 @@ export default function Sidebar({ isOpen }: SidebarProps) {
                 K
               </span>
               <span className="text-[15px] font-semibold text-ink-deep tracking-tight">
-                Katha
+                KATHA AI
               </span>
             </div>
           </div>

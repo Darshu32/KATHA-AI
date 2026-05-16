@@ -90,7 +90,7 @@ export default function ChatEmptyHero({ onSend, onSuggestionSelect, disabled }: 
             Beta
           </span>
           <span className="inline-flex items-center gap-1 text-[12px]" style={{ color: "var(--ink-2)" }}>
-            Launch KATHA Computer <MoveRight size={12} className="opacity-60" />
+            Launch KATHA AI Computer <MoveRight size={12} className="opacity-60" />
           </span>
         </motion.a>
 

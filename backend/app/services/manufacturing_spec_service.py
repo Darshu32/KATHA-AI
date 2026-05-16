@@ -33,9 +33,12 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import costing, manufacturing, materials, regional_materials, themes
+from app.services.pricing.knowledge_service import load_labor_rate_bands
+from app.services.themes import get_theme as _get_theme_db
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -136,8 +139,13 @@ class ManufacturingSpecRequest(BaseModel):
 # ── Knowledge slice ─────────────────────────────────────────────────────────
 
 
-def build_manufacturing_spec_knowledge(req: ManufacturingSpecRequest) -> dict[str, Any]:
-    pack = themes.get(req.theme) or {}
+def build_manufacturing_spec_knowledge(
+    req: ManufacturingSpecRequest,
+    *,
+    labor_rates_inr_hour: dict[str, list[float]] | None = None,
+    theme_pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    pack = theme_pack if theme_pack is not None else (themes.get(req.theme) or {})
     primary_species = (req.parametric_spec or {}).get("wood_spec", {}).get("primary_species")
     secondary_species = (req.parametric_spec or {}).get("wood_spec", {}).get("secondary_species")
     finish_picked = (req.parametric_spec or {}).get("wood_spec", {}).get("finish")
@@ -194,7 +202,9 @@ def build_manufacturing_spec_knowledge(req: ManufacturingSpecRequest) -> dict[st
         "complexity_levels_in_scope": list(COMPLEXITY_LEVELS_IN_SCOPE),
         "city": req.city or None,
         "city_price_index": regional_materials.price_index_for_city(req.city or None),
-        "labor_rates_inr_hour": dict(costing.LABOR_RATES_INR_PER_HOUR),
+        "labor_rates_inr_hour": labor_rates_inr_hour or {
+            k: list(v) for k, v in costing.LABOR_RATES_INR_PER_HOUR.items()
+        },
         "sections_requested": list(req.sections or ["woodworking_notes"]),
     }
 
@@ -1449,14 +1459,33 @@ class ManufacturingSpecError(RuntimeError):
     """Raised when the LLM manufacturing-spec stage cannot produce a grounded sheet."""
 
 
-async def generate_manufacturing_spec(req: ManufacturingSpecRequest) -> dict[str, Any]:
+async def generate_manufacturing_spec(
+    req: ManufacturingSpecRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise ManufacturingSpecError(
             "OpenAI API key is not configured. The manufacturing-spec stage requires "
             "a live LLM call; no static fallback is served."
         )
 
-    knowledge = build_manufacturing_spec_knowledge(req)
+    if session is not None:
+        labor_bands = await load_labor_rate_bands(
+            session, defaults=costing.LABOR_RATES_INR_PER_HOUR
+        )
+        theme_pack = await _get_theme_db(session, req.theme)
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            labor_bands = await load_labor_rate_bands(
+                own_session, defaults=costing.LABOR_RATES_INR_PER_HOUR
+            )
+            theme_pack = await _get_theme_db(own_session, req.theme)
+    knowledge = build_manufacturing_spec_knowledge(
+        req, labor_rates_inr_hour=labor_bands, theme_pack=theme_pack
+    )
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise ManufacturingSpecError(
             f"Unknown theme '{req.theme}'. No theme rule pack to ground the spec."

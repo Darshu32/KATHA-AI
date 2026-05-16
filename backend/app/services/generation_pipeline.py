@@ -18,6 +18,9 @@ from app.services.design_graph_service import (
 from app.services.estimation_engine import compute_estimate
 from app.services.graph_describer import describe_graph_for_render
 from app.services.image_service import generate_image, resolve_theme_visual_hint
+from app.services.knowledge_validator import validate_design_graph_async
+from app.services.standards.knowledge_service import resolve_standard as _resolve_standard
+from app.services.standards.mep_sizing import system_cost_estimate as _mep_system_cost
 from app.services.object_bboxes import compute_object_bboxes
 from app.services.storage import key_to_url, make_key, save_bytes
 
@@ -160,6 +163,384 @@ def _decode_data_url(value: str) -> tuple[bytes | None, str | None]:
         return None, mime
 
 
+def _segment_for_project_type(project_type: str | None) -> str:
+    """Map a BRD project_type slug to the high-level segment the
+    space-standards table uses (residential / commercial / hospitality).
+
+    The DB seed only registers room minimums for these three buckets,
+    so anything else falls back to ``residential`` — conservative
+    default that won't raise false alarms.
+    """
+    if not project_type:
+        return "residential"
+    pt = project_type.lower()
+    if pt in {"residential", "mixed_use"}:
+        return "residential"
+    if pt in {"commercial", "office", "retail", "institutional", "industrial"}:
+        return "commercial"
+    if pt == "hospitality":
+        return "hospitality"
+    return "residential"
+
+
+def _mep_system_keys(project_type: str | None) -> dict[str, str]:
+    """Pick the right ``mep_system_cost_*`` slug per system for the
+    project type. Residential gets split-AC HVAC + residential plumbing
+    + residential electrical; commercial gets VRF + commercial set.
+    Fire-fighting is included because the BRD §1B explicitly lists
+    fire safety as part of the MEP cost stack.
+    """
+    is_commercial = (project_type or "").lower() in {
+        "commercial",
+        "office",
+        "retail",
+        "institutional",
+        "industrial",
+        "hospitality",
+    }
+    if is_commercial:
+        return {
+            "hvac": "hvac_vrf_commercial",
+            "electrical": "electrical_commercial",
+            "plumbing": "plumbing_commercial",
+            "fire_fighting": "fire_fighting_commercial",
+        }
+    return {
+        "hvac": "hvac_split_residential",
+        "electrical": "electrical_residential",
+        "plumbing": "plumbing_residential",
+        "fire_fighting": "fire_fighting_residential",
+    }
+
+
+async def _run_mep_cost(
+    db: AsyncSession,
+    *,
+    graph_data: dict,
+    project_type: str | None,
+) -> dict | None:
+    """Aggregate MEP system cost (HVAC + electrical + plumbing +
+    fire-fighting) at the project_type-appropriate ₹/m² band, based on
+    the room area in the design graph.
+
+    Returns ``None`` when there's no usable area — the cost terminal
+    falls through to its no-MEP-cost-yet placeholder.
+    """
+    room = graph_data.get("room") or {}
+    dims = room.get("dimensions") or {}
+    length = dims.get("length")
+    width = dims.get("width")
+    if not (length and width):
+        return None
+    try:
+        # Graph dims are in metres; if anything came through as mm it'd
+        # be >20, in which case treat as mm. The validator does this
+        # heuristic already; mirror it here to stay consistent.
+        l = float(length) / 1000.0 if float(length) > 20 else float(length)
+        w = float(width) / 1000.0 if float(width) > 20 else float(width)
+    except (TypeError, ValueError):
+        return None
+    area_m2 = l * w
+    if area_m2 <= 0:
+        return None
+
+    keys = _mep_system_keys(project_type)
+    systems: list[dict] = []
+    total_low = 0.0
+    total_high = 0.0
+    for system_name, slug_suffix in keys.items():
+        try:
+            res = await _mep_system_cost(
+                db, system_key=slug_suffix, area_m2=area_m2
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("MEP cost lookup failed for %s: %s", slug_suffix, exc)
+            continue
+        if "error" in res:
+            continue
+        systems.append(
+            {
+                "system": system_name,
+                "key": slug_suffix,
+                "rate_inr_m2": res.get("rate_inr_m2") or {},
+                "total_inr": res.get("total_inr") or {},
+            }
+        )
+        total = res.get("total_inr") or {}
+        total_low += float(total.get("low") or 0)
+        total_high += float(total.get("high") or 0)
+
+    if not systems:
+        return None
+
+    return {
+        "area_m2": round(area_m2, 2),
+        "currency": "INR",
+        "jurisdiction": "india_nbc",
+        "systems": systems,
+        "total_inr": {
+            "low": round(total_low, 0),
+            "high": round(total_high, 0),
+        },
+    }
+
+
+def _jurisdiction_for_project(project_type: str | None) -> str:
+    """Pick the right standards jurisdiction for a project.
+
+    Today only ``india_nbc`` is seeded — the IBC / IECC rows are
+    placeholders for when we expand outside India. Returning the
+    defended default ensures the validator never fails to find a
+    matching code row.
+
+    When the project model carries a ``regulatory.country`` (set via
+    the design brief intake / BRD §1A section 5) the route can pass
+    a more specific jurisdiction in; this helper is the fallback.
+    """
+    # Per memory: India primary, EU secondary. EU has no native code
+    # rows yet, so even EU projects route to ``india_nbc`` until the
+    # IBC / Eurocode seeds are written.
+    return "india_nbc"
+
+
+_COMPLIANCE_CODES = {
+    "NBC_VIOLATION",
+    "ROOM_AREA_BELOW_STANDARD",
+    "DOOR_TOO_NARROW",
+    "DOOR_WIDTH_OUT_OF_BAND",
+    "CORRIDOR_TOO_NARROW",
+    "STAIR_GEOMETRY_OUT_OF_BAND",
+}
+
+
+_COMPLIANCE_LABELS = {
+    "NBC_VIOLATION": "NBC habitable room",
+    "ROOM_AREA_BELOW_STANDARD": "Room area",
+    "DOOR_TOO_NARROW": "Door width",
+    "DOOR_WIDTH_OUT_OF_BAND": "Door width",
+    "CORRIDOR_TOO_NARROW": "Corridor width",
+    "STAIR_GEOMETRY_OUT_OF_BAND": "Stair geometry",
+}
+
+
+def _entries_from_validation(validation: dict) -> list[dict]:
+    """Walk the validation report and emit one ``compliance entry``
+    per code-related fail. Each carries label + status=fail + the
+    issue message + the validator's citation passthrough.
+    """
+    out: list[dict] = []
+    for level, issues in (
+        ("fail", validation.get("errors", [])),
+        ("warn", validation.get("warnings", [])),
+    ):
+        for issue in issues:
+            code = issue.get("code") or ""
+            if code not in _COMPLIANCE_CODES:
+                continue
+            out.append(
+                {
+                    "label": _COMPLIANCE_LABELS.get(code, code),
+                    "value": issue.get("message") or "",
+                    "target": issue.get("reference") or "",
+                    "status": level,
+                    "code": code,
+                    "source_section": issue.get("source_section"),
+                    "jurisdiction": issue.get("jurisdiction"),
+                }
+            )
+    return out
+
+
+async def _compliance_advisories(
+    db: AsyncSession,
+    *,
+    jurisdiction: str,
+) -> list[dict]:
+    """Pull a small, curated set of advisory targets from DB-backed
+    code rows. These don't have inputs to validate against today
+    (envelope U-values, ramp slopes, fire-safety triggers) — we
+    surface the target so the architect knows what they're meeting.
+    Status ``info`` indicates advisory, not pass/fail.
+    """
+    advisories: list[dict] = []
+
+    ecbc = await _resolve_standard(
+        db,
+        slug="code_ecbc_envelope_targets",
+        category="code",
+        jurisdiction=jurisdiction,
+    )
+    if ecbc:
+        d = ecbc.get("data") or {}
+        wall_u = d.get("envelope_U_value_wall_w_m2k")
+        roof_u = d.get("envelope_U_value_roof_w_m2k")
+        wwr = d.get("window_wall_ratio_max")
+        cite = ecbc.get("source_section")
+        jur = ecbc.get("jurisdiction") or jurisdiction
+        if wall_u is not None:
+            advisories.append(
+                {
+                    "label": "Wall U-value",
+                    "value": f"target ≤ {wall_u} W/m²K",
+                    "target": f"ECBC ≤ {wall_u}",
+                    "status": "info",
+                    "code": "ECBC_ENVELOPE_WALL",
+                    "source_section": cite,
+                    "jurisdiction": jur,
+                }
+            )
+        if roof_u is not None:
+            advisories.append(
+                {
+                    "label": "Roof U-value",
+                    "value": f"target ≤ {roof_u} W/m²K",
+                    "target": f"ECBC ≤ {roof_u}",
+                    "status": "info",
+                    "code": "ECBC_ENVELOPE_ROOF",
+                    "source_section": cite,
+                    "jurisdiction": jur,
+                }
+            )
+        if wwr is not None:
+            advisories.append(
+                {
+                    "label": "Window-wall ratio",
+                    "value": f"target ≤ {wwr:.0%}",
+                    "target": f"ECBC ≤ {wwr:.0%}",
+                    "status": "info",
+                    "code": "ECBC_WWR",
+                    "source_section": cite,
+                    "jurisdiction": jur,
+                }
+            )
+
+    access = await _resolve_standard(
+        db,
+        slug="code_accessibility_india_general",
+        category="code",
+        jurisdiction=jurisdiction,
+    )
+    if access:
+        d = access.get("data") or {}
+        slope = d.get("ramp_slope_max_ratio")
+        clear = d.get("doorway_clear_width_mm")
+        cite = access.get("source_section")
+        jur = access.get("jurisdiction") or jurisdiction
+        if slope:
+            # Convert ratio to 1:N for human readability.
+            ratio = round(1 / float(slope))
+            advisories.append(
+                {
+                    "label": "Ramp slope",
+                    "value": f"target ≤ 1:{ratio}",
+                    "target": f"≤ 1:{ratio}",
+                    "status": "info",
+                    "code": "ACCESS_RAMP_SLOPE",
+                    "source_section": cite,
+                    "jurisdiction": jur,
+                }
+            )
+        if clear:
+            advisories.append(
+                {
+                    "label": "Accessible doorway",
+                    "value": f"clear ≥ {clear} mm",
+                    "target": f"≥ {clear} mm",
+                    "status": "info",
+                    "code": "ACCESS_DOORWAY_CLEAR",
+                    "source_section": cite,
+                    "jurisdiction": jur,
+                }
+            )
+
+    fire = await _resolve_standard(
+        db,
+        slug="code_fire_safety_india_general",
+        category="code",
+        jurisdiction=jurisdiction,
+    )
+    if fire:
+        d = fire.get("data") or {}
+        smoke = d.get("smoke_detector")
+        cite = fire.get("source_section")
+        jur = fire.get("jurisdiction") or jurisdiction
+        if smoke:
+            advisories.append(
+                {
+                    "label": "Smoke detector",
+                    "value": str(smoke),
+                    "target": "NBC Part 4 req.",
+                    "status": "info",
+                    "code": "FIRE_SMOKE_DETECTOR",
+                    "source_section": cite,
+                    "jurisdiction": jur,
+                }
+            )
+
+    return advisories
+
+
+async def _run_compliance_summary(
+    db: AsyncSession,
+    *,
+    validation: dict,
+    jurisdiction: str,
+) -> list[dict]:
+    """Build the right-sidebar 'Code compliance' summary.
+
+    Mix of:
+    - Fail entries derived from the validation report (NBC, doors,
+      corridors, stairs, areas).
+    - Info / advisory entries pulled from DB (ECBC envelope targets,
+      accessibility ramp + doorway, fire-safety smoke detector).
+
+    A fully-clean design with no validation flags still shows the
+    advisory rows so the architect knows which codes the design
+    needs to meet, not just which ones it's currently failing.
+    """
+    entries = _entries_from_validation(validation)
+    try:
+        advisories = await _compliance_advisories(db, jurisdiction=jurisdiction)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Compliance advisories lookup failed: %s", exc)
+        advisories = []
+    return entries + advisories
+
+
+async def _run_validation(
+    db: AsyncSession,
+    *,
+    graph_data: dict,
+    project_type: str | None,
+    jurisdiction: str | None = None,
+) -> dict:
+    """Run the async DB-backed validator against the freshly-generated
+    graph. Wrapped in a try so a validator hiccup never fails the
+    generation — the architect still gets the design + cost, just
+    without the Problems tab annotations.
+
+    ``jurisdiction`` overrides the project_type-derived default — pass
+    it when the route knows the project's regulatory.country.
+    """
+    chosen_jurisdiction = jurisdiction or _jurisdiction_for_project(project_type)
+    try:
+        return await validate_design_graph_async(
+            graph_data,
+            segment=_segment_for_project_type(project_type),
+            session=db,
+            jurisdiction=chosen_jurisdiction,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Validation pass failed (continuing without warnings): %s", exc)
+        return {
+            "ok": True,
+            "errors": [],
+            "warnings": [],
+            "suggestions": [],
+            "summary": "Validation unavailable.",
+        }
+
+
 def _ext_for_mime(mime: str) -> str:
     """Map a MIME type to a file extension we'd use in storage keys."""
     return {
@@ -222,6 +603,27 @@ async def run_initial_generation(
     # Step 3 — Estimate
     estimate = compute_estimate(graph_data)
 
+    # Step 3b — BRD §1B / §9.1: validate against authoritative standards
+    # (room areas, ergonomics, NBC clauses, theme alignment). Results
+    # flow to the Problems terminal tab via the response.
+    jurisdiction = _jurisdiction_for_project(project_type)
+    validation = await _run_validation(
+        db, graph_data=graph_data, project_type=project_type, jurisdiction=jurisdiction,
+    )
+
+    # Step 3c — BRD §1B MEP: roll up HVAC + electrical + plumbing +
+    # fire-fighting system cost at ₹/m² bands. Surfaces in the cost
+    # terminal as a real, cited number alongside the existing estimate.
+    mep_cost = await _run_mep_cost(db, graph_data=graph_data, project_type=project_type)
+
+    # Step 3d — BRD §1B Building Code Integration: condense validation
+    # report + DB-advisory targets into a sidebar-ready compliance
+    # summary (NBC pass/fail, ECBC envelope targets, accessibility,
+    # fire-safety advisories).
+    compliance = await _run_compliance_summary(
+        db, validation=validation, jurisdiction=jurisdiction,
+    )
+
     # Step 4 — Render (best-effort; doesn't fail the response if Gemini
     # is down or the API key is unset). The graph_data flows in so the
     # image model is conditioned on the actual generated geometry, not
@@ -236,11 +638,12 @@ async def run_initial_generation(
     )
 
     logger.info(
-        "Generation complete: project=%s version=%d objects=%d render=%s",
+        "Generation complete: project=%s version=%d objects=%d render=%s warnings=%d",
         project_id,
         version.version,
         len(graph_data.get("objects", [])),
         "yes" if image_url else "no",
+        len(validation.get("warnings", [])),
     )
 
     return {
@@ -251,6 +654,9 @@ async def run_initial_generation(
         "estimate": estimate,
         "image_url": image_url,
         "objects_bbox": compute_object_bboxes(graph_data),
+        "validation": validation,
+        "mep_cost_estimate": mep_cost,
+        "code_compliance_summary": compliance,
         "status": "completed",
     }
 
@@ -307,6 +713,17 @@ async def run_local_edit(
 
     estimate = compute_estimate(updated_graph)
 
+    # BRD §1B / §9.1 — re-validate against authoritative standards
+    # after the edit. Picks up any new violations the edit introduced.
+    jurisdiction = _jurisdiction_for_project(project_type)
+    validation = await _run_validation(
+        db, graph_data=updated_graph, project_type=project_type, jurisdiction=jurisdiction,
+    )
+    mep_cost = await _run_mep_cost(db, graph_data=updated_graph, project_type=project_type)
+    compliance = await _run_compliance_summary(
+        db, validation=validation, jurisdiction=jurisdiction,
+    )
+
     # Render against the *updated* graph so geometric edits surface
     # in the new render rather than just the data layer.
     image_url = await _attach_render(
@@ -327,6 +744,9 @@ async def run_local_edit(
         "changed_objects": [object_id],
         "image_url": image_url,
         "objects_bbox": compute_object_bboxes(updated_graph),
+        "validation": validation,
+        "mep_cost_estimate": mep_cost,
+        "code_compliance_summary": compliance,
         "status": "completed",
     }
 
@@ -374,6 +794,21 @@ async def run_theme_switch(
 
     estimate = compute_estimate(updated_graph_data)
 
+    # BRD §1B / §9.1 — theme swaps shouldn't change geometry, but if
+    # the LLM inadvertently shrank a room while re-tagging materials,
+    # this catches it.
+    jurisdiction = _jurisdiction_for_project(project_type)
+    validation = await _run_validation(
+        db, graph_data=updated_graph_data, project_type=project_type,
+        jurisdiction=jurisdiction,
+    )
+    mep_cost = await _run_mep_cost(
+        db, graph_data=updated_graph_data, project_type=project_type
+    )
+    compliance = await _run_compliance_summary(
+        db, validation=validation, jurisdiction=jurisdiction,
+    )
+
     # Theme switch keeps the same geometry — pass the updated graph so
     # the new render is conditioned on layout that's literally
     # unchanged, with only material / palette differing per the new
@@ -395,6 +830,9 @@ async def run_theme_switch(
         "estimate": estimate,
         "image_url": image_url,
         "objects_bbox": compute_object_bboxes(updated_graph_data),
+        "validation": validation,
+        "mep_cost_estimate": mep_cost,
+        "code_compliance_summary": compliance,
         "status": "completed",
     }
 

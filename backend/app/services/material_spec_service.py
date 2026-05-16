@@ -29,9 +29,12 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import costing, manufacturing, materials, regional_materials, themes
+from app.services.pricing.knowledge_service import load_cost_factor_bands
+from app.services.themes import get_theme as _get_theme_db
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -72,8 +75,26 @@ class MaterialSpecRequest(BaseModel):
 # ── Knowledge slice ─────────────────────────────────────────────────────────
 
 
-def build_material_spec_knowledge(req: MaterialSpecRequest) -> dict[str, Any]:
-    pack = themes.get(req.theme) or {}
+async def load_material_spec_bands(session: AsyncSession) -> dict[str, list[float]]:
+    """Pre-load the BRD waste-factor band from versioned ``cost_factors``.
+
+    Returned dict drops straight into ``knowledge['waste_factor_pct_band']``.
+    Falls back to the seed default when the row is missing.
+    """
+    return await load_cost_factor_bands(
+        session,
+        ["waste_factor_pct"],
+        defaults={"waste_factor_pct": costing.WASTE_FACTOR_PCT},
+    )
+
+
+def build_material_spec_knowledge(
+    req: MaterialSpecRequest,
+    *,
+    cost_bands: dict[str, list[float]] | None = None,
+    theme_pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    pack = theme_pack if theme_pack is not None else (themes.get(req.theme) or {})
     palette = pack.get("material_palette", {})
     primary_candidates = palette.get("primary", []) or []
     secondary_candidates = palette.get("secondary", []) or []
@@ -148,7 +169,9 @@ def build_material_spec_knowledge(req: MaterialSpecRequest) -> dict[str, Any]:
         },
         "wood_finish_palette": list(materials.WOOD_BRD_FINISH_PALETTE),
         "metal_finish_palette": list(materials.METALS_BRD_FINISH_PALETTE),
-        "waste_factor_pct_band": list(costing.WASTE_FACTOR_PCT),
+        "waste_factor_pct_band": (cost_bands or {}).get(
+            "waste_factor_pct", list(costing.WASTE_FACTOR_PCT)
+        ),
         "regional_availability": availability,
         "city_price_index": regional_materials.price_index_for_city(req.city or None),
         "city": req.city or None,
@@ -1251,14 +1274,29 @@ class MaterialSpecError(RuntimeError):
     """Raised when the LLM material-spec stage cannot produce a grounded sheet."""
 
 
-async def generate_material_spec_sheet(req: MaterialSpecRequest) -> dict[str, Any]:
+async def generate_material_spec_sheet(
+    req: MaterialSpecRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise MaterialSpecError(
             "OpenAI API key is not configured. The material-spec stage requires "
             "a live LLM call; no static fallback is served."
         )
 
-    knowledge = build_material_spec_knowledge(req)
+    if session is not None:
+        bands = await load_material_spec_bands(session)
+        theme_pack = await _get_theme_db(session, req.theme)
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            bands = await load_material_spec_bands(own_session)
+            theme_pack = await _get_theme_db(own_session, req.theme)
+    knowledge = build_material_spec_knowledge(
+        req, cost_bands=bands, theme_pack=theme_pack
+    )
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise MaterialSpecError(
             f"Unknown theme '{req.theme}'. No theme rule pack to ground the sheet."

@@ -24,9 +24,11 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import themes, variations
+from app.services.standards.variations_lookup import list_parametric_flex
 from app.services.diagrams import form_development
 from app.services.diagrams.svg_base import (
     INK,
@@ -77,7 +79,11 @@ _GRID_SYSTEMS = {
 }
 
 
-def build_form_knowledge(req: FormDiagramRequest) -> dict[str, Any]:
+def build_form_knowledge(
+    req: FormDiagramRequest,
+    *,
+    parametric_dimension_flex: dict[str, dict[str, float]] | None = None,
+) -> dict[str, Any]:
     pack = themes.get(req.theme) or {}
     palette = pack.get("material_palette", {})
     graph = req.design_graph or {}
@@ -104,7 +110,10 @@ def build_form_knowledge(req: FormDiagramRequest) -> dict[str, Any]:
             "donts": pack.get("donts", []),
         },
         "grid_systems_in_scope": _GRID_SYSTEMS,
-        "parametric_dimension_flex": variations.PARAMETRIC_DIMENSION_FLEX_PCT,
+        "parametric_dimension_flex": (
+            parametric_dimension_flex
+            or variations.PARAMETRIC_DIMENSION_FLEX_PCT
+        ),
         "graph_summary": {
             "primary_objects": primary_objects,
             "object_count": len(graph.get("objects", [])),
@@ -291,14 +300,25 @@ class FormDiagramError(RuntimeError):
     """Raised when the LLM form stage cannot produce a grounded spec."""
 
 
-async def generate_form_diagram(req: FormDiagramRequest) -> dict[str, Any]:
+async def generate_form_diagram(
+    req: FormDiagramRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise FormDiagramError(
             "OpenAI API key is not configured. The form-development stage requires "
             "a live LLM call; no static fallback is served."
         )
 
-    knowledge = build_form_knowledge(req)
+    if session is not None:
+        flex = await list_parametric_flex(session)
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            flex = await list_parametric_flex(own_session)
+    knowledge = build_form_knowledge(req, parametric_dimension_flex=flex)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise FormDiagramError(
             f"Unknown theme '{req.theme}'. No theme rule pack to ground the diagram."

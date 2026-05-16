@@ -63,6 +63,31 @@ export interface Message {
   mode?: ChatMode;
 }
 
+// BRD §1A — section status surfaced from the Deep-mode chat. Mirrors
+// `BriefSectionStatus` from api-client; redeclared here so the type
+// module stays self-contained (api-client imports from types, not the
+// other way around).
+export type ConvBriefSectionStatus = "pending" | "partial" | "confirmed";
+
+export interface ConvBriefStatus {
+  project_type?: ConvBriefSectionStatus;
+  theme?: ConvBriefSectionStatus;
+  space?: ConvBriefSectionStatus;
+  requirements?: ConvBriefSectionStatus;
+  regulatory?: ConvBriefSectionStatus;
+}
+
+export interface ConvBrief {
+  // The 5 sections of the BRD §1A intake. All optional — the agent
+  // populates fields turn-by-turn from the natural-language chat.
+  project_type?: Record<string, unknown>;
+  theme?: Record<string, unknown>;
+  space?: Record<string, unknown>;
+  requirements?: Record<string, unknown>;
+  regulatory?: Record<string, unknown>;
+  notes?: string;
+}
+
 export interface Conversation {
   id: string;
   title: string;
@@ -77,6 +102,14 @@ export interface Conversation {
   // renames the project — refresh on demand later.
   projectId?: string;
   projectName?: string;
+  // BRD §1A — the live design brief built from this conversation.
+  // ``brief`` accumulates across Deep responses (deep-merge of section
+  // dicts). ``briefStatus`` and ``briefMissing`` are replaced wholesale
+  // by the latest Deep response that emitted them — they describe the
+  // current state, not the union of all states.
+  brief?: ConvBrief;
+  briefStatus?: ConvBriefStatus;
+  briefMissing?: string[];
 }
 
 export interface SuggestionChip {
@@ -182,6 +215,58 @@ export interface ImageGeneration {
     w: number;
     h: number;
   }>;
+
+  // BRD §1B / §11.3 — validation report from the post-generation pass.
+  // Drives the Problems terminal tab. Optional for legacy generations
+  // saved before the validator was wired into the pipeline.
+  validation?: ValidationReport;
+
+  // BRD §1B — MEP system cost rollup (HVAC + electrical + plumbing +
+  // fire-fighting) sourced from ``mep_system_cost_*`` DB rows. Drives
+  // the live "MEP systems" line in the Cost terminal tab. Optional —
+  // legacy generations without a room area don't carry this.
+  mepCostEstimate?: MepCostEstimate;
+
+  // BRD §1B Building Code Integration — pre-rolled compliance summary
+  // built server-side from the validation report + DB-backed advisory
+  // rows (ECBC envelope, accessibility ramp, fire-safety). Drives the
+  // right-sidebar "Code compliance" panel.
+  codeCompliance?: CodeComplianceEntry[];
+}
+
+export interface MepCostSystemEntry {
+  system: "hvac" | "electrical" | "plumbing" | "fire_fighting" | string;
+  key: string;
+  rate_inr_m2: { low?: number; high?: number };
+  total_inr: { low?: number; high?: number };
+}
+
+export interface MepCostEstimate {
+  area_m2: number;
+  currency: string;
+  jurisdiction: string;
+  systems: MepCostSystemEntry[];
+  total_inr: { low: number; high: number };
+}
+
+// BRD §1B Building Code Integration — one compliance entry per code
+// rule the generated design either fails or is expected to meet. Drives
+// the right-sidebar "Code compliance" block. ``status``:
+//   - ``fail`` — a hard NBC / code violation found by the validator
+//   - ``warn`` — a softer band violation (e.g. door 700mm < 800mm min)
+//   - ``info`` — advisory target the design should meet (ECBC envelope,
+//                ramp slope, fire-safety req) — we don't validate inputs
+//                today but surface the target so the architect knows it
+export type CodeComplianceStatus = "fail" | "warn" | "info";
+
+export interface CodeComplianceEntry {
+  label: string;
+  value: string;
+  target: string;
+  status: CodeComplianceStatus;
+  code: string;
+  source_section?: string | null;
+  jurisdiction?: string | null;
 }
 
 // ── Design Graph Types (mirrors backend DesignObjectSchema) ───────────────
@@ -260,6 +345,12 @@ export interface ValidationIssue {
   code: string;
   path: string;
   message: string;
+  // BRD §1B / §9.3 citation fields. Present when the issue was raised
+  // against a DB-backed standard (Stage 3B+) — earlier validators only
+  // set code+path+message, so these stay optional.
+  reference?: string;
+  source_section?: string;
+  jurisdiction?: string;
 }
 
 export interface ValidationReport {

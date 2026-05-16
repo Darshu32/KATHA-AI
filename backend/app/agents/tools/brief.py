@@ -26,7 +26,7 @@ from typing import Any, Optional
 from pydantic import BaseModel, Field
 
 from app.agents.tool import ToolContext, ToolError, tool
-from app.models.brief import DesignBriefIn, DesignBriefOut
+from app.models.brief import BriefThemeEnum, DesignBriefIn, DesignBriefOut
 from app.services.design_brief_service import (
     brief_to_generation_context,
     validate_and_normalize,
@@ -224,4 +224,210 @@ async def brief_to_generation_context_tool(
         brief_id=normalised.brief_id,
         warnings=list(normalised.warnings),
         context=brief_to_generation_context(normalised),
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────
+# 3. extract_brief_from_notes — completeness check over a partial brief
+# ─────────────────────────────────────────────────────────────────────
+
+
+class ExtractBriefFromNotesInput(BaseModel):
+    """A partial 5-section design brief — every section optional.
+
+    The agent (or the chat layer) builds this up turn-by-turn from the
+    user's natural-language statements and the notes sidebar. This tool
+    is the deterministic completeness checker: it reports which sections
+    are confirmed vs. partial vs. pending, lists the missing fields, and
+    — when every section is confirmed — produces the canonical brief by
+    delegating to :func:`validate_and_normalize`.
+    """
+
+    project_type: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Section 1 (optional). {type, sub_type, scale}",
+    )
+    theme: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Section 2 (optional). {theme, custom_spec}",
+    )
+    space: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Section 3 (optional). {dimensions, constraints, site_conditions}",
+    )
+    requirements: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Section 4 (optional). {functional_needs, aesthetic_preferences, narrative, budget, currency, timeline_weeks}",
+    )
+    regulatory: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Section 5 (optional). {country, state, city, postal_code, building_codes, climatic_zone, compliance_notes}",
+    )
+    notes: str = Field(default="", max_length=5000)
+
+
+class ExtractBriefFromNotesOutput(BaseModel):
+    status: dict[str, str] = Field(
+        description="One of pending / partial / confirmed per section.",
+    )
+    missing_fields: list[str] = Field(
+        default_factory=list,
+        description="Dotted paths still needed to reach all-confirmed.",
+    )
+    ready_to_design: bool = Field(
+        description="True when all 5 sections are confirmed and the brief validates.",
+    )
+    partial_brief: dict[str, Any] = Field(
+        default_factory=dict,
+        description="The brief as captured so far — echoed back for the sidebar.",
+    )
+    canonical_brief: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="The validated DesignBriefOut. Present only when ready_to_design.",
+    )
+    warnings: list[str] = Field(default_factory=list)
+
+
+# Map of dotted-path → "section.field" used to surface missing fields.
+_SECTIONS = ("project_type", "theme", "space", "requirements", "regulatory")
+
+
+def _check_project_type(data: dict[str, Any] | None) -> tuple[str, list[str]]:
+    if not data:
+        return "pending", ["project_type.type"]
+    if data.get("type"):
+        return "confirmed", []
+    return "partial", ["project_type.type"]
+
+
+def _check_theme(data: dict[str, Any] | None) -> tuple[str, list[str]]:
+    if not data:
+        return "pending", ["theme.theme"]
+    theme = (data.get("theme") or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if not theme:
+        return "partial", ["theme.theme"]
+    if theme == BriefThemeEnum.CUSTOM.value and not (data.get("custom_spec") or "").strip():
+        return "partial", ["theme.custom_spec"]
+    return "confirmed", []
+
+
+def _check_space(data: dict[str, Any] | None) -> tuple[str, list[str]]:
+    if not data:
+        return "pending", [
+            "space.dimensions.length",
+            "space.dimensions.width",
+            "space.dimensions.unit",
+        ]
+    dims = data.get("dimensions") or {}
+    missing: list[str] = []
+    if not dims.get("length"):
+        missing.append("space.dimensions.length")
+    if not dims.get("width"):
+        missing.append("space.dimensions.width")
+    if not dims.get("unit"):
+        missing.append("space.dimensions.unit")
+    if not missing:
+        return "confirmed", []
+    if len(missing) == 3:
+        return "pending", missing
+    return "partial", missing
+
+
+def _check_requirements(data: dict[str, Any] | None) -> tuple[str, list[str]]:
+    if not data:
+        return "pending", ["requirements.functional_needs|aesthetic_preferences|narrative"]
+    has_signal = (
+        bool(data.get("functional_needs"))
+        or bool(data.get("aesthetic_preferences"))
+        or bool((data.get("narrative") or "").strip())
+    )
+    if has_signal:
+        return "confirmed", []
+    return "partial", ["requirements.functional_needs|aesthetic_preferences|narrative"]
+
+
+def _check_regulatory(data: dict[str, Any] | None) -> tuple[str, list[str]]:
+    if not data:
+        return "pending", ["regulatory.country|city"]
+    if (data.get("country") or "").strip() or (data.get("city") or "").strip():
+        return "confirmed", []
+    return "partial", ["regulatory.country|city"]
+
+
+_SECTION_CHECKERS = {
+    "project_type": _check_project_type,
+    "theme": _check_theme,
+    "space": _check_space,
+    "requirements": _check_requirements,
+    "regulatory": _check_regulatory,
+}
+
+
+@tool(
+    name="extract_brief_from_notes",
+    description=(
+        "Deterministic completeness check over a partial 5-section "
+        "design brief (BRD §1A). Pass whatever has been captured so "
+        "far from the conversation / notes sidebar; the tool returns "
+        "a per-section status (pending / partial / confirmed), the "
+        "list of dotted-path fields still missing, and — when every "
+        "section is confirmed — a canonical, validated brief via "
+        "validate_and_normalize. Use this to drive the 'Ready to "
+        "design' affordance and to know what to ask the user next."
+    ),
+    timeout_seconds=15.0,
+)
+async def extract_brief_from_notes(
+    ctx: ToolContext,
+    input: ExtractBriefFromNotesInput,
+) -> ExtractBriefFromNotesOutput:
+    partial: dict[str, Any] = {
+        "project_type": dict(input.project_type or {}) or None,
+        "theme": dict(input.theme or {}) or None,
+        "space": dict(input.space or {}) or None,
+        "requirements": dict(input.requirements or {}) or None,
+        "regulatory": dict(input.regulatory or {}) or None,
+    }
+    if input.notes:
+        partial["notes"] = input.notes
+
+    status: dict[str, str] = {}
+    missing_fields: list[str] = []
+    for section in _SECTIONS:
+        section_status, section_missing = _SECTION_CHECKERS[section](partial.get(section))
+        status[section] = section_status
+        missing_fields.extend(section_missing)
+
+    ready = all(state == "confirmed" for state in status.values())
+
+    canonical: dict[str, Any] | None = None
+    warnings: list[str] = []
+    if ready:
+        # Promote partial → strict DesignBriefIn and run cross-field checks.
+        try:
+            full_payload = DesignBriefIn.model_validate({
+                "project_type": partial["project_type"] or {},
+                "theme": partial["theme"] or {},
+                "space": partial["space"] or {},
+                "requirements": partial["requirements"] or {},
+                "regulatory": partial["regulatory"] or {},
+                "notes": input.notes or "",
+            })
+            normalised = validate_and_normalize(full_payload)
+        except Exception as exc:  # noqa: BLE001 — Pydantic chain or ValueError
+            # Section-level checks said "confirmed" but stricter validation
+            # rejected — surface as a soft failure rather than crashing.
+            ready = False
+            warnings.append(f"Section checks passed but full validation failed: {exc}")
+        else:
+            canonical = _brief_out_to_payload(normalised)
+            warnings = list(normalised.warnings)
+
+    return ExtractBriefFromNotesOutput(
+        status=status,
+        missing_fields=missing_fields,
+        ready_to_design=ready,
+        partial_brief={k: v for k, v in partial.items() if v not in (None, {})},
+        canonical_brief=canonical,
+        warnings=warnings,
     )

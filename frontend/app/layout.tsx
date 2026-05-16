@@ -39,7 +39,7 @@ const jetbrainsMono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "KATHA — design AI for architects",
+  title: "KATHA AI — design AI for architects",
   description:
     "An AI workspace for architecture, interior, furniture and product design. Brief in, complete deliverable out.",
 };

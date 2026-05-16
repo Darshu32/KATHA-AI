@@ -177,6 +177,87 @@ async def check_corridor_width(
     return {**base, "status": "ok", "message": f"Meets >= {min_w}mm."}
 
 
+async def check_stair_dimensions(
+    session: AsyncSession,
+    *,
+    stair_type: str,
+    rise_mm: float | None = None,
+    tread_mm: float | None = None,
+    width_mm: float | None = None,
+    jurisdiction: str = "india_nbc",
+) -> dict[str, Any]:
+    """Validate stair geometry against the BRD/NBC stair standard.
+
+    ``stair_type`` ∈ ``residential`` | ``commercial`` | ``fire_escape``.
+    Any of ``rise_mm`` / ``tread_mm`` / ``width_mm`` may be omitted —
+    the function only checks what was provided. Returns the standard
+    citation shape (``status``, ``message``, ``reference``,
+    ``source_section``, ``jurisdiction_used``).
+
+    BRD §1B example: residential 180 mm rise / 280 mm tread. The DB
+    seed allows 150-200 mm rise and 250-300 mm tread for residential,
+    so 180 / 280 sits well inside the band.
+    """
+    row = await resolve_standard(
+        session,
+        slug=f"stair_{stair_type}",
+        category="clearance",
+        jurisdiction=jurisdiction,
+    )
+    if row is None:
+        return {
+            "status": "unknown",
+            "message": f"No standard for stair type {stair_type!r}.",
+            "reference": None,
+            "source_section": None,
+        }
+    data = row.get("data") or {}
+    base = {
+        "reference": row.get("notes") or row["display_name"],
+        "source_section": row.get("source_section"),
+        "jurisdiction_used": row["jurisdiction"],
+    }
+
+    rise_band = data.get("rise_mm")
+    tread_band = data.get("tread_mm")
+    min_width = data.get("min_width_mm")
+
+    issues: list[str] = []
+    if rise_mm is not None and isinstance(rise_band, list) and len(rise_band) == 2:
+        lo, hi = float(rise_band[0]), float(rise_band[1])
+        if rise_mm < lo:
+            issues.append(
+                f"{stair_type} stair rise {rise_mm}mm below minimum {lo:.0f}mm"
+            )
+        elif rise_mm > hi:
+            issues.append(
+                f"{stair_type} stair rise {rise_mm}mm above maximum {hi:.0f}mm"
+            )
+    if tread_mm is not None and isinstance(tread_band, list) and len(tread_band) == 2:
+        lo, hi = float(tread_band[0]), float(tread_band[1])
+        if tread_mm < lo:
+            issues.append(
+                f"{stair_type} stair tread {tread_mm}mm below minimum {lo:.0f}mm"
+            )
+        elif tread_mm > hi:
+            issues.append(
+                f"{stair_type} stair tread {tread_mm}mm above maximum {hi:.0f}mm"
+            )
+    if width_mm is not None and min_width is not None:
+        if width_mm < float(min_width):
+            issues.append(
+                f"{stair_type} stair width {width_mm}mm below minimum {min_width}mm"
+            )
+
+    if not issues:
+        return {**base, "status": "ok", "message": "Within stair standard."}
+    return {
+        **base,
+        "status": "warn_low",
+        "message": " · ".join(issues),
+    }
+
+
 async def check_room_area(
     session: AsyncSession,
     *,

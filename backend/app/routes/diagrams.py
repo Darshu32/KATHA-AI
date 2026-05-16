@@ -7,10 +7,13 @@ Each diagram type follows the project contract:
 
 import logging
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import get_db
 from app.knowledge import themes
 from app.models.schemas import ErrorResponse
+from app.services.standards.variations_lookup import list_parametric_flex
 from app.services.concept_diagram_service import (
     ConceptDiagramError,
     ConceptDiagramRequest,
@@ -161,9 +164,13 @@ async def concept_transparency_endpoint(payload: ConceptDiagramRequest) -> dict:
 
 
 @router.post("/form-development/knowledge")
-async def form_knowledge(payload: FormDiagramRequest) -> dict:
+async def form_knowledge(
+    payload: FormDiagramRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the knowledge slice the form-development LLM stage will see."""
-    knowledge = build_form_knowledge(payload)
+    flex = await list_parametric_flex(db)
+    knowledge = build_form_knowledge(payload, parametric_dimension_flex=flex)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -180,10 +187,13 @@ async def form_knowledge(payload: FormDiagramRequest) -> dict:
 
 
 @router.post("/form-development")
-async def form_development_endpoint(payload: FormDiagramRequest) -> dict:
+async def form_development_endpoint(
+    payload: FormDiagramRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM form-author pipeline + render the annotated 4-stage SVG."""
     try:
-        return await generate_form_diagram(payload)
+        return await generate_form_diagram(payload, session=db)
     except FormDiagramError as exc:
         msg = str(exc)
         if "Unknown theme" in msg:

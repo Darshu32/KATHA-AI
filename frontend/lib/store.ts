@@ -30,6 +30,8 @@ import type {
   NoteSection,
   Notebook,
   ProjectType,
+  ConvBrief,
+  ConvBriefStatus,
 } from "./types";
 
 // ── Auth Store ──────────────────────────────────────────────────────────────
@@ -73,6 +75,20 @@ interface ChatState {
   toggleSidebar: () => void;
   setSidebarOpen: (v: boolean) => void;
   setChatMode: (mode: ChatMode) => void;
+
+  // BRD §1A — merge a freshly-emitted brief snapshot into the active
+  // conversation. ``brief`` is deep-merged (section by section); the
+  // status and missing-fields arrays are replaced wholesale because
+  // they describe the current state, not an accumulation.
+  mergeBrief: (
+    conversationId: string,
+    payload: {
+      brief: ConvBrief | null;
+      status: ConvBriefStatus | null;
+      missing: string[];
+    },
+  ) => void;
+  resetBrief: (conversationId: string) => void;
 }
 
 export const useChatStore = create<ChatState>()(
@@ -186,6 +202,52 @@ export const useChatStore = create<ChatState>()(
       toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen })),
       setSidebarOpen: (v) => set({ sidebarOpen: v }),
       setChatMode: (mode) => set({ chatMode: mode }),
+
+      mergeBrief: (conversationId, { brief, status, missing }) =>
+        set((state) => ({
+          conversations: state.conversations.map((c) => {
+            if (c.id !== conversationId) return c;
+            // Deep-merge brief sections. ``null`` from the LLM means
+            // "this turn was a knowledge question, don't touch the
+            // brief". A non-null brief deep-merges each section so
+            // later turns add detail without erasing earlier captures.
+            let nextBrief = c.brief;
+            if (brief) {
+              nextBrief = {
+                ...(c.brief ?? {}),
+                ...Object.fromEntries(
+                  (
+                    ["project_type", "theme", "space", "requirements", "regulatory"] as const
+                  ).map((section) => {
+                    const incoming = (brief as Record<string, unknown>)[section];
+                    if (!incoming || typeof incoming !== "object") return [section, c.brief?.[section]];
+                    return [
+                      section,
+                      { ...((c.brief?.[section] as object) ?? {}), ...(incoming as object) },
+                    ];
+                  }),
+                ),
+                notes: brief.notes ?? c.brief?.notes,
+              };
+            }
+            return {
+              ...c,
+              brief: nextBrief,
+              briefStatus: status ?? c.briefStatus,
+              briefMissing: brief ? missing : c.briefMissing,
+              updatedAt: new Date().toISOString(),
+            };
+          }),
+        })),
+
+      resetBrief: (conversationId) =>
+        set((state) => ({
+          conversations: state.conversations.map((c) =>
+            c.id === conversationId
+              ? { ...c, brief: undefined, briefStatus: undefined, briefMissing: undefined }
+              : c,
+          ),
+        })),
     }),
     {
       name: "katha-chat",
@@ -218,6 +280,85 @@ export const useWorkspaceStore = create<WorkspaceState>()(
 
 // ── Image Generation Store ─────────────────────────────────────────────────
 
+/* Capitalise the first letter — used for the auto-generated project
+   name derived from a brief (e.g. "mid century modern office in
+   Mumbai" → "Mid century modern office in Mumbai"). */
+function cap(s: string): string {
+  return s ? s.charAt(0).toUpperCase() + s.slice(1) : s;
+}
+
+/* Convert a canonical BRD §1A brief (5 sections) into a single
+   paragraph the design pipeline can use as the first generation
+   prompt. We deliberately phrase it like a designer's brief — a
+   compact opening sentence with type / theme / location / dims,
+   followed by functional needs, narrative, budget, and a climate
+   trailing note. Anything missing is silently skipped so the prompt
+   never reads "in undefined". */
+function briefToStarterPrompt(parts: {
+  projectType?: string;
+  subType?: string;
+  scale?: string;
+  theme?: string;
+  space?: Record<string, unknown>;
+  requirements?: Record<string, unknown>;
+  regulatory?: Record<string, unknown>;
+}): string {
+  const sentences: string[] = [];
+
+  const themeStr = parts.theme ? parts.theme.replace(/_/g, " ") : "";
+  const opener = [parts.scale, themeStr, parts.subType, parts.projectType]
+    .filter((x) => typeof x === "string" && x.trim())
+    .join(" ");
+
+  const dims = (parts.space?.dimensions as Record<string, unknown> | undefined) ?? undefined;
+  const dimStr =
+    dims && dims.length && dims.width
+      ? `, ${dims.length}×${dims.width}${dims.unit ? ` ${dims.unit}` : ""}`
+      : "";
+  const city = typeof parts.regulatory?.city === "string" ? parts.regulatory.city : "";
+  const locationStr = city ? ` in ${city}` : "";
+
+  if (opener) sentences.push(`A ${opener}${locationStr}${dimStr}.`);
+  else if (dimStr || locationStr) sentences.push(`A design${locationStr}${dimStr}.`);
+
+  // Functional needs — collapse the array into a clause.
+  const needs = parts.requirements?.functional_needs;
+  if (Array.isArray(needs) && needs.length > 0) {
+    sentences.push(needs.map((n) => String(n).trim()).filter(Boolean).join(", ") + ".");
+  }
+
+  // Aesthetic preferences — same treatment.
+  const aesthetic = parts.requirements?.aesthetic_preferences;
+  if (Array.isArray(aesthetic) && aesthetic.length > 0) {
+    sentences.push(aesthetic.map((a) => String(a).trim()).filter(Boolean).join(", ") + ".");
+  }
+
+  // Free-form narrative is appended as-is.
+  const narrative = parts.requirements?.narrative;
+  if (typeof narrative === "string" && narrative.trim()) {
+    sentences.push(narrative.trim().replace(/\.$/, "") + ".");
+  }
+
+  // Budget — only if numeric and > 0. Use a thin currency prefix.
+  const budget = parts.requirements?.budget;
+  if (typeof budget === "number" && budget > 0) {
+    const currency =
+      typeof parts.requirements?.currency === "string"
+        ? (parts.requirements.currency as string)
+        : "INR";
+    sentences.push(`Budget ~${currency} ${budget.toLocaleString()}.`);
+  }
+
+  // Climate trailing note — sometimes inferred from city, so it's a
+  // useful signal even when the user didn't mention it.
+  const climate = parts.regulatory?.climatic_zone;
+  if (typeof climate === "string" && climate.trim()) {
+    sentences.push(`Climate: ${climate.replace(/_/g, " ")}.`);
+  }
+
+  return sentences.join(" ").trim();
+}
+
 interface ImageGenState {
   prompt: string;
   negativePrompt: string;
@@ -249,6 +390,16 @@ interface ImageGenState {
   activeProjectVersion: number | null;
   activeProjectName: string | null;
 
+  // ── BRD §3.6 — chat → image-gen handoff ──────────────────────────
+  // When the user confirms a brief in the chat workspace, the notes
+  // sidebar calls ``seedFromBrief``. That sets ``seededFromBriefId`` so
+  // the design workspace can render a "seeded from brief" banner and
+  // the user knows the prefilled values came from the chat (not their
+  // previous design session). The banner clears via ``clearBriefSeed``
+  // either explicitly (user dismisses) or implicitly (first new
+  // generation in the design workspace).
+  seededFromBriefId: string | null;
+
   setPrompt: (v: string) => void;
   setNegativePrompt: (v: string) => void;
   setProjectType: (v: ProjectType) => void;
@@ -278,6 +429,15 @@ interface ImageGenState {
     version?: number | null,
     name?: string | null,
   ) => void;
+
+  // BRD §3.6 — populate the design workspace from a canonical brief
+  // returned by ``POST /brief/intake``. Maps the 5 sections onto the
+  // store's seedable fields (projectType / theme / sub-type / scale)
+  // and assembles a starter prompt from requirements + dimensions.
+  // Stores ``brief_id`` so the workspace can show a banner attributing
+  // the prefill to a specific chat brief.
+  seedFromBrief: (briefId: string, brief: Record<string, unknown>) => void;
+  clearBriefSeed: () => void;
 }
 
 export const useImageGenStore = create<ImageGenState>()(
@@ -303,6 +463,7 @@ export const useImageGenStore = create<ImageGenState>()(
       activeProjectId: null,
       activeProjectVersion: null,
       activeProjectName: null,
+      seededFromBriefId: null,
 
       setPrompt: (v) => set({ prompt: v }),
       setNegativePrompt: (v) => set({ negativePrompt: v }),
@@ -344,6 +505,82 @@ export const useImageGenStore = create<ImageGenState>()(
               ? name
               : state.activeProjectName,
         })),
+
+      seedFromBrief: (briefId, brief) => {
+        const projectTypeBlock = (brief.project_type as Record<string, unknown>) ?? {};
+        const themeBlock = (brief.theme as Record<string, unknown>) ?? {};
+        const spaceBlock = (brief.space as Record<string, unknown>) ?? {};
+        const reqBlock = (brief.requirements as Record<string, unknown>) ?? {};
+        const regBlock = (brief.regulatory as Record<string, unknown>) ?? {};
+
+        // Project type slug — the brief's BRD enum values map 1:1 onto
+        // our frontend ProjectType union (residential / office / …).
+        // Unknown / custom values fall back to the current value rather
+        // than fighting the defensive resync useEffect that picks the
+        // first available def when our seed doesn't match the registry.
+        const projectType =
+          typeof projectTypeBlock.type === "string"
+            ? (projectTypeBlock.type as ProjectType)
+            : undefined;
+        const subType =
+          typeof projectTypeBlock.sub_type === "string"
+            ? (projectTypeBlock.sub_type as string)
+            : "";
+        const scale =
+          typeof projectTypeBlock.scale === "string"
+            ? (projectTypeBlock.scale as string)
+            : "";
+
+        // Theme — same dynamic resync applies; we trust the brief here
+        // and let the defensive effect downgrade to the first DB slug
+        // if our value isn't registered.
+        const theme =
+          typeof themeBlock.theme === "string"
+            ? (themeBlock.theme as ArchTheme)
+            : undefined;
+
+        // Assemble the starter prompt. Architects expect a single
+        // paragraph that reads like a brief, not a JSON dump.
+        const prompt = briefToStarterPrompt({
+          projectType,
+          subType,
+          scale,
+          theme,
+          space: spaceBlock,
+          requirements: reqBlock,
+          regulatory: regBlock,
+        });
+
+        // Derive a display name for the project tab. Falls back to
+        // "Untitled brief" when there's nothing distinctive to use.
+        const city = typeof regBlock.city === "string" ? regBlock.city : "";
+        const themeLabel =
+          typeof themeBlock.theme === "string"
+            ? (themeBlock.theme as string).replace(/_/g, " ")
+            : "";
+        const typeLabel = typeof projectTypeBlock.type === "string" ? projectTypeBlock.type as string : "";
+        const namePieces = [themeLabel, typeLabel, city ? `in ${city}` : ""]
+          .filter(Boolean)
+          .join(" ");
+        const projectName = namePieces ? cap(namePieces) : "Untitled brief";
+
+        set((state) => ({
+          prompt,
+          projectType: projectType ?? state.projectType,
+          projectSubType: subType,
+          projectScale: scale,
+          theme: theme ?? state.theme,
+          // Don't carry the previous project's gallery into the new
+          // brief — a fresh handoff is conceptually a new project.
+          generations: [],
+          activeProjectId: null,
+          activeProjectVersion: null,
+          activeProjectName: projectName,
+          seededFromBriefId: briefId,
+        }));
+      },
+
+      clearBriefSeed: () => set({ seededFromBriefId: null }),
     }),
     {
       name: "katha-image-gen",
@@ -364,6 +601,7 @@ export const useImageGenStore = create<ImageGenState>()(
         activeProjectId: state.activeProjectId,
         activeProjectVersion: state.activeProjectVersion,
         activeProjectName: state.activeProjectName,
+        seededFromBriefId: state.seededFromBriefId,
       }),
     },
   ),

@@ -36,6 +36,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import (
@@ -53,6 +54,7 @@ from app.knowledge import (
     themes,
 )
 from app.services.cost_engine_service import TRADE_HOURS_BY_COMPLEXITY
+from app.services.pricing.knowledge_service import load_labor_rate_bands
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -560,7 +562,8 @@ def _manufacturing_complexity_application(joinery_count: int = 0,
 
 def _complexity_labor_hours_application(complexity: str, *,
                                         trades: list[str] | None = None,
-                                        city: str | None = None) -> dict[str, Any]:
+                                        city: str | None = None,
+                                        labor_rates: dict[str, list[float]] | None = None) -> dict[str, Any]:
     """Complexity tier → hours band per trade × BRD labor rates."""
     c = _normalise(complexity) or "moderate"
     if c not in COMPLEXITY_LEVELS_IN_SCOPE:
@@ -581,11 +584,16 @@ def _complexity_labor_hours_application(complexity: str, *,
     if not isinstance(city_index, (int, float)):
         city_index = 1.0
 
+    rates = labor_rates or {
+        k: list(v) for k, v in costing.LABOR_RATES_INR_PER_HOUR.items()
+    }
     lines: list[dict] = []
     grand = {"low": 0.0, "mid": 0.0, "high": 0.0}
     for trade in selected_trades:
         hours_band = TRADE_HOURS_BY_COMPLEXITY[trade][c]
-        rate_band = costing.LABOR_RATES_INR_PER_HOUR[trade]
+        rate_band = rates.get(trade) or list(
+            costing.LABOR_RATES_INR_PER_HOUR[trade]
+        )
         lo_h, hi_h = float(hours_band[0]), float(hours_band[1])
         lo_r, hi_r = float(rate_band[0]), float(rate_band[1])
         mid_h = (lo_h + hi_h) / 2.0
@@ -622,7 +630,11 @@ def _complexity_labor_hours_application(complexity: str, *,
     }
 
 
-def _location_index_application(city: str | None) -> dict[str, Any]:
+def _location_index_application(
+    city: str | None,
+    *,
+    labor_rates: dict[str, list[float]] | None = None,
+) -> dict[str, Any]:
     """City → price index + how it scales every BRD cost band."""
     raw = (city or "").strip()
     key = raw.lower().replace(" ", "_") if raw else None
@@ -644,8 +656,12 @@ def _location_index_application(city: str | None) -> dict[str, Any]:
     )[:3]
 
     # How the index scales each BRD labor rate band.
+    rates = labor_rates or {
+        k: list(v) for k, v in costing.LABOR_RATES_INR_PER_HOUR.items()
+    }
     labor_scaled: dict[str, dict] = {}
-    for trade, (lo, hi) in costing.LABOR_RATES_INR_PER_HOUR.items():
+    for trade, band in rates.items():
+        lo, hi = float(band[0]), float(band[1])
         labor_scaled[trade] = {
             "base_band_inr_hour": [lo, hi],
             "scaled_band_inr_hour": [round(lo * index, 0), round(hi * index, 0)],
@@ -1132,7 +1148,11 @@ class KnowledgeIntegrationRequest(BaseModel):
 # ── Knowledge slice (the "auto-applied" deterministic answer) ───────────────
 
 
-def build_knowledge_integration_slice(req: KnowledgeIntegrationRequest) -> dict[str, Any]:
+def build_knowledge_integration_slice(
+    req: KnowledgeIntegrationRequest,
+    *,
+    labor_rates: dict[str, list[float]] | None = None,
+) -> dict[str, Any]:
     kind = _normalise(req.event_kind)
     payload = req.payload or {}
 
@@ -1187,9 +1207,12 @@ def build_knowledge_integration_slice(req: KnowledgeIntegrationRequest) -> dict[
             payload.get("complexity") or "moderate",
             trades=payload.get("trades"),
             city=payload.get("city"),
+            labor_rates=labor_rates,
         )
     elif kind == "location_index":
-        application = _location_index_application(payload.get("city"))
+        application = _location_index_application(
+            payload.get("city"), labor_rates=labor_rates
+        )
     elif kind == "volume_economies":
         application = _volume_economies_application(
             int(payload.get("units") or 1),
@@ -1275,8 +1298,12 @@ def build_knowledge_integration_slice(req: KnowledgeIntegrationRequest) -> dict[
             "quantity_basis_in_scope": list(QUANTITY_BASIS_IN_SCOPE),
             "waste_factor_pct_band_brd": list(costing.WASTE_FACTOR_PCT),
             "finish_pct_of_material_brd": list(costing.FINISH_COST_PCT_OF_MATERIAL),
-            "labor_trades_known": sorted(list(costing.LABOR_RATES_INR_PER_HOUR.keys())),
-            "labor_rates_inr_hour_brd": {
+            "labor_trades_known": sorted(list(
+                (labor_rates or {
+                    k: list(v) for k, v in costing.LABOR_RATES_INR_PER_HOUR.items()
+                }).keys()
+            )),
+            "labor_rates_inr_hour_brd": labor_rates or {
                 k: list(v) for k, v in costing.LABOR_RATES_INR_PER_HOUR.items()
             },
             "cities_known": sorted(list(regional_materials.CITY_PRICE_INDEX.keys())),
@@ -1513,7 +1540,11 @@ class KnowledgeIntegrationError(RuntimeError):
     """Raised when the LLM knowledge-integration stage cannot produce a grounded sheet."""
 
 
-async def generate_knowledge_application(req: KnowledgeIntegrationRequest) -> dict[str, Any]:
+async def generate_knowledge_application(
+    req: KnowledgeIntegrationRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise KnowledgeIntegrationError(
             "OpenAI API key is not configured. The knowledge integration stage "
@@ -1525,7 +1556,18 @@ async def generate_knowledge_application(req: KnowledgeIntegrationRequest) -> di
             f"Pick one of: {', '.join(EVENT_KINDS_IN_SCOPE)}."
         )
 
-    knowledge = build_knowledge_integration_slice(req)
+    if session is not None:
+        labor_bands = await load_labor_rate_bands(
+            session, defaults=costing.LABOR_RATES_INR_PER_HOUR
+        )
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            labor_bands = await load_labor_rate_bands(
+                own_session, defaults=costing.LABOR_RATES_INR_PER_HOUR
+            )
+    knowledge = build_knowledge_integration_slice(req, labor_rates=labor_bands)
     user_message = _user_message(req, knowledge)
     client = _client_instance()
 

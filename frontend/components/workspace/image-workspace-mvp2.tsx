@@ -75,6 +75,8 @@ export default function ImageWorkspaceMvp2() {
     setActiveProject,
     replaceGenerations,
     clearGenerations,
+    seededFromBriefId,
+    clearBriefSeed,
   } = useImageGenStore();
 
   const projectTypeDefs = useConfigStore((s) => s.projectTypeDefs);
@@ -242,6 +244,9 @@ export default function ImageWorkspaceMvp2() {
         graphData: switchRes.graph_data,
         estimate: switchRes.estimate,
         objectsBbox: switchRes.objects_bbox,
+        validation: switchRes.validation,
+        mepCostEstimate: switchRes.mep_cost_estimate ?? undefined,
+        codeCompliance: switchRes.code_compliance_summary,
       });
       setActiveProject(activeProjectId, switchRes.version);
       setTheme(newStyle as ArchTheme);
@@ -306,6 +311,9 @@ export default function ImageWorkspaceMvp2() {
         graphData: editRes.graph_data,
         estimate: editRes.estimate,
         objectsBbox: editRes.objects_bbox,
+        validation: editRes.validation,
+        mepCostEstimate: editRes.mep_cost_estimate ?? undefined,
+        codeCompliance: editRes.code_compliance_summary,
       });
       setActiveProject(activeProjectId, editRes.version);
       setEditPrompt("");
@@ -397,8 +405,16 @@ export default function ImageWorkspaceMvp2() {
         graphData: graphRes.graph_data,
         estimate: graphRes.estimate,
         objectsBbox: graphRes.objects_bbox,
+        validation: graphRes.validation,
+        mepCostEstimate: graphRes.mep_cost_estimate ?? undefined,
+        codeCompliance: graphRes.code_compliance_summary,
       });
       setActiveProject(projectId, graphRes.version);
+
+      // BRD §3.6 — first successful generation after a chat handoff
+      // dismisses the seed banner. From now on the workspace state is
+      // owned by this design session, not the originating brief.
+      if (seededFromBriefId) clearBriefSeed();
     } catch (e) {
       toastError(e, "Generation failed");
       setGenerateError(
@@ -439,6 +455,17 @@ export default function ImageWorkspaceMvp2() {
         activeProjectId={activeProjectId}
         token={token}
       />
+
+      {/* BRD §3.6 — chat→image-gen handoff banner. Shown after the
+          chat workspace's "Ready to design" pill seeds this store.
+          Dismiss removes the banner; first generation also auto-clears
+          it (see runGeneration). */}
+      {seededFromBriefId ? (
+        <BriefSeedBanner
+          briefId={seededFromBriefId}
+          onDismiss={clearBriefSeed}
+        />
+      ) : null}
 
       <div className="flex-1 flex min-h-0">
         <LeftControls
@@ -532,6 +559,7 @@ export default function ImageWorkspaceMvp2() {
           isEditing={isEditing}
           editError={editError}
           canEdit={!!activeProjectId}
+          codeCompliance={latestGeneration?.codeCompliance}
         />
       </div>
 
@@ -540,11 +568,49 @@ export default function ImageWorkspaceMvp2() {
           tab={terminalTab}
           setTab={setTerminalTab}
           hasDesign={generations.length > 0}
+          validation={latestGeneration?.validation}
+          mepCost={latestGeneration?.mepCostEstimate}
           onClose={() => toggleTerminal()}
         />
       ) : (
         <TerminalCollapsed onOpen={() => toggleTerminal()} />
       )}
+    </div>
+  );
+}
+
+// ── Brief seed banner (BRD §3.6) ───────────────────────────────────────
+
+function BriefSeedBanner({
+  briefId,
+  onDismiss,
+}: {
+  briefId: string;
+  onDismiss: () => void;
+}) {
+  return (
+    <div className="px-5 py-2 border-b border-hairline bg-emerald-50/60 flex items-center gap-3 text-[12px]">
+      <span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-emerald-600 text-white text-[10px] font-bold">
+        ✓
+      </span>
+      <div className="flex-1 min-w-0">
+        <span className="font-medium text-emerald-900">Seeded from chat brief.</span>{" "}
+        <span className="text-emerald-800">
+          Type, theme, dimensions, and brief have been auto-filled. Press{" "}
+          <span className="font-mono font-medium">Generate</span> to start.
+        </span>
+      </div>
+      <span className="text-[10px] font-mono text-emerald-700/70 hidden sm:inline">
+        {briefId.slice(0, 8)}…
+      </span>
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="text-emerald-700 hover:text-emerald-900 text-[11px] underline-offset-2 hover:underline"
+        title="Dismiss banner"
+      >
+        Dismiss
+      </button>
     </div>
   );
 }
@@ -570,7 +636,7 @@ function TopBar({
             href="/chat"
             className="text-[1.05rem] text-ink-deep tracking-tight font-semibold leading-none"
           >
-            Katha
+            KATHA AI
           </Link>
           <button
             type="button"
@@ -766,7 +832,7 @@ function CanvasPromptBar({
             ref={ref}
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder="Describe what you want — Katha tunes the output to your project type."
+            placeholder="Describe what you want — KATHA AI tunes the output to your project type."
             rows={1}
             onKeyDown={(e) => {
               if (e.key === "Enter" && !e.shiftKey && (e.metaKey || e.ctrlKey)) {
@@ -1068,7 +1134,7 @@ function CanvasEmptyHero({
         <CanvasInfoCard
           tag="Step 2"
           title="Prompt"
-          body={`Describe the design. Katha treats it as a ${lowerLabel} project and pulls the right codes + cost defaults.`}
+          body={`Describe the design. KATHA AI treats it as a ${lowerLabel} project and pulls the right codes + cost defaults.`}
         />
         <CanvasInfoCard
           tag="Step 3"
@@ -1380,6 +1446,7 @@ function RightSummary({
   isEditing,
   editError,
   canEdit,
+  codeCompliance,
 }: {
   hasDesign: boolean;
   dim: Dim;
@@ -1393,6 +1460,7 @@ function RightSummary({
   isEditing: boolean;
   editError: string | null;
   canEdit: boolean;
+  codeCompliance?: import("@/lib/types").CodeComplianceEntry[];
 }) {
   const hasGraph = objects.length > 0;
   return (
@@ -1430,6 +1498,7 @@ function RightSummary({
                 <CitedKV k="Theme" v={theme} />
               </div>
             </div>
+            <CodeComplianceBlock entries={codeCompliance} />
           </div>
         ) : (
           // Anonymous / image-only fallback — no graph_data was
@@ -1471,31 +1540,7 @@ function RightSummary({
                 />
               </div>
             </div>
-            <div>
-              <h4 className="font-mono text-[10px] tracking-[0.14em] uppercase text-ink-mute mb-2">
-                Code compliance
-              </h4>
-              <div className="border-t border-hairline">
-                <CitedKV
-                  k="Door width"
-                  v="1100 mm"
-                  src="NBC-2016 Part 3 §4.2.1 · ≥ 1000 mm"
-                  srcWhen="ingested 2026-04-01"
-                />
-                <CitedKV
-                  k="Wall U-value"
-                  v="0.36 W/m²K"
-                  src="ECBC-2017 §4.3 · ≤ 0.40"
-                  srcWhen="ingested 2026-04-01"
-                />
-                <CitedKV
-                  k="Joinery tol."
-                  v="±0.5 mm"
-                  src="Mfg handbook §6 · mortise-tenon"
-                  srcWhen="ingested 2026-04-01"
-                />
-              </div>
-            </div>
+            <CodeComplianceBlock entries={codeCompliance} />
           </div>
         )}
       </div>
@@ -1509,6 +1554,120 @@ function RightSummary({
    it; submit fires /projects/{id}/edit and the gallery grows by one
    version. Architects iterate the design without re-prompting from
    scratch. */
+/* BRD §1B — Code Compliance block in the right sidebar.
+   Entries arrive pre-built from the generation pipeline; each row
+   carries its severity (fail / warn / info) plus the DB source it
+   was resolved from. We sort fail → warn → info so the architect
+   sees blockers first. When the pipeline hasn't produced any entries
+   yet (legacy generation, validator hiccup), show a thin idle line
+   instead of the long-since-deleted hardcoded mock rows. */
+function CodeComplianceBlock({
+  entries,
+}: {
+  entries?: import("@/lib/types").CodeComplianceEntry[];
+}) {
+  const items = entries ?? [];
+  // Fail first, warn second, info last — preserves order inside each.
+  const orderRank: Record<string, number> = { fail: 0, warn: 1, info: 2 };
+  const sorted = items
+    .map((e, i) => ({ e, i }))
+    .sort((a, b) => {
+      const rA = orderRank[a.e.status] ?? 9;
+      const rB = orderRank[b.e.status] ?? 9;
+      return rA !== rB ? rA - rB : a.i - b.i;
+    })
+    .map((x) => x.e);
+
+  const failCount = items.filter((e) => e.status === "fail").length;
+  const warnCount = items.filter((e) => e.status === "warn").length;
+
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-2">
+        <h4 className="font-mono text-[10px] tracking-[0.14em] uppercase text-ink-mute">
+          Code compliance
+        </h4>
+        {items.length > 0 && (
+          <span className="font-mono text-[10px] text-ink-mute tnum">
+            {failCount > 0 && (
+              <span className="text-rose-700">{failCount} fail</span>
+            )}
+            {failCount > 0 && warnCount > 0 && (
+              <span className="text-ink-mute"> · </span>
+            )}
+            {warnCount > 0 && (
+              <span className="text-amber-700">{warnCount} warn</span>
+            )}
+            {failCount === 0 && warnCount === 0 && (
+              <span className="text-emerald-700">all clear</span>
+            )}
+          </span>
+        )}
+      </div>
+      <div className="border-t border-hairline">
+        {sorted.length === 0 ? (
+          <p className="py-3 text-[11px] text-ink-mute italic">
+            Code compliance will populate after the first generation.
+          </p>
+        ) : (
+          sorted.map((entry, i) => (
+            <ComplianceRow key={`${entry.code}-${i}`} entry={entry} />
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ComplianceRow({
+  entry,
+}: {
+  entry: import("@/lib/types").CodeComplianceEntry;
+}) {
+  const statusDot = {
+    fail: "bg-rose-600",
+    warn: "bg-amber-500",
+    info: "bg-emerald-500",
+  }[entry.status];
+
+  // The source citation lives on its own line below the value — same
+  // shape as the existing CitedKV but with a severity dot prepended.
+  return (
+    <div className="py-2 border-b border-hairline last:border-b-0">
+      <div className="flex items-start gap-2">
+        <span
+          className={`shrink-0 mt-1.5 w-1.5 h-1.5 rounded-full ${statusDot}`}
+          aria-hidden="true"
+        />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[12px] text-ink-deep font-medium">
+              {entry.label}
+            </span>
+            {entry.status !== "info" && (
+              <span className="font-mono text-[9px] uppercase tracking-wider text-ink-mute">
+                {entry.status}
+              </span>
+            )}
+          </div>
+          <p className="text-[11px] text-ink-soft leading-snug mt-0.5">
+            {entry.value}
+          </p>
+          {entry.source_section && (
+            <p className="text-[10px] text-ink-mute mt-0.5">
+              cite: <span className="text-pencil">{entry.source_section}</span>
+              {entry.jurisdiction && (
+                <span className="text-ink-mute"> ({entry.jurisdiction})</span>
+              )}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function ObjectsPanel({
   objects,
   selectedObjectId,
@@ -1744,27 +1903,37 @@ function TerminalCollapsed({ onOpen }: { onOpen: () => void }) {
   );
 }
 
-const TABS: { id: TerminalTab; label: string; count?: number }[] = [
-  { id: "cost", label: "Cost" },
-  { id: "problems", label: "Problems", count: 0 },
-];
-
 function TerminalPanel({
   tab,
   setTab,
   hasDesign,
+  validation,
+  mepCost,
   onClose,
 }: {
   tab: TerminalTab;
   setTab: (t: TerminalTab) => void;
   hasDesign: boolean;
+  validation?: import("@/lib/types").ValidationReport;
+  mepCost?: import("@/lib/types").MepCostEstimate;
   onClose: () => void;
 }) {
+  // BRD §11.3 — Problems tab count reflects errors + warnings (suggestions
+  // are advisory only and don't drive the badge). 0 when there's no design
+  // yet or when the validator hasn't run.
+  const problemCount =
+    (validation?.errors?.length ?? 0) + (validation?.warnings?.length ?? 0);
+
+  const tabs: { id: TerminalTab; label: string; count?: number }[] = [
+    { id: "cost", label: "Cost" },
+    { id: "problems", label: "Problems", count: problemCount },
+  ];
+
   return (
     <div className="border-t border-hairline bg-ink-deep h-72 flex flex-col">
       <div className="border-b border-white/10 pl-2 pr-1 flex items-center justify-between">
         <div className="flex items-center">
-          {TABS.map((t) => {
+          {tabs.map((t) => {
             const active = t.id === tab;
             return (
               <button
@@ -1819,16 +1988,22 @@ function TerminalPanel({
 
       <div className="flex-1 overflow-y-auto draft-scroll px-6 py-4">
         {tab === "cost" ? (
-          <CostStream hasDesign={hasDesign} />
+          <CostStream hasDesign={hasDesign} mepCost={mepCost} />
         ) : (
-          <ProblemsList />
+          <ProblemsList hasDesign={hasDesign} validation={validation} />
         )}
       </div>
     </div>
   );
 }
 
-function CostStream({ hasDesign }: { hasDesign: boolean }) {
+function CostStream({
+  hasDesign,
+  mepCost,
+}: {
+  hasDesign: boolean;
+  mepCost?: import("@/lib/types").MepCostEstimate;
+}) {
   if (!hasDesign) {
     return (
       <div className="font-mono text-[12px] text-white/50 leading-relaxed">
@@ -1845,6 +2020,12 @@ function CostStream({ hasDesign }: { hasDesign: boolean }) {
         <CostFigure label="Base" value="₹ 1,68,000" highlight />
         <CostFigure label="High" value="₹ 1,95,000" />
       </div>
+
+      {/* BRD §1B — MEP systems cost block. DB-backed; rolls up HVAC,
+          electrical, plumbing, fire-fighting at ₹/m² bands for the
+          generated room area. Hidden until the validator emits one
+          (no usable room area → no block). */}
+      {mepCost ? <MepCostBlock mepCost={mepCost} /> : null}
       <div className="border-t border-white/10 pt-3">
         <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-white/45 mb-2">
           Line items
@@ -1896,6 +2077,73 @@ function CostStream({ hasDesign }: { hasDesign: boolean }) {
       </div>
       <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-white/40">
         Updated 0 ms ago · MCX live
+      </div>
+    </div>
+  );
+}
+
+function MepCostBlock({
+  mepCost,
+}: {
+  mepCost: import("@/lib/types").MepCostEstimate;
+}) {
+  // Compact INR formatter — uses lakhs/crores at >=1e5 / >=1e7 so the
+  // numbers don't dominate the row width on big commercial projects.
+  const fmt = (n: number | undefined): string => {
+    if (n == null || Number.isNaN(n)) return "—";
+    if (n >= 1e7) return `₹ ${(n / 1e7).toFixed(2)} Cr`;
+    if (n >= 1e5) return `₹ ${(n / 1e5).toFixed(2)} L`;
+    return `₹ ${Math.round(n).toLocaleString("en-IN")}`;
+  };
+
+  const SYSTEM_LABEL: Record<string, string> = {
+    hvac: "HVAC",
+    electrical: "Electrical",
+    plumbing: "Plumbing",
+    fire_fighting: "Fire-fighting",
+  };
+
+  const totalLow = mepCost.total_inr.low;
+  const totalHigh = mepCost.total_inr.high;
+
+  return (
+    <div className="border-t border-white/10 pt-3">
+      <div className="flex items-baseline justify-between mb-2">
+        <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-white/45">
+          MEP systems · per ₹/m² band
+        </div>
+        <div className="font-mono text-[10px] tracking-tight text-white/55">
+          area {mepCost.area_m2.toFixed(1)} m² · {mepCost.jurisdiction}
+        </div>
+      </div>
+
+      <div className="space-y-1 font-mono text-[12px] text-white/85">
+        {mepCost.systems.map((s) => {
+          const lo = s.rate_inr_m2.low;
+          const hi = s.rate_inr_m2.high;
+          const tlow = s.total_inr.low;
+          const thigh = s.total_inr.high;
+          const label = SYSTEM_LABEL[s.system] ?? s.system;
+          return (
+            <CostLine
+              key={s.key}
+              k={`${label} · ${s.key}`}
+              v={`${fmt(tlow)}–${fmt(thigh)}`}
+              src={`Rate ₹${lo ?? "?"}–${hi ?? "?"}/m² · DB`}
+              srcWhen={mepCost.jurisdiction}
+            />
+          );
+        })}
+      </div>
+
+      <div className="border-t border-white/10 mt-2 pt-2 flex items-baseline justify-between">
+        <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-white/55">
+          MEP total
+        </div>
+        <div className="font-mono text-[13px] text-paper tnum">
+          {fmt(totalLow)} <span className="text-white/45 px-1">–</span>{" "}
+          {fmt(totalHigh)}
+        </div>
       </div>
     </div>
   );
@@ -1978,25 +2226,144 @@ function SourceMark({ src, srcWhen }: { src: string; srcWhen?: string }) {
   );
 }
 
-function ProblemsList() {
+function ProblemsList({
+  hasDesign,
+  validation,
+}: {
+  hasDesign: boolean;
+  validation?: import("@/lib/types").ValidationReport;
+}) {
+  // No design yet — explain what will populate here.
+  if (!hasDesign) {
+    return (
+      <div className="font-mono text-[12px] text-white/65 space-y-1.5">
+        <div className="text-white/45">No problems detected.</div>
+        <div className="text-white/45">
+          Validation warnings, hard errors, and suggestions will appear here
+          once you generate a design. Every entry cites its source.
+        </div>
+      </div>
+    );
+  }
+
+  // Design exists but no validation block — likely a legacy generation
+  // saved before the validator was wired in. Treat as silent OK.
+  if (!validation) {
+    return (
+      <div className="font-mono text-[12px] text-white/65 space-y-1.5">
+        <div className="pl-3 border-l-2 border-olive">
+          <span className="text-olive">[OK]</span>
+          <span className="ml-2 text-white/85">
+            no validation report attached to this version
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  const errors = validation.errors ?? [];
+  const warnings = validation.warnings ?? [];
+  const suggestions = validation.suggestions ?? [];
+  const total = errors.length + warnings.length + suggestions.length;
+
+  if (total === 0) {
+    return (
+      <div className="font-mono text-[12px] text-white/65 space-y-1.5">
+        <div className="pl-3 border-l-2 border-olive">
+          <span className="text-olive">[OK]</span>
+          <span className="ml-2 text-white/85">{validation.summary}</span>
+        </div>
+        <div className="text-white/45 pl-3">
+          All rooms, ergonomics, and clearances within standard.
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="font-mono text-[12px] text-white/65 space-y-1.5">
-      <div className="text-white/45">No problems detected.</div>
-      <div className="text-white/45">
-        Validation warnings, hard errors, suggestions, and provenance notes
-        will appear here as the agent works.
+    <div className="font-mono text-[12px] text-white/85 space-y-3">
+      <div className="text-white/55">{validation.summary}</div>
+
+      {errors.length > 0 && (
+        <IssueSection
+          label="Errors"
+          color="rose"
+          tag="[ERR]"
+          items={errors}
+        />
+      )}
+      {warnings.length > 0 && (
+        <IssueSection
+          label="Warnings"
+          color="amber"
+          tag="[WARN]"
+          items={warnings}
+        />
+      )}
+      {suggestions.length > 0 && (
+        <IssueSection
+          label="Suggestions"
+          color="sky"
+          tag="[NOTE]"
+          items={suggestions}
+        />
+      )}
+    </div>
+  );
+}
+
+/* One severity group inside the Problems tab. Each entry shows:
+   [TAG] code · message · path
+        cite: source_section (jurisdiction)            ← when DB-backed
+   The tag colour ties into the BRD severity palette
+   (red error / amber warning / blue suggestion). */
+function IssueSection({
+  label,
+  color,
+  tag,
+  items,
+}: {
+  label: string;
+  color: "rose" | "amber" | "sky";
+  tag: string;
+  items: import("@/lib/types").ValidationIssue[];
+}) {
+  const colorClasses = {
+    rose: { border: "border-rose-400", tag: "text-rose-300" },
+    amber: { border: "border-amber-400", tag: "text-amber-300" },
+    sky: { border: "border-sky-400", tag: "text-sky-300" },
+  }[color];
+
+  return (
+    <div>
+      <div className="text-white/55 uppercase tracking-wider text-[10px] mb-1">
+        {label} · {items.length}
       </div>
-      <div className="mt-4 pl-3 border-l-2 border-olive">
-        <span className="text-olive">[OK]</span>
-        <span className="ml-2 text-white/85">
-          all dimensions within ergonomic ranges
-        </span>
-      </div>
-      <div className="pl-3 border-l-2 border-olive">
-        <span className="text-olive">[OK]</span>
-        <span className="ml-2 text-white/85">
-          door width 1100mm ≥ NBC 1000mm minimum
-        </span>
+      <div className="space-y-1.5">
+        {items.map((issue, i) => (
+          <div
+            key={`${issue.code}-${issue.path}-${i}`}
+            className={`pl-3 border-l-2 ${colorClasses.border} leading-snug`}
+          >
+            <div>
+              <span className={colorClasses.tag}>{tag}</span>{" "}
+              <span className="text-white/55">{issue.code}</span>{" "}
+              <span className="text-white/85">{issue.message}</span>
+            </div>
+            <div className="text-white/40 text-[10.5px] pl-1">
+              {issue.path}
+              {issue.source_section && (
+                <span>
+                  {" · cite: "}
+                  <span className="text-pencil">{issue.source_section}</span>
+                  {issue.jurisdiction && (
+                    <span className="text-white/35"> ({issue.jurisdiction})</span>
+                  )}
+                </span>
+              )}
+            </div>
+          </div>
+        ))}
       </div>
     </div>
   );

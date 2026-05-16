@@ -24,6 +24,7 @@ from app.services.material_spec_service import (
     MaterialSpecRequest,
     build_material_spec_knowledge,
     generate_material_spec_sheet,
+    load_material_spec_bands,
 )
 from app.services.mep_spec_service import (
     MEPSpecError,
@@ -43,12 +44,22 @@ from app.services.pricing_service import (
     build_pricing_knowledge,
     generate_pricing_buildup,
 )
+from app.knowledge import costing as _costing_legacy
 from app.services.cost_breakdown_service import (
     CostBreakdownError,
     CostBreakdownRequest,
     build_cost_breakdown_knowledge,
     generate_cost_breakdown,
+    load_cost_breakdown_bands,
 )
+from app.services.pricing.knowledge_service import (
+    load_labor_rate_bands,
+    load_pricing_bands,
+    load_sensitivity_bands,
+)
+from app.services.themes import get_theme as _get_theme_db
+from app.services.pricing_service import _PRICING_BRD_DEFAULTS
+from app.services.sensitivity_service import _SENSITIVITY_BRD_DEFAULTS
 from app.services.sensitivity_service import (
     SensitivityError,
     SensitivityRequest,
@@ -212,9 +223,16 @@ async def list_spec_types() -> dict:
 
 
 @router.post("/material-spec/knowledge")
-async def material_spec_knowledge(payload: MaterialSpecRequest) -> dict:
+async def material_spec_knowledge(
+    payload: MaterialSpecRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the knowledge slice the material-spec LLM stage will see."""
-    knowledge = build_material_spec_knowledge(payload)
+    bands = await load_material_spec_bands(db)
+    theme_pack = await _get_theme_db(db, payload.theme)
+    knowledge = build_material_spec_knowledge(
+        payload, cost_bands=bands, theme_pack=theme_pack
+    )
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -231,10 +249,13 @@ async def material_spec_knowledge(payload: MaterialSpecRequest) -> dict:
 
 
 @router.post("/material-spec")
-async def material_spec_endpoint(payload: MaterialSpecRequest) -> dict:
+async def material_spec_endpoint(
+    payload: MaterialSpecRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM material-spec author + return the structured sheet."""
     try:
-        return await generate_material_spec_sheet(payload)
+        return await generate_material_spec_sheet(payload, session=db)
     except MaterialSpecError as exc:
         msg = str(exc)
         if "Unknown theme" in msg:
@@ -250,9 +271,18 @@ async def material_spec_endpoint(payload: MaterialSpecRequest) -> dict:
 
 
 @router.post("/manufacturing-spec/knowledge")
-async def manufacturing_spec_knowledge(payload: ManufacturingSpecRequest) -> dict:
+async def manufacturing_spec_knowledge(
+    payload: ManufacturingSpecRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the knowledge slice the manufacturing-spec LLM stage will see."""
-    knowledge = build_manufacturing_spec_knowledge(payload)
+    labor_bands = await load_labor_rate_bands(
+        db, defaults=_costing_legacy.LABOR_RATES_INR_PER_HOUR
+    )
+    theme_pack = await _get_theme_db(db, payload.theme)
+    knowledge = build_manufacturing_spec_knowledge(
+        payload, labor_rates_inr_hour=labor_bands, theme_pack=theme_pack
+    )
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -269,10 +299,13 @@ async def manufacturing_spec_knowledge(payload: ManufacturingSpecRequest) -> dic
 
 
 @router.post("/manufacturing-spec")
-async def manufacturing_spec_endpoint(payload: ManufacturingSpecRequest) -> dict:
+async def manufacturing_spec_endpoint(
+    payload: ManufacturingSpecRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM manufacturing-spec author + return the structured sheet."""
     try:
-        return await generate_manufacturing_spec(payload)
+        return await generate_manufacturing_spec(payload, session=db)
     except ManufacturingSpecError as exc:
         msg = str(exc)
         if "Unknown theme" in msg:
@@ -288,10 +321,16 @@ async def manufacturing_spec_endpoint(payload: ManufacturingSpecRequest) -> dict
 
 
 @router.post("/mep-spec/knowledge")
-async def mep_spec_knowledge(payload: MEPSpecRequest) -> dict:
+async def mep_spec_knowledge(
+    payload: MEPSpecRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the knowledge slice the MEP-spec LLM stage will see."""
     try:
-        knowledge = build_mep_spec_knowledge(payload)
+        theme_pack = (
+            await _get_theme_db(db, payload.theme) if payload.theme else None
+        )
+        knowledge = build_mep_spec_knowledge(payload, theme_pack=theme_pack)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -304,10 +343,13 @@ async def mep_spec_knowledge(payload: MEPSpecRequest) -> dict:
 
 
 @router.post("/mep-spec")
-async def mep_spec_endpoint(payload: MEPSpecRequest) -> dict:
+async def mep_spec_endpoint(
+    payload: MEPSpecRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM MEP-spec author + return the structured sheet."""
     try:
-        return await generate_mep_spec(payload)
+        return await generate_mep_spec(payload, session=db)
     except MEPSpecError as exc:
         msg = str(exc)
         if msg.startswith("Unknown room_use_type") or msg.startswith("Unknown plumbing fixture"):
@@ -381,10 +423,14 @@ async def cost_engine_endpoint(
 
 
 @router.post("/pricing/knowledge")
-async def pricing_knowledge(payload: PricingRequest) -> dict:
+async def pricing_knowledge(
+    payload: PricingRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the BRD margin/markup knowledge slice the pricing LLM will see."""
     try:
-        knowledge = build_pricing_knowledge(payload)
+        bands = await load_pricing_bands(db, defaults=_PRICING_BRD_DEFAULTS)
+        knowledge = build_pricing_knowledge(payload, pricing_bands=bands)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -398,10 +444,13 @@ async def pricing_knowledge(payload: PricingRequest) -> dict:
 
 
 @router.post("/pricing")
-async def pricing_endpoint(payload: PricingRequest) -> dict:
+async def pricing_endpoint(
+    payload: PricingRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM pricing-buildup author + return the structured price walk."""
     try:
-        return await generate_pricing_buildup(payload)
+        return await generate_pricing_buildup(payload, session=db)
     except PricingError as exc:
         msg = str(exc)
         if msg.startswith("Unknown"):
@@ -417,10 +466,14 @@ async def pricing_endpoint(payload: PricingRequest) -> dict:
 
 
 @router.post("/cost-breakdown/knowledge")
-async def cost_breakdown_knowledge(payload: CostBreakdownRequest) -> dict:
+async def cost_breakdown_knowledge(
+    payload: CostBreakdownRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the rolled-up components the cost-breakdown LLM stage will see."""
     try:
-        knowledge = build_cost_breakdown_knowledge(payload)
+        bands = await load_cost_breakdown_bands(db)
+        knowledge = build_cost_breakdown_knowledge(payload, cost_bands=bands)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -434,10 +487,13 @@ async def cost_breakdown_knowledge(payload: CostBreakdownRequest) -> dict:
 
 
 @router.post("/cost-breakdown")
-async def cost_breakdown_endpoint(payload: CostBreakdownRequest) -> dict:
+async def cost_breakdown_endpoint(
+    payload: CostBreakdownRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM cost-breakdown author + return the structured five-row report."""
     try:
-        return await generate_cost_breakdown(payload)
+        return await generate_cost_breakdown(payload, session=db)
     except CostBreakdownError as exc:
         msg = str(exc)
         if "missing or zero" in msg:
@@ -453,10 +509,16 @@ async def cost_breakdown_endpoint(payload: CostBreakdownRequest) -> dict:
 
 
 @router.post("/sensitivity/knowledge")
-async def sensitivity_knowledge(payload: SensitivityRequest) -> dict:
+async def sensitivity_knowledge(
+    payload: SensitivityRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the deterministic shock + volume scenarios the LLM stage will see."""
     try:
-        knowledge = build_sensitivity_knowledge(payload)
+        bands = await load_sensitivity_bands(
+            db, defaults=_SENSITIVITY_BRD_DEFAULTS
+        )
+        knowledge = build_sensitivity_knowledge(payload, brd_bands=bands)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -471,10 +533,13 @@ async def sensitivity_knowledge(payload: SensitivityRequest) -> dict:
 
 
 @router.post("/sensitivity")
-async def sensitivity_endpoint(payload: SensitivityRequest) -> dict:
+async def sensitivity_endpoint(
+    payload: SensitivityRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM sensitivity-analysis author + return the structured what-if report."""
     try:
-        return await generate_sensitivity_analysis(payload)
+        return await generate_sensitivity_analysis(payload, session=db)
     except SensitivityError as exc:
         msg = str(exc)
         if "missing or zero" in msg or "must be positive" in msg:
