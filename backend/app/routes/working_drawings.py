@@ -7,10 +7,17 @@ Each drawing type follows the project contract:
 
 import logging
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import get_db
 from app.knowledge import themes
 from app.models.schemas import ErrorResponse
+from app.services.standards.manufacturing_lookup import (
+    precision_requirements as _precision_requirements_db,
+    tolerances_mm_map as _tolerances_mm_map_db,
+)
+from app.services.themes import get_theme as _get_theme_db
 from app.services.detail_sheet_drawing_service import (
     DetailSheetError,
     DetailSheetRequest,
@@ -52,10 +59,18 @@ router = APIRouter(prefix="/working-drawings", tags=["working-drawings"])
 
 
 @router.get("/precision-requirements")
-async def precision_requirements_endpoint() -> dict:
-    """Expose BRD 3A precision-requirement bands dynamically — no hardcoded list."""
+async def precision_requirements_endpoint(
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Expose BRD 3A precision-requirement bands from versioned
+    ``building_standards`` rows (``mfg_precision_requirements`` +
+    ``mfg_tolerance_*`` siblings). Falls back to the legacy Python
+    literal when the DB row is missing.
+    """
+    db_bands = await _precision_requirements_db(db)
+    bands_mm = db_bands if db_bands else precision_bands()
     return {
-        "bands_mm": precision_bands(),
+        "bands_mm": bands_mm,
         "applies_to": [
             {"category": "structural_mm", "examples": ["load-bearing joints", "frame members"]},
             {"category": "cosmetic_mm", "examples": ["visible surfaces", "panels", "edges"]},
@@ -106,9 +121,13 @@ async def list_drawing_types() -> dict:
 
 
 @router.post("/plan-view/knowledge")
-async def plan_view_knowledge(payload: PlanViewRequest) -> dict:
+async def plan_view_knowledge(
+    payload: PlanViewRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the knowledge slice the plan-view LLM stage will see."""
-    knowledge = build_plan_knowledge(payload)
+    theme_pack = await _get_theme_db(db, payload.theme)
+    knowledge = build_plan_knowledge(payload, theme_pack=theme_pack)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -134,10 +153,15 @@ def _attach_precision(result: dict, spec_key: str) -> dict:
 
 
 @router.post("/plan-view")
-async def plan_view_endpoint(payload: PlanViewRequest) -> dict:
+async def plan_view_endpoint(
+    payload: PlanViewRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM plan-view author + render the technical SVG."""
     try:
-        return _attach_precision(await generate_plan_view_drawing(payload), "plan_view_spec")
+        return _attach_precision(
+            await generate_plan_view_drawing(payload, session=db), "plan_view_spec"
+        )
     except PlanViewError as exc:
         msg = str(exc)
         if "Unknown theme" in msg:
@@ -153,9 +177,13 @@ async def plan_view_endpoint(payload: PlanViewRequest) -> dict:
 
 
 @router.post("/elevation-view/knowledge")
-async def elevation_view_knowledge(payload: ElevationViewRequest) -> dict:
+async def elevation_view_knowledge(
+    payload: ElevationViewRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the knowledge slice the elevation-view LLM stage will see."""
-    knowledge = build_elevation_knowledge(payload)
+    theme_pack = await _get_theme_db(db, payload.theme)
+    knowledge = build_elevation_knowledge(payload, theme_pack=theme_pack)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -180,10 +208,16 @@ async def elevation_view_knowledge(payload: ElevationViewRequest) -> dict:
 
 
 @router.post("/elevation-view")
-async def elevation_view_endpoint(payload: ElevationViewRequest) -> dict:
+async def elevation_view_endpoint(
+    payload: ElevationViewRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM elevation-view author + render the technical SVG."""
     try:
-        return _attach_precision(await generate_elevation_view_drawing(payload), "elevation_view_spec")
+        return _attach_precision(
+            await generate_elevation_view_drawing(payload, session=db),
+            "elevation_view_spec",
+        )
     except ElevationViewError as exc:
         msg = str(exc)
         if "Unknown theme" in msg:
@@ -202,9 +236,16 @@ async def elevation_view_endpoint(payload: ElevationViewRequest) -> dict:
 
 
 @router.post("/section-view/knowledge")
-async def section_view_knowledge(payload: SectionViewRequest) -> dict:
+async def section_view_knowledge(
+    payload: SectionViewRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the knowledge slice the section-view LLM stage will see."""
-    knowledge = build_section_knowledge(payload)
+    theme_pack = await _get_theme_db(db, payload.theme)
+    tolerances = await _tolerances_mm_map_db(db)
+    knowledge = build_section_knowledge(
+        payload, theme_pack=theme_pack, tolerances_mm=tolerances
+    )
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -229,10 +270,16 @@ async def section_view_knowledge(payload: SectionViewRequest) -> dict:
 
 
 @router.post("/section-view")
-async def section_view_endpoint(payload: SectionViewRequest) -> dict:
+async def section_view_endpoint(
+    payload: SectionViewRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM section-view author + render the cut-through SVG."""
     try:
-        return _attach_precision(await generate_section_view_drawing(payload), "section_view_spec")
+        return _attach_precision(
+            await generate_section_view_drawing(payload, session=db),
+            "section_view_spec",
+        )
     except SectionViewError as exc:
         msg = str(exc)
         if "Unknown theme" in msg:
@@ -251,9 +298,13 @@ async def section_view_endpoint(payload: SectionViewRequest) -> dict:
 
 
 @router.post("/isometric/knowledge")
-async def isometric_knowledge(payload: IsometricViewRequest) -> dict:
+async def isometric_knowledge(
+    payload: IsometricViewRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the knowledge slice the iso LLM stage will see."""
-    knowledge = build_isometric_knowledge(payload)
+    theme_pack = await _get_theme_db(db, payload.theme)
+    knowledge = build_isometric_knowledge(payload, theme_pack=theme_pack)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -278,10 +329,16 @@ async def isometric_knowledge(payload: IsometricViewRequest) -> dict:
 
 
 @router.post("/isometric")
-async def isometric_endpoint(payload: IsometricViewRequest) -> dict:
+async def isometric_endpoint(
+    payload: IsometricViewRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM iso author + render the 3D axonometric SVG."""
     try:
-        return _attach_precision(await generate_isometric_view_drawing(payload), "isometric_view_spec")
+        return _attach_precision(
+            await generate_isometric_view_drawing(payload, session=db),
+            "isometric_view_spec",
+        )
     except IsometricViewError as exc:
         msg = str(exc)
         if "Unknown theme" in msg:
@@ -300,9 +357,16 @@ async def isometric_endpoint(payload: IsometricViewRequest) -> dict:
 
 
 @router.post("/detail-sheet/knowledge")
-async def detail_sheet_knowledge(payload: DetailSheetRequest) -> dict:
+async def detail_sheet_knowledge(
+    payload: DetailSheetRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the knowledge slice the detail-sheet LLM stage will see."""
-    knowledge = build_detail_knowledge(payload)
+    theme_pack = await _get_theme_db(db, payload.theme)
+    tolerances = await _tolerances_mm_map_db(db)
+    knowledge = build_detail_knowledge(
+        payload, theme_pack=theme_pack, tolerances_mm=tolerances
+    )
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -327,10 +391,16 @@ async def detail_sheet_knowledge(payload: DetailSheetRequest) -> dict:
 
 
 @router.post("/detail-sheet")
-async def detail_sheet_endpoint(payload: DetailSheetRequest) -> dict:
+async def detail_sheet_endpoint(
+    payload: DetailSheetRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM detail-sheet author + render the multi-cell detail SVG."""
     try:
-        return _attach_precision(await generate_detail_sheet_drawing(payload), "detail_sheet_spec")
+        return _attach_precision(
+            await generate_detail_sheet_drawing(payload, session=db),
+            "detail_sheet_spec",
+        )
     except DetailSheetError as exc:
         msg = str(exc)
         if "Unknown theme" in msg:

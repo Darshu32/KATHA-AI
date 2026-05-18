@@ -27,16 +27,27 @@ from app.knowledge import manufacturing, materials as materials_kb, themes
 logger = logging.getLogger(__name__)
 
 
-def recommend(data: dict) -> list[dict]:
-    """Run all recommenders on a design graph and return merged list."""
+def recommend(
+    data: dict,
+    *,
+    theme_pack: dict | None = None,
+    lead_times_weeks: dict[str, list[int]] | None = None,
+) -> list[dict]:
+    """Run all recommenders on a design graph and return merged list.
+
+    ``theme_pack`` and ``lead_times_weeks`` may be passed when the caller
+    pre-loaded them from DB (async route → sync recommender bridge);
+    otherwise both fall back to legacy ``app.knowledge`` literals so a
+    sync caller without DB access still produces grounded output.
+    """
     recs: list[dict] = []
 
     style = (data.get("style") or {}).get("primary") or ""
-    pack = themes.get(style)
+    pack = theme_pack if theme_pack is not None else themes.get(style)
 
     _recommend_theme_materials(data, pack, recs)
     _recommend_material_cost(data, recs)
-    _recommend_lead_times(data, recs)
+    _recommend_lead_times(data, recs, lead_times_weeks=lead_times_weeks)
     _recommend_volume_pricing(data, recs)
     _recommend_sustainability(data, pack, recs)
 
@@ -103,17 +114,31 @@ def _recommend_material_cost(data: dict, recs: list[dict]) -> None:
 
 # ── Lead-time advisories ────────────────────────────────────────────────────
 
-def _recommend_lead_times(data: dict, recs: list[dict]) -> None:
+def _recommend_lead_times(
+    data: dict,
+    recs: list[dict],
+    *,
+    lead_times_weeks: dict[str, list[int]] | None = None,
+) -> None:
     """Summarise longest lead-time driver so procurement plans for it."""
+
+    def _lookup(discipline: str) -> tuple[int, int] | None:
+        if lead_times_weeks is not None:
+            band = lead_times_weeks.get(discipline)
+            if band and len(band) >= 2:
+                return (int(band[0]), int(band[1]))
+            return None
+        return manufacturing.lead_time_for(discipline)
+
     drivers: list[tuple[str, tuple[int, int]]] = []
     for obj in data.get("objects", []):
         mat = (obj.get("material") or "").lower()
         if any(s in mat for s in ("walnut", "oak", "teak", "rosewood")):
-            lt = manufacturing.lead_time_for("woodworking_furniture")
+            lt = _lookup("woodworking_furniture")
             if lt:
                 drivers.append((obj.get("type") or "wood item", lt))
         elif any(s in mat for s in ("steel", "iron", "brass", "aluminium", "aluminum")):
-            lt = manufacturing.lead_time_for("metal_fabrication")
+            lt = _lookup("metal_fabrication")
             if lt:
                 drivers.append((obj.get("type") or "metal item", lt))
 

@@ -55,6 +55,10 @@ from app.knowledge import (
 )
 from app.services.cost_engine_service import TRADE_HOURS_BY_COMPLEXITY
 from app.services.pricing.knowledge_service import load_labor_rate_bands
+from app.services.standards.recommendations_pack import (
+    load_knowledge_integration_pack,
+)
+from app.services.themes import get_theme as _get_theme_db
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -110,8 +114,12 @@ def _normalise(value: str) -> str:
     return (value or "").strip().lower().replace(" ", "_").replace("-", "_")
 
 
-def _theme_application(name: str) -> dict[str, Any]:
-    pack = themes.get(name)
+def _theme_application(
+    name: str,
+    *,
+    theme_pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    pack = theme_pack if theme_pack is not None else themes.get(name)
     if not pack:
         return {
             "status": "unknown",
@@ -221,7 +229,17 @@ def _dimension_application(category: str, item: str,
     }
 
 
-def _material_application(family: str, name: str) -> dict[str, Any]:
+def _material_application(
+    family: str,
+    name: str,
+    *,
+    wood_catalogue: dict[str, dict[str, Any]] | None = None,
+    metal_catalogue: dict[str, dict[str, Any]] | None = None,
+    finishes_catalogue: dict[str, dict[str, Any]] | None = None,
+    wood_finish_palette: list[str] | None = None,
+    metal_finish_palette: list[str] | None = None,
+    metal_fabrication_methods: list[str] | None = None,
+) -> dict[str, Any]:
     fam = _normalise(family)
     n = _normalise(name)
     if fam not in MATERIAL_FAMILIES_IN_SCOPE:
@@ -231,12 +249,15 @@ def _material_application(family: str, name: str) -> dict[str, Any]:
             "available": list(MATERIAL_FAMILIES_IN_SCOPE),
         }
     if fam == "wood":
-        spec = materials.WOOD.get(n)
+        wood_map = wood_catalogue or {
+            sp: dict(spec) for sp, spec in materials.WOOD.items()
+        }
+        spec = wood_map.get(n)
         if not spec:
             return {
                 "status": "unknown",
                 "message": f"Wood species '{name}' not in catalogue.",
-                "available": sorted(list(materials.WOOD.keys())),
+                "available": sorted(list(wood_map.keys())),
             }
         return {
             "status": "ok",
@@ -249,16 +270,23 @@ def _material_application(family: str, name: str) -> dict[str, Any]:
                 "shrinkage_pct": spec.get("shrinkage_pct"),
                 "cost_inr_kg": spec.get("cost_inr_kg"),
                 "lead_time_weeks": spec.get("lead_time_weeks"),
-                "finish_palette": list(materials.WOOD_BRD_FINISH_PALETTE),
+                "finish_palette": list(
+                    wood_finish_palette
+                    if wood_finish_palette is not None
+                    else materials.WOOD_BRD_FINISH_PALETTE
+                ),
             },
         }
     if fam == "metal":
-        spec = materials.METALS.get(n)
+        metal_map = metal_catalogue or {
+            sp: dict(spec) for sp, spec in materials.METALS.items()
+        }
+        spec = metal_map.get(n)
         if not spec:
             return {
                 "status": "unknown",
                 "message": f"Metal '{name}' not in catalogue.",
-                "available": sorted(list(materials.METALS.keys())),
+                "available": sorted(list(metal_map.keys())),
             }
         return {
             "status": "ok",
@@ -269,17 +297,28 @@ def _material_application(family: str, name: str) -> dict[str, Any]:
                 "yield_mpa": spec.get("yield_mpa"),
                 "tensile_mpa": spec.get("tensile_mpa"),
                 "cost_inr_kg": spec.get("cost_inr_kg"),
-                "finish_palette": list(materials.METALS_BRD_FINISH_PALETTE),
-                "fabrication_methods": list(materials.METALS_BRD_FABRICATION),
+                "finish_palette": list(
+                    metal_finish_palette
+                    if metal_finish_palette is not None
+                    else materials.METALS_BRD_FINISH_PALETTE
+                ),
+                "fabrication_methods": list(
+                    metal_fabrication_methods
+                    if metal_fabrication_methods is not None
+                    else materials.METALS_BRD_FABRICATION
+                ),
             },
         }
     if fam == "finish":
-        spec = materials.FINISHES.get(n)
+        finish_map = finishes_catalogue or {
+            nm: dict(spec) for nm, spec in materials.FINISHES.items()
+        }
+        spec = finish_map.get(n)
         if not spec:
             return {
                 "status": "unknown",
                 "message": f"Finish '{name}' not in catalogue.",
-                "available": sorted(list(materials.FINISHES.keys())),
+                "available": sorted(list(finish_map.keys())),
             }
         return {"status": "ok", "family": fam, "name": n, "auto_applied": dict(spec)}
     return {
@@ -404,16 +443,32 @@ def _dimensions_quantities_application(family: str, name: str,
     }
 
 
-def _joint_application(method: str) -> dict[str, Any]:
+def _joint_application(
+    method: str,
+    *,
+    joinery_catalogue: dict[str, dict[str, Any]] | None = None,
+    tolerances_mm: dict[str, float] | None = None,
+) -> dict[str, Any]:
     """Auto-applies the joinery tolerance / difficulty band."""
     m = _normalise(method)
-    spec = manufacturing.JOINERY.get(m)
+    joinery_map = joinery_catalogue or {
+        k: dict(v) for k, v in manufacturing.JOINERY.items()
+    }
+    spec = joinery_map.get(m)
     if not spec:
         return {
             "status": "unknown",
             "message": f"Joinery method '{method}' not in BRD catalogue.",
-            "available": sorted(list(manufacturing.JOINERY.keys())),
+            "available": sorted(list(joinery_map.keys())),
         }
+    if tolerances_mm is not None:
+        structural_tol = tolerances_mm.get("structural")
+        cosmetic_tol = tolerances_mm.get("cosmetic")
+    else:
+        structural_tol = (
+            manufacturing.TOLERANCES.get("structural", {}).get("+-mm")
+        )
+        cosmetic_tol = manufacturing.TOLERANCES.get("cosmetic", {}).get("+-mm")
     # Map difficulty → complexity hint for downstream lead-time estimation.
     diff = (spec.get("difficulty") or "").lower()
     complexity_hint = {
@@ -431,8 +486,8 @@ def _joint_application(method: str) -> dict[str, Any]:
             "difficulty": spec.get("difficulty"),
             "use": spec.get("use"),
             "global_tolerances_mm": {
-                "structural": manufacturing.TOLERANCES.get("structural", {}).get("+-mm"),
-                "cosmetic": manufacturing.TOLERANCES.get("cosmetic", {}).get("+-mm"),
+                "structural": structural_tol,
+                "cosmetic": cosmetic_tol,
             },
             "complexity_hint": complexity_hint,
         },
@@ -440,15 +495,20 @@ def _joint_application(method: str) -> dict[str, Any]:
 
 
 def _finish_application(name: str, *, area_m2: float | None = None,
-                        material_cost_inr: float | None = None) -> dict[str, Any]:
+                        material_cost_inr: float | None = None,
+                        finishes_catalogue: dict[str, dict[str, Any]] | None = None,
+                        finish_cost_pct_of_material: list[float] | None = None) -> dict[str, Any]:
     """Auto-determine preparation steps + total cost band for a finish."""
     n = _normalise(name)
-    spec = materials.FINISHES.get(n)
+    finish_map = finishes_catalogue or {
+        nm: dict(spec) for nm, spec in materials.FINISHES.items()
+    }
+    spec = finish_map.get(n)
     if not spec:
         return {
             "status": "unknown",
             "message": f"Finish '{name}' not in BRD catalogue.",
-            "available": sorted(list(materials.FINISHES.keys())),
+            "available": sorted(list(finish_map.keys())),
         }
     # Preparation sequence per finish family.
     prep_sequences: dict[str, list[str]] = {
@@ -467,7 +527,11 @@ def _finish_application(name: str, *, area_m2: float | None = None,
         band_low_total = round(cost_inr_m2_band[0] * float(area_m2), 0)
         band_high_total = round(cost_inr_m2_band[1] * float(area_m2), 0)
 
-    finish_pct_band = list(costing.FINISH_COST_PCT_OF_MATERIAL)   # (15, 25)
+    finish_pct_band = list(
+        finish_cost_pct_of_material
+        if finish_cost_pct_of_material is not None
+        else costing.FINISH_COST_PCT_OF_MATERIAL
+    )
     finish_pct_mid = (finish_pct_band[0] + finish_pct_band[1]) / 2.0
     pct_of_material = None
     if material_cost_inr is not None and material_cost_inr > 0:
@@ -700,7 +764,9 @@ def _volume_tier_for_units(units: int) -> str:
 
 
 def _volume_economies_application(units: int,
-                                  per_unit_manufacturing_cost_inr: float | None = None
+                                  per_unit_manufacturing_cost_inr: float | None = None,
+                                  *,
+                                  manufacturer_margin_pct_by_volume: dict[str, list[float]] | None = None,
                                   ) -> dict[str, Any]:
     """Unit count → volume tier + manufacturer margin band + per-unit cost trend."""
     if units <= 0:
@@ -709,7 +775,10 @@ def _volume_economies_application(units: int,
             "message": "units must be a positive integer.",
         }
     tier = _volume_tier_for_units(units)
-    band = costing.MANUFACTURER_MARGIN_PCT_BY_VOLUME.get(tier) or (40.0, 55.0)
+    mm_map = manufacturer_margin_pct_by_volume or {
+        k: list(v) for k, v in costing.MANUFACTURER_MARGIN_PCT_BY_VOLUME.items()
+    }
+    band = mm_map.get(tier) or (40.0, 55.0)
     pct_mid = round((band[0] + band[1]) / 2.0, 2)
 
     # Per-unit cost trend — assume 8 % learning curve adjustment per
@@ -733,7 +802,7 @@ def _volume_economies_application(units: int,
     # Tier ladder for context.
     ladder = [
         {"tier": k, "band_pct": list(v)}
-        for k, v in costing.MANUFACTURER_MARGIN_PCT_BY_VOLUME.items()
+        for k, v in mm_map.items()
     ]
 
     return {
@@ -973,6 +1042,8 @@ def _manufacturing_feasibility_application(
     joinery_method: str | None = None,
     bend_thickness_mm: float | None = None,
     bend_radius_mm: float | None = None,
+    joinery_catalogue: dict[str, dict[str, Any]] | None = None,
+    bending_rule: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Flag tolerances or bend radii tighter than the BRD allows."""
     issues: list[str] = []
@@ -999,12 +1070,15 @@ def _manufacturing_feasibility_application(
 
     if joinery_method:
         m = _normalise(joinery_method)
-        spec = manufacturing.JOINERY.get(m)
+        joinery_map = joinery_catalogue or {
+            k: dict(v) for k, v in manufacturing.JOINERY.items()
+        }
+        spec = joinery_map.get(m)
         if not spec:
             return {
                 "status": "unknown",
                 "message": f"Joinery '{joinery_method}' not in catalogue.",
-                "available": sorted(list(manufacturing.JOINERY.keys())),
+                "available": sorted(list(joinery_map.keys())),
             }
         info["joinery"] = {
             "method": m,
@@ -1019,10 +1093,14 @@ def _manufacturing_feasibility_application(
 
     if bend_thickness_mm is not None and bend_radius_mm is not None:
         min_radius = float(bend_thickness_mm) * 2.5
+        rule_text = (
+            (bending_rule or {}).get("rule")
+            or manufacturing.BENDING_RULE.get("rule")
+        )
         info["bend_check"] = {
             "thickness_mm": bend_thickness_mm,
             "min_radius_mm": min_radius,
-            "rule": manufacturing.BENDING_RULE["rule"],
+            "rule": rule_text,
             "specified_radius_mm": bend_radius_mm,
         }
         if bend_radius_mm + 1e-6 < min_radius:
@@ -1152,12 +1230,17 @@ def build_knowledge_integration_slice(
     req: KnowledgeIntegrationRequest,
     *,
     labor_rates: dict[str, list[float]] | None = None,
+    theme_pack: dict[str, Any] | None = None,
+    knowledge_kb: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     kind = _normalise(req.event_kind)
     payload = req.payload or {}
+    kb = knowledge_kb or {}
 
     if kind == "theme_selected":
-        application = _theme_application(payload.get("theme") or "")
+        application = _theme_application(
+            payload.get("theme") or "", theme_pack=theme_pack
+        )
     elif kind == "space_input":
         application = _space_application(
             payload.get("room_type") or "",
@@ -1175,6 +1258,12 @@ def build_knowledge_integration_slice(
         application = _material_application(
             payload.get("family") or "",
             payload.get("name") or "",
+            wood_catalogue=kb.get("wood_catalogue"),
+            metal_catalogue=kb.get("metal_catalogue"),
+            finishes_catalogue=kb.get("finishes_catalogue"),
+            wood_finish_palette=kb.get("wood_finish_palette"),
+            metal_finish_palette=kb.get("metal_finish_palette"),
+            metal_fabrication_methods=kb.get("metal_fabrication_methods"),
         )
     elif kind == "dimensions_quantities":
         application = _dimensions_quantities_application(
@@ -1187,12 +1276,18 @@ def build_knowledge_integration_slice(
             count=int(payload.get("count") or 1),
         )
     elif kind == "joint_selected":
-        application = _joint_application(payload.get("method") or "")
+        application = _joint_application(
+            payload.get("method") or "",
+            joinery_catalogue=kb.get("joinery_catalogue"),
+            tolerances_mm=kb.get("tolerances_mm"),
+        )
     elif kind == "finish_selected":
         application = _finish_application(
             payload.get("name") or "",
             area_m2=payload.get("area_m2"),
             material_cost_inr=payload.get("material_cost_inr"),
+            finishes_catalogue=kb.get("finishes_catalogue"),
+            finish_cost_pct_of_material=kb.get("finish_cost_pct_of_material"),
         )
     elif kind == "manufacturing_complexity":
         application = _manufacturing_complexity_application(
@@ -1217,6 +1312,9 @@ def build_knowledge_integration_slice(
         application = _volume_economies_application(
             int(payload.get("units") or 1),
             per_unit_manufacturing_cost_inr=payload.get("per_unit_manufacturing_cost_inr"),
+            manufacturer_margin_pct_by_volume=kb.get(
+                "manufacturer_margin_pct_by_volume"
+            ),
         )
     elif kind == "dimensions_vs_standards":
         application = _dimensions_vs_standards_application(
@@ -1254,6 +1352,8 @@ def build_knowledge_integration_slice(
             joinery_method=payload.get("joinery_method"),
             bend_thickness_mm=payload.get("bend_thickness_mm"),
             bend_radius_mm=payload.get("bend_radius_mm"),
+            joinery_catalogue=kb.get("joinery_catalogue"),
+            bending_rule=kb.get("bending_rule"),
         )
     elif kind == "cost_reasonableness":
         application = _cost_reasonableness_application(
@@ -1556,9 +1656,16 @@ async def generate_knowledge_application(
             f"Pick one of: {', '.join(EVENT_KINDS_IN_SCOPE)}."
         )
 
+    theme_value = (req.payload or {}).get("theme") or ""
     if session is not None:
         labor_bands = await load_labor_rate_bands(
             session, defaults=costing.LABOR_RATES_INR_PER_HOUR
+        )
+        kb = await load_knowledge_integration_pack(
+            session, city=(req.payload or {}).get("city")
+        )
+        theme_pack = (
+            await _get_theme_db(session, theme_value) if theme_value else None
         )
     else:
         from app.database import async_session_factory  # local import
@@ -1567,7 +1674,20 @@ async def generate_knowledge_application(
             labor_bands = await load_labor_rate_bands(
                 own_session, defaults=costing.LABOR_RATES_INR_PER_HOUR
             )
-    knowledge = build_knowledge_integration_slice(req, labor_rates=labor_bands)
+            kb = await load_knowledge_integration_pack(
+                own_session, city=(req.payload or {}).get("city")
+            )
+            theme_pack = (
+                await _get_theme_db(own_session, theme_value)
+                if theme_value
+                else None
+            )
+    knowledge = build_knowledge_integration_slice(
+        req,
+        labor_rates=labor_bands,
+        theme_pack=theme_pack,
+        knowledge_kb=kb,
+    )
     user_message = _user_message(req, knowledge)
     client = _client_instance()
 

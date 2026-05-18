@@ -25,9 +25,11 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import themes
+from app.services.themes import get_theme as _get_theme_db
 from app.services.diagrams import concept_transparency
 from app.services.diagrams.svg_base import (
     INK,
@@ -69,8 +71,12 @@ class ConceptDiagramRequest(BaseModel):
 # ── Knowledge slice the LLM gets ────────────────────────────────────────────
 
 
-def build_concept_knowledge(req: ConceptDiagramRequest) -> dict[str, Any]:
-    pack = themes.get(req.theme) or {}
+def build_concept_knowledge(
+    req: ConceptDiagramRequest,
+    *,
+    theme_pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    pack = theme_pack if theme_pack is not None else (themes.get(req.theme) or {})
     palette = pack.get("material_palette", {})
     graph = req.design_graph or {}
     object_types = sorted({(o.get("type") or "").lower() for o in graph.get("objects", []) if o.get("type")})
@@ -251,14 +257,25 @@ class ConceptDiagramError(RuntimeError):
     """Raised when the LLM concept stage cannot produce a grounded spec."""
 
 
-async def generate_concept_diagram(req: ConceptDiagramRequest) -> dict[str, Any]:
+async def generate_concept_diagram(
+    req: ConceptDiagramRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise ConceptDiagramError(
             "OpenAI API key is not configured. The concept-transparency stage requires "
             "a live LLM call; no static fallback is served."
         )
 
-    knowledge = build_concept_knowledge(req)
+    if session is not None:
+        theme_pack = await _get_theme_db(session, req.theme)
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            theme_pack = await _get_theme_db(own_session, req.theme)
+    knowledge = build_concept_knowledge(req, theme_pack=theme_pack)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise ConceptDiagramError(
             f"Unknown theme '{req.theme}'. No theme rule pack to ground the diagram."
@@ -293,7 +310,7 @@ async def generate_concept_diagram(req: ConceptDiagramRequest) -> dict[str, Any]
 
     # Render the deterministic base diagram from the (possibly empty) graph.
     base = concept_transparency.generate(
-        req.design_graph or _stub_graph(req),
+        req.design_graph or _stub_graph(req, pack=theme_pack),
         canvas_w=req.canvas_width,
         canvas_h=req.canvas_height,
     )
@@ -317,7 +334,11 @@ async def generate_concept_diagram(req: ConceptDiagramRequest) -> dict[str, Any]
     }
 
 
-def _stub_graph(req: ConceptDiagramRequest) -> dict[str, Any]:
+def _stub_graph(
+    req: ConceptDiagramRequest,
+    *,
+    pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """Minimal graph so the renderer has something to plot when only a
     parametric spec is supplied. Pulls room dims from the parametric
     spec.geometry where available."""
@@ -326,6 +347,13 @@ def _stub_graph(req: ConceptDiagramRequest) -> dict[str, Any]:
     width_m = max(2.0, (geom.get("overall_width_mm") or 3000) / 1000.0)
     return {
         "room": {"dimensions": {"length": length_m, "width": width_m, "height": 2.7}},
-        "style": {"primary": (themes.get(req.theme) or {}).get("display_name") or req.theme},
+        "style": {
+            "primary": (
+                (pack if pack is not None else (themes.get(req.theme) or {})).get(
+                    "display_name"
+                )
+                or req.theme
+            )
+        },
         "objects": [],
     }

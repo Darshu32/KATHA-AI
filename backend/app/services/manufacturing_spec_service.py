@@ -38,6 +38,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.knowledge import costing, manufacturing, materials, regional_materials, themes
 from app.services.pricing.knowledge_service import load_labor_rate_bands
+from app.services.standards.manufacturing_spec_pack import (
+    load_manufacturing_spec_pack,
+)
 from app.services.themes import get_theme as _get_theme_db
 
 logger = logging.getLogger(__name__)
@@ -144,11 +147,64 @@ def build_manufacturing_spec_knowledge(
     *,
     labor_rates_inr_hour: dict[str, list[float]] | None = None,
     theme_pack: dict[str, Any] | None = None,
+    manufacturing_kb: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     pack = theme_pack if theme_pack is not None else (themes.get(req.theme) or {})
     primary_species = (req.parametric_spec or {}).get("wood_spec", {}).get("primary_species")
     secondary_species = (req.parametric_spec or {}).get("wood_spec", {}).get("secondary_species")
     finish_picked = (req.parametric_spec or {}).get("wood_spec", {}).get("finish")
+
+    # DB-backed pack when supplied; per-key fallback to legacy literal so
+    # a fresh dev DB (or callers that haven't plumbed the session through
+    # yet) still produces a usable sheet.
+    kb = manufacturing_kb or {}
+    brd_block = kb.get("manufacturing_brd") or {}
+    manufacturing_brd = {
+        "precision_requirements_mm": brd_block.get("precision_requirements_mm")
+        or dict(manufacturing.PRECISION_REQUIREMENTS_BRD),
+        "woodworking_brd_spec": brd_block.get("woodworking_brd_spec")
+        or dict(manufacturing.WOODWORKING_BRD_SPEC),
+        "metal_fabrication_brd_spec": brd_block.get("metal_fabrication_brd_spec")
+        or dict(manufacturing.METAL_FABRICATION_BRD_SPEC),
+        "upholstery_assembly_brd_spec": brd_block.get("upholstery_assembly_brd_spec")
+        or dict(manufacturing.UPHOLSTERY_ASSEMBLY_BRD_SPEC),
+        "tolerances_mm": brd_block.get("tolerances_mm")
+        or {k: v.get("+-mm") for k, v in manufacturing.TOLERANCES.items()},
+        "lead_times_weeks": brd_block.get("lead_times_weeks")
+        or dict(manufacturing.LEAD_TIMES_WEEKS),
+        "moq_units": brd_block.get("moq_units") or dict(manufacturing.MOQ),
+    }
+    joinery_cat = kb.get("joinery_catalogue") or {
+        k: dict(v) for k, v in manufacturing.JOINERY.items()
+    }
+    welding_cat = kb.get("welding_catalogue") or {
+        k: dict(v) for k, v in manufacturing.WELDING.items()
+    }
+    bending = kb.get("bending_rule") or dict(manufacturing.BENDING_RULE)
+    powder_coat = kb.get("powder_coat_spec") or dict(
+        materials.FINISHES.get("powder_coat", {})
+    )
+    finishes_cat = kb.get("finishes_catalogue") or {
+        name: dict(spec) for name, spec in materials.FINISHES.items()
+    }
+    wood_finish_palette = (
+        kb.get("wood_finish_palette")
+        if kb.get("wood_finish_palette") is not None
+        else list(materials.WOOD_BRD_FINISH_PALETTE)
+    )
+    qa_gates_cat = kb.get("qa_gates_catalogue") or [
+        dict(g) for g in manufacturing.QA_GATES
+    ]
+    qa_gate_keys = (
+        kb.get("qa_gate_keys_in_scope")
+        if kb.get("qa_gate_keys_in_scope") is not None
+        else list(manufacturing.QUALITY_GATES_BRD_SPEC)
+    )
+    city_price_index = (
+        kb.get("city_price_index")
+        if kb.get("city_price_index") is not None
+        else regional_materials.price_index_for_city(req.city or None)
+    )
 
     return {
         "theme_rule_pack": {
@@ -164,23 +220,11 @@ def build_manufacturing_spec_knowledge(
             "secondary_species": secondary_species,
             "finish": finish_picked,
         },
-        "manufacturing_brd": {
-            "precision_requirements_mm": dict(manufacturing.PRECISION_REQUIREMENTS_BRD),
-            "woodworking_brd_spec": dict(manufacturing.WOODWORKING_BRD_SPEC),
-            "metal_fabrication_brd_spec": dict(manufacturing.METAL_FABRICATION_BRD_SPEC),
-            "upholstery_assembly_brd_spec": dict(manufacturing.UPHOLSTERY_ASSEMBLY_BRD_SPEC),
-            "tolerances_mm": {k: v.get("+-mm") for k, v in manufacturing.TOLERANCES.items()},
-            "lead_times_weeks": dict(manufacturing.LEAD_TIMES_WEEKS),
-            "moq_units": dict(manufacturing.MOQ),
-        },
-        "joinery_catalogue": {
-            k: {kk: vv for kk, vv in v.items()} for k, v in manufacturing.JOINERY.items()
-        },
-        "welding_catalogue": {
-            k: {kk: vv for kk, vv in v.items()} for k, v in manufacturing.WELDING.items()
-        },
-        "bending_rule": dict(manufacturing.BENDING_RULE),
-        "powder_coat_spec": dict(materials.FINISHES.get("powder_coat", {})),
+        "manufacturing_brd": manufacturing_brd,
+        "joinery_catalogue": joinery_cat,
+        "welding_catalogue": welding_cat,
+        "bending_rule": bending,
+        "powder_coat_spec": powder_coat,
         "welding_methods_in_scope": list(WELDING_METHODS_IN_SCOPE),
         "weld_testing_methods_in_scope": list(WELD_TESTING_METHODS_IN_SCOPE),
         "load_bearing_flags": list(LOAD_BEARING_FLAGS),
@@ -190,18 +234,16 @@ def build_manufacturing_spec_knowledge(
         "qc_test_types_in_scope": list(QC_TEST_TYPES_IN_SCOPE),
         "packaging_methods_in_scope": list(PACKAGING_METHODS_IN_SCOPE),
         "protection_layers_in_scope": list(PROTECTION_LAYERS_IN_SCOPE),
-        "finishes_catalogue": {
-            name: dict(spec) for name, spec in materials.FINISHES.items()
-        },
-        "wood_finish_palette": list(materials.WOOD_BRD_FINISH_PALETTE),
-        "qa_gates_catalogue": [dict(g) for g in manufacturing.QA_GATES],
-        "qa_gate_keys_in_scope": list(manufacturing.QUALITY_GATES_BRD_SPEC),
+        "finishes_catalogue": finishes_cat,
+        "wood_finish_palette": wood_finish_palette,
+        "qa_gates_catalogue": qa_gates_cat,
+        "qa_gate_keys_in_scope": qa_gate_keys,
         "precision_levels_in_scope": list(PRECISION_LEVELS_IN_SCOPE),
         "joinery_keys_in_scope": list(JOINERY_KEYS_IN_SCOPE),
         "finishing_steps_in_scope": list(FINISHING_STEPS_IN_SCOPE),
         "complexity_levels_in_scope": list(COMPLEXITY_LEVELS_IN_SCOPE),
         "city": req.city or None,
-        "city_price_index": regional_materials.price_index_for_city(req.city or None),
+        "city_price_index": city_price_index,
         "labor_rates_inr_hour": labor_rates_inr_hour or {
             k: list(v) for k, v in costing.LABOR_RATES_INR_PER_HOUR.items()
         },
@@ -1475,6 +1517,9 @@ async def generate_manufacturing_spec(
             session, defaults=costing.LABOR_RATES_INR_PER_HOUR
         )
         theme_pack = await _get_theme_db(session, req.theme)
+        manufacturing_kb = await load_manufacturing_spec_pack(
+            session, city=req.city or None
+        )
     else:
         from app.database import async_session_factory  # local import
 
@@ -1483,8 +1528,14 @@ async def generate_manufacturing_spec(
                 own_session, defaults=costing.LABOR_RATES_INR_PER_HOUR
             )
             theme_pack = await _get_theme_db(own_session, req.theme)
+            manufacturing_kb = await load_manufacturing_spec_pack(
+                own_session, city=req.city or None
+            )
     knowledge = build_manufacturing_spec_knowledge(
-        req, labor_rates_inr_hour=labor_bands, theme_pack=theme_pack
+        req,
+        labor_rates_inr_hour=labor_bands,
+        theme_pack=theme_pack,
+        manufacturing_kb=manufacturing_kb,
     )
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise ManufacturingSpecError(

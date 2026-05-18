@@ -13,12 +13,25 @@ from app.services.specs import material_spec, manufacturing_spec, mep_spec
 logger = logging.getLogger(__name__)
 
 
-def build_spec_bundle(graph: dict, *, project_name: str = "KATHA Project") -> dict:
+def build_spec_bundle(
+    graph: dict,
+    *,
+    project_name: str = "KATHA Project",
+    brd_bands: dict | None = None,
+) -> dict:
+    """Assemble the spec bundle the exporters consume.
+
+    ``brd_bands`` is an optional pre-loaded dict (shape matching the
+    legacy ``html_exporter._LEGACY_BRD_BANDS``) — used by the HTML
+    exporter for its in-page comparison tooltips. Pre-load from
+    ``cost_factors`` rows when an async session is available; otherwise
+    omit and the exporter falls back to its legacy literal.
+    """
     room = graph.get("room") or (graph.get("spaces") or [{}])[0]
     dims = room.get("dimensions") or {}
     style = (graph.get("style") or {}).get("primary", "—")
 
-    return {
+    bundle: dict = {
         "meta": {
             "project_name": project_name,
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -36,6 +49,9 @@ def build_spec_bundle(graph: dict, *, project_name: str = "KATHA Project") -> di
         "cost": _extract_cost(graph),
         "objects_count": len(graph.get("objects", [])),
     }
+    if brd_bands:
+        bundle["brd_bands"] = brd_bands
+    return bundle
 
 
 def _extract_cost(graph: dict) -> dict:

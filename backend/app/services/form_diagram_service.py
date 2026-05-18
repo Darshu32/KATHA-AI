@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.knowledge import themes, variations
 from app.services.standards.variations_lookup import list_parametric_flex
+from app.services.themes import get_theme as _get_theme_db
 from app.services.diagrams import form_development
 from app.services.diagrams.svg_base import (
     INK,
@@ -83,8 +84,9 @@ def build_form_knowledge(
     req: FormDiagramRequest,
     *,
     parametric_dimension_flex: dict[str, dict[str, float]] | None = None,
+    theme_pack: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    pack = themes.get(req.theme) or {}
+    pack = theme_pack if theme_pack is not None else (themes.get(req.theme) or {})
     palette = pack.get("material_palette", {})
     graph = req.design_graph or {}
     primary_objects = [
@@ -313,12 +315,16 @@ async def generate_form_diagram(
 
     if session is not None:
         flex = await list_parametric_flex(session)
+        theme_pack = await _get_theme_db(session, req.theme)
     else:
         from app.database import async_session_factory  # local import
 
         async with async_session_factory() as own_session:
             flex = await list_parametric_flex(own_session)
-    knowledge = build_form_knowledge(req, parametric_dimension_flex=flex)
+            theme_pack = await _get_theme_db(own_session, req.theme)
+    knowledge = build_form_knowledge(
+        req, parametric_dimension_flex=flex, theme_pack=theme_pack
+    )
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise FormDiagramError(
             f"Unknown theme '{req.theme}'. No theme rule pack to ground the diagram."
@@ -357,7 +363,7 @@ async def generate_form_diagram(
 
     # Render base + annotate.
     base = form_development.generate(
-        req.design_graph or _stub_graph(req),
+        req.design_graph or _stub_graph(req, pack=theme_pack),
         canvas_w=req.canvas_width,
         canvas_h=req.canvas_height,
     )
@@ -385,12 +391,23 @@ async def generate_form_diagram(
     }
 
 
-def _stub_graph(req: FormDiagramRequest) -> dict[str, Any]:
+def _stub_graph(
+    req: FormDiagramRequest,
+    *,
+    pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     geom = (req.parametric_spec or {}).get("geometry") or {}
     length_m = max(2.0, (geom.get("overall_length_mm") or 4000) / 1000.0)
     width_m = max(2.0, (geom.get("overall_width_mm") or 3000) / 1000.0)
     return {
         "room": {"dimensions": {"length": length_m, "width": width_m, "height": 2.7}},
-        "style": {"primary": (themes.get(req.theme) or {}).get("display_name") or req.theme},
+        "style": {
+            "primary": (
+                (pack if pack is not None else (themes.get(req.theme) or {})).get(
+                    "display_name"
+                )
+                or req.theme
+            )
+        },
         "objects": [],
     }

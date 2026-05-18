@@ -150,6 +150,35 @@ async def load_pricing_bands(
     }
 
 
+async def load_html_export_bands(
+    session: AsyncSession,
+    *,
+    when: Optional[datetime] = None,
+) -> dict[str, Any]:
+    """Pre-load the BRD margin/markup bands in the legacy shape the
+    HTML exporter embeds as JS constants for in-page tooltips.
+
+    Returns ``{
+      "manufacturer_margin_by_volume": {tier: [low, high]},
+      "designer_margin":               [low, high],
+      "retail_markup":                 [low, high],
+      "customization_premium_by_level":{level: [low, high]},
+    }`` — keys match ``html_exporter._LEGACY_BRD_BANDS`` verbatim so a
+    DB-loaded pack is a drop-in replacement.
+    """
+    pricing = await load_pricing_bands(session, when=when)
+    return {
+        "manufacturer_margin_by_volume": pricing[
+            "manufacturer_margin_pct_by_volume"
+        ],
+        "designer_margin": pricing["designer_margin_pct_band"],
+        "retail_markup": pricing["retail_markup_pct_band"],
+        "customization_premium_by_level": pricing[
+            "customization_premium_pct_by_level"
+        ],
+    }
+
+
 async def load_sensitivity_bands(
     session: AsyncSession,
     *,

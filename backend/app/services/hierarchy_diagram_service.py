@@ -28,10 +28,12 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import themes
 from app.services.diagrams import hierarchy
+from app.services.themes import get_theme as _get_theme_db
 from app.services.diagrams.svg_base import (
     ACCENT_COOL,
     ACCENT_WARM,
@@ -92,8 +94,12 @@ def _summarise_graph(graph: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def build_hierarchy_knowledge(req: HierarchyRequest) -> dict[str, Any]:
-    pack = themes.get(req.theme) or {}
+def build_hierarchy_knowledge(
+    req: HierarchyRequest,
+    *,
+    theme_pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    pack = theme_pack if theme_pack is not None else (themes.get(req.theme) or {})
     palette = pack.get("material_palette", {})
     return {
         "theme_rule_pack": {
@@ -309,14 +315,25 @@ class HierarchyError(RuntimeError):
     """Raised when the LLM hierarchy stage cannot produce a grounded spec."""
 
 
-async def generate_hierarchy_diagram(req: HierarchyRequest) -> dict[str, Any]:
+async def generate_hierarchy_diagram(
+    req: HierarchyRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise HierarchyError(
             "OpenAI API key is not configured. The hierarchy stage requires "
             "a live LLM call; no static fallback is served."
         )
 
-    knowledge = build_hierarchy_knowledge(req)
+    if session is not None:
+        theme_pack = await _get_theme_db(session, req.theme)
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            theme_pack = await _get_theme_db(own_session, req.theme)
+    knowledge = build_hierarchy_knowledge(req, theme_pack=theme_pack)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HierarchyError(
             f"Unknown theme '{req.theme}'. No theme rule pack to ground the diagram."
@@ -362,7 +379,7 @@ async def generate_hierarchy_diagram(req: HierarchyRequest) -> dict[str, Any]:
     }
 
     base = hierarchy.generate(
-        req.design_graph or _stub_graph(req),
+        req.design_graph or _stub_graph(req, pack=theme_pack),
         canvas_w=req.canvas_width,
         canvas_h=req.canvas_height,
     )
@@ -388,14 +405,25 @@ async def generate_hierarchy_diagram(req: HierarchyRequest) -> dict[str, Any]:
     }
 
 
-def _stub_graph(req: HierarchyRequest) -> dict[str, Any]:
+def _stub_graph(
+    req: HierarchyRequest,
+    *,
+    pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     geom = (req.parametric_spec or {}).get("geometry") or {}
     length_m = max(2.0, (geom.get("overall_length_mm") or 4000) / 1000.0)
     width_m = max(2.0, (geom.get("overall_width_mm") or 3000) / 1000.0)
     height_m = max(2.4, (geom.get("overall_height_mm") or 2700) / 1000.0)
     return {
         "room": {"dimensions": {"length": length_m, "width": width_m, "height": height_m}},
-        "style": {"primary": (themes.get(req.theme) or {}).get("display_name") or req.theme},
+        "style": {
+            "primary": (
+                (pack if pack is not None else (themes.get(req.theme) or {})).get(
+                    "display_name"
+                )
+                or req.theme
+            )
+        },
         "objects": [],
         "materials": [],
     }

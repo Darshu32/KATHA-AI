@@ -36,6 +36,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import (
@@ -47,6 +48,8 @@ from app.knowledge import (
     themes,
 )
 from app.services.cost_engine_service import TRADE_HOURS_BY_COMPLEXITY
+from app.services.standards.recommendations_pack import load_recommendations_pack
+from app.services.themes import get_theme as _get_theme_db
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -104,8 +107,12 @@ def _normalise(s: str) -> str:
     return (s or "").strip().lower().replace(" ", "_").replace("-", "_")
 
 
-def _theme_pairing_slice(theme_name: str) -> dict[str, Any]:
-    pack = themes.get(theme_name)
+def _theme_pairing_slice(
+    theme_name: str,
+    *,
+    theme_pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    pack = theme_pack if theme_pack is not None else themes.get(theme_name)
     if not pack:
         return {"theme_known": False, "available_themes": themes.list_names()}
     return {
@@ -118,16 +125,29 @@ def _theme_pairing_slice(theme_name: str) -> dict[str, Any]:
     }
 
 
-def _material_alternatives_slice(family: str, name: str, *,
-                                 city: str | None = None) -> dict[str, Any]:
+def _material_alternatives_slice(
+    family: str,
+    name: str,
+    *,
+    city: str | None = None,
+    wood_catalogue: dict[str, dict[str, Any]] | None = None,
+    metal_catalogue: dict[str, dict[str, Any]] | None = None,
+    city_price_index: float | None = None,
+) -> dict[str, Any]:
     fam = _normalise(family)
     n = _normalise(name)
-    index = regional_materials.price_index_for_city(city)
-    if not isinstance(index, (int, float)):
-        index = 1.0
+    if city_price_index is not None:
+        index = city_price_index
+    else:
+        index = regional_materials.price_index_for_city(city)
+        if not isinstance(index, (int, float)):
+            index = 1.0
 
     if fam == "wood":
-        chosen = materials.WOOD.get(n) or {}
+        wood_map = wood_catalogue or {
+            sp: dict(spec) for sp, spec in materials.WOOD.items()
+        }
+        chosen = wood_map.get(n) or {}
         candidates = [
             {
                 "name": k,
@@ -141,10 +161,13 @@ def _material_alternatives_slice(family: str, name: str, *,
                     if v.get("cost_inr_kg") else None
                 ),
             }
-            for k, v in materials.WOOD.items()
+            for k, v in wood_map.items()
         ]
     elif fam == "metal":
-        chosen = materials.METALS.get(n) or {}
+        metal_map = metal_catalogue or {
+            sp: dict(spec) for sp, spec in materials.METALS.items()
+        }
+        chosen = metal_map.get(n) or {}
         candidates = [
             {
                 "name": k,
@@ -156,7 +179,7 @@ def _material_alternatives_slice(family: str, name: str, *,
                     if v.get("cost_inr_kg") else None
                 ),
             }
-            for k, v in materials.METALS.items()
+            for k, v in metal_map.items()
         ]
     else:
         chosen, candidates = {}, []
@@ -169,9 +192,18 @@ def _material_alternatives_slice(family: str, name: str, *,
     }
 
 
-def _lead_time_slice(complexity: str) -> dict[str, Any]:
+def _lead_time_slice(
+    complexity: str,
+    *,
+    lead_times_weeks: dict[str, list[int]] | None = None,
+    moq_units: dict[str, int] | None = None,
+) -> dict[str, Any]:
     c = _normalise(complexity) or "moderate"
-    base_band = list(manufacturing.LEAD_TIMES_WEEKS.get("woodworking_furniture") or (4, 8))
+    lt_map = lead_times_weeks or {
+        k: list(v) for k, v in manufacturing.LEAD_TIMES_WEEKS.items()
+    }
+    moq_map = moq_units or dict(manufacturing.MOQ)
+    base_band = list(lt_map.get("woodworking_furniture") or (4, 8))
     high_extension = {
         "simple": 0,
         "moderate": 0,
@@ -188,11 +220,15 @@ def _lead_time_slice(complexity: str) -> dict[str, Any]:
         "woodworking_furniture_band_brd": base_band,
         "this_piece_band_weeks": list(band),
         "trade_hours_band_at_this_complexity": trade_hours,
-        "moq_units_brd": manufacturing.MOQ.get("woodworking_small_batch", 1),
+        "moq_units_brd": moq_map.get("woodworking_small_batch", 1),
     }
 
 
-def _volume_economies_slice(units: int) -> dict[str, Any]:
+def _volume_economies_slice(
+    units: int,
+    *,
+    manufacturer_margin_pct_by_volume: dict[str, list[float]] | None = None,
+) -> dict[str, Any]:
     if units <= 1:
         tier = "one_off"
     elif units <= 25:
@@ -201,10 +237,12 @@ def _volume_economies_slice(units: int) -> dict[str, Any]:
         tier = "production"
     else:
         tier = "mass_production"
-    band = costing.MANUFACTURER_MARGIN_PCT_BY_VOLUME.get(tier) or (40.0, 55.0)
+    mm_map = manufacturer_margin_pct_by_volume or {
+        k: list(v) for k, v in costing.MANUFACTURER_MARGIN_PCT_BY_VOLUME.items()
+    }
+    band = mm_map.get(tier) or (40.0, 55.0)
     ladder = [
-        {"tier": k, "band_pct": list(v)}
-        for k, v in costing.MANUFACTURER_MARGIN_PCT_BY_VOLUME.items()
+        {"tier": k, "band_pct": list(v)} for k, v in mm_map.items()
     ]
     return {
         "units": units,
@@ -267,7 +305,13 @@ def _ergo_band_slice(piece_type: str, dimensions_m: dict[str, float]) -> dict[st
     }
 
 
-def build_recommendations_knowledge(req: RecommendationsRequest) -> dict[str, Any]:
+def build_recommendations_knowledge(
+    req: RecommendationsRequest,
+    *,
+    theme_pack: dict[str, Any] | None = None,
+    recommendations_kb: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    kb = recommendations_kb or {}
     return {
         "project": {
             "name": req.project_name,
@@ -282,29 +326,58 @@ def build_recommendations_knowledge(req: RecommendationsRequest) -> dict[str, An
             "budget_inr": req.budget_inr,
             "notes": req.notes or None,
         },
-        "theme_pairing": _theme_pairing_slice(req.theme) if req.theme else {},
+        "theme_pairing": (
+            _theme_pairing_slice(req.theme, theme_pack=theme_pack) if req.theme else {}
+        ),
         "material_alternatives": (
             _material_alternatives_slice(
-                req.primary_material_family, req.primary_material, city=req.city,
-            ) if req.primary_material_family and req.primary_material else {}
+                req.primary_material_family,
+                req.primary_material,
+                city=req.city,
+                wood_catalogue=kb.get("wood_catalogue"),
+                metal_catalogue=kb.get("metal_catalogue"),
+                city_price_index=kb.get("city_price_index"),
+            )
+            if req.primary_material_family and req.primary_material
+            else {}
         ),
         "ergo": (
             _ergo_band_slice(req.piece_type, req.dimensions_m or {})
             if req.piece_type else {}
         ),
-        "lead_time": _lead_time_slice(req.complexity),
-        "volume": _volume_economies_slice(req.units),
-        "city_price_index": regional_materials.price_index_for_city(req.city) or 1.0,
+        "lead_time": _lead_time_slice(
+            req.complexity,
+            lead_times_weeks=kb.get("lead_times_weeks"),
+            moq_units=kb.get("moq_units"),
+        ),
+        "volume": _volume_economies_slice(
+            req.units,
+            manufacturer_margin_pct_by_volume=kb.get(
+                "manufacturer_margin_pct_by_volume"
+            ),
+        ),
+        "city_price_index": (
+            kb.get("city_price_index")
+            if kb.get("city_price_index") is not None
+            else (regional_materials.price_index_for_city(req.city) or 1.0)
+        ),
         "vocab": {
             "categories_in_scope": list(RECOMMENDATION_CATEGORIES_IN_SCOPE),
             "confidence_levels": list(CONFIDENCE_LEVELS_IN_SCOPE),
             "impact_levels": list(IMPACT_LEVELS_IN_SCOPE),
             "effort_levels": list(EFFORT_LEVELS_IN_SCOPE),
             "themes_known": themes.list_names(),
-            "wood_species_known": sorted(list(materials.WOOD.keys())),
-            "metals_known": sorted(list(materials.METALS.keys())),
+            "wood_species_known": sorted(list(
+                (kb.get("wood_catalogue") or materials.WOOD).keys()
+            )),
+            "metals_known": sorted(list(
+                (kb.get("metal_catalogue") or materials.METALS).keys()
+            )),
             "complexity_levels": ["simple", "moderate", "complex", "highly_complex"],
-            "volume_tiers": list(costing.MANUFACTURER_MARGIN_PCT_BY_VOLUME.keys()),
+            "volume_tiers": list(
+                (kb.get("manufacturer_margin_pct_by_volume")
+                 or costing.MANUFACTURER_MARGIN_PCT_BY_VOLUME).keys()
+            ),
             "cities_known": sorted(list(regional_materials.CITY_PRICE_INDEX.keys())),
         },
     }
@@ -561,14 +634,33 @@ class RecommendationsError(RuntimeError):
     """Raised when the LLM recommendations stage cannot produce a grounded sheet."""
 
 
-async def generate_recommendations(req: RecommendationsRequest) -> dict[str, Any]:
+async def generate_recommendations(
+    req: RecommendationsRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise RecommendationsError(
             "OpenAI API key is not configured. The recommendations stage "
             "requires a live LLM call; no static fallback is served."
         )
 
-    knowledge = build_recommendations_knowledge(req)
+    if session is not None:
+        theme_pack = await _get_theme_db(session, req.theme) if req.theme else None
+        kb = await load_recommendations_pack(session, city=req.city or None)
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            theme_pack = (
+                await _get_theme_db(own_session, req.theme) if req.theme else None
+            )
+            kb = await load_recommendations_pack(
+                own_session, city=req.city or None
+            )
+    knowledge = build_recommendations_knowledge(
+        req, theme_pack=theme_pack, recommendations_kb=kb
+    )
     user_message = _user_message(req, knowledge)
     client = _client_instance()
 

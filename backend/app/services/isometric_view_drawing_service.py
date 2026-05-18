@@ -31,6 +31,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import ergonomics, materials, themes
@@ -40,6 +41,7 @@ from app.services.elevation_view_drawing_service import (
     _ergonomic_lookup,
     _midpoint,
 )
+from app.services.themes import get_theme as _get_theme_db
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -99,8 +101,12 @@ def _resolve_piece_envelope(req: IsometricViewRequest) -> dict[str, Any]:
     }
 
 
-def build_isometric_knowledge(req: IsometricViewRequest) -> dict[str, Any]:
-    pack = themes.get(req.theme) or {}
+def build_isometric_knowledge(
+    req: IsometricViewRequest,
+    *,
+    theme_pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    pack = theme_pack if theme_pack is not None else (themes.get(req.theme) or {})
     piece = _resolve_piece_envelope(req)
 
     return {
@@ -311,14 +317,25 @@ class IsometricViewError(RuntimeError):
     """Raised when the LLM iso stage cannot produce a grounded spec."""
 
 
-async def generate_isometric_view_drawing(req: IsometricViewRequest) -> dict[str, Any]:
+async def generate_isometric_view_drawing(
+    req: IsometricViewRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise IsometricViewError(
             "OpenAI API key is not configured. The isometric stage requires "
             "a live LLM call; no static fallback is served."
         )
 
-    knowledge = build_isometric_knowledge(req)
+    if session is not None:
+        theme_pack = await _get_theme_db(session, req.theme)
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            theme_pack = await _get_theme_db(own_session, req.theme)
+    knowledge = build_isometric_knowledge(req, theme_pack=theme_pack)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise IsometricViewError(
             f"Unknown theme '{req.theme}'. No theme rule pack to ground the drawing."

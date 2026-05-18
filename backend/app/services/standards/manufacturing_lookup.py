@@ -66,6 +66,162 @@ async def list_tolerances(
     )
 
 
+async def joinery_catalogue(
+    session: AsyncSession,
+    *,
+    jurisdiction: str = "india_nbc",
+) -> dict[str, dict[str, Any]]:
+    """``{method: data}`` map of every BRD joinery method.
+
+    Keys strip the ``mfg_joinery_`` prefix so the shape matches the
+    legacy :data:`app.knowledge.manufacturing.JOINERY` literal.
+    """
+    rows = await list_joinery_types(session, jurisdiction=jurisdiction)
+    out: dict[str, dict[str, Any]] = {}
+    prefix = "mfg_joinery_"
+    for r in rows:
+        slug = r.get("slug") or ""
+        if not slug.startswith(prefix):
+            continue
+        out[slug[len(prefix):]] = dict(r.get("data") or {})
+    return out
+
+
+async def welding_catalogue(
+    session: AsyncSession,
+    *,
+    jurisdiction: str = "india_nbc",
+) -> dict[str, dict[str, Any]]:
+    """``{method: data}`` map of every BRD welding method.
+
+    Keys strip the ``mfg_welding_`` prefix so the shape matches the
+    legacy :data:`app.knowledge.manufacturing.WELDING` literal.
+    """
+    repo = StandardsRepository(session)
+    rows = await repo.list_active(
+        category="manufacturing",
+        subcategory="welding",
+        jurisdiction=jurisdiction,
+    )
+    out: dict[str, dict[str, Any]] = {}
+    prefix = "mfg_welding_"
+    for r in rows:
+        slug = r.get("slug") or ""
+        if not slug.startswith(prefix):
+            continue
+        out[slug[len(prefix):]] = dict(r.get("data") or {})
+    return out
+
+
+async def lead_times_weeks_map(
+    session: AsyncSession,
+    *,
+    jurisdiction: str = "india_nbc",
+) -> dict[str, list[int]]:
+    """``{discipline: [low, high]}`` map of every BRD lead-time row.
+
+    Drop-in replacement for
+    :data:`app.knowledge.manufacturing.LEAD_TIMES_WEEKS` — strips the
+    ``mfg_lead_time_`` prefix from each slug.
+    """
+    repo = StandardsRepository(session)
+    rows = await repo.list_active(
+        category="manufacturing",
+        subcategory="lead_time",
+        jurisdiction=jurisdiction,
+    )
+    out: dict[str, list[int]] = {}
+    prefix = "mfg_lead_time_"
+    for r in rows:
+        slug = r.get("slug") or ""
+        if not slug.startswith(prefix):
+            continue
+        data = r.get("data") or {}
+        lo = data.get("weeks_low")
+        hi = data.get("weeks_high")
+        if lo is None or hi is None:
+            continue
+        out[slug[len(prefix):]] = [int(lo), int(hi)]
+    return out
+
+
+async def moq_units_map(
+    session: AsyncSession,
+    *,
+    jurisdiction: str = "india_nbc",
+) -> dict[str, int]:
+    """``{kind: min_order_qty}`` map. Drop-in replacement for
+    :data:`app.knowledge.manufacturing.MOQ` — strips ``mfg_moq_`` prefix.
+    """
+    repo = StandardsRepository(session)
+    rows = await repo.list_active(
+        category="manufacturing",
+        subcategory="moq",
+        jurisdiction=jurisdiction,
+    )
+    out: dict[str, int] = {}
+    prefix = "mfg_moq_"
+    for r in rows:
+        slug = r.get("slug") or ""
+        if not slug.startswith(prefix):
+            continue
+        data = r.get("data") or {}
+        units = (
+            data.get("min_order_qty")
+            or data.get("units")
+            or data.get("min_units")
+        )
+        if units is None:
+            continue
+        out[slug[len(prefix):]] = int(units)
+    return out
+
+
+async def quality_gates_stages(
+    session: AsyncSession,
+    *,
+    jurisdiction: str = "india_nbc",
+) -> list[str]:
+    """Return the 5 canonical BRD QA gate stages in order.
+
+    Drop-in replacement for
+    :data:`app.knowledge.manufacturing.QUALITY_GATES_BRD_SPEC`.
+    """
+    return await _canonical_qa_order(session, jurisdiction=jurisdiction)
+
+
+async def tolerances_mm_map(
+    session: AsyncSession,
+    *,
+    jurisdiction: str = "india_nbc",
+) -> dict[str, float]:
+    """Return ``{category: tolerance_plus_minus_mm}`` for every active
+    tolerance row.
+
+    Drop-in replacement for the legacy literal
+    ``{k: v['+-mm'] for k, v in manufacturing.TOLERANCES.items()}`` used by
+    section/detail drawing builders. Keys strip the ``mfg_tolerance_``
+    prefix so callers see the same category names the literal used
+    (``structural``, ``cosmetic``, ``material_thickness``,
+    ``hardware_placement``, ``woodworking_precision``,
+    ``woodworking_standard``, ``metal_structural``, ``metal_cosmetic``,
+    ``upholstery_foam``).
+    """
+    rows = await list_tolerances(session, jurisdiction=jurisdiction)
+    out: dict[str, float] = {}
+    prefix = "mfg_tolerance_"
+    for r in rows:
+        slug = r.get("slug") or ""
+        if not slug.startswith(prefix):
+            continue
+        key = slug[len(prefix):]
+        val = (r.get("data") or {}).get("tolerance_plus_minus_mm")
+        if val is None:
+            continue
+        out[key] = float(val)
+    return out
+
+
 # ─────────────────────────────────────────────────────────────────────
 # Lead times + MOQ
 # ─────────────────────────────────────────────────────────────────────

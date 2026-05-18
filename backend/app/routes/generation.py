@@ -33,7 +33,12 @@ from app.services.diagrams import (
 from app.services.exporters import available_formats, export as export_bundle
 from app.services.knowledge_validator import validate_design_graph_async
 from app.services.recommendations import recommend as build_recommendations
+from app.services.pricing.knowledge_service import load_html_export_bands
 from app.services.specs import build_spec_bundle
+from app.services.standards.manufacturing_lookup import (
+    lead_times_weeks_map as _lead_times_weeks_map_db,
+)
+from app.services.themes import get_theme as _get_theme_db
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["generation"])
 
@@ -224,7 +229,12 @@ async def validate_route(
 
     graph = version.graph_data or {}
     report = await validate_design_graph_async(graph, segment=segment, session=db)
-    recommendations = build_recommendations(graph)
+    style = (graph.get("style") or {}).get("primary") or ""
+    theme_pack = await _get_theme_db(db, style) if style else None
+    lt_map = await _lead_times_weeks_map_db(db)
+    recommendations = build_recommendations(
+        graph, theme_pack=theme_pack, lead_times_weeks=lt_map
+    )
     return {
         "version": version.version,
         "validation": report,
@@ -325,7 +335,12 @@ async def export_route(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
 
     graph = version.graph_data or {}
-    bundle = build_spec_bundle(graph, project_name=project.name or "KATHA Project")
+    brd_bands = await load_html_export_bands(db)
+    bundle = build_spec_bundle(
+        graph,
+        project_name=project.name or "KATHA Project",
+        brd_bands=brd_bands,
+    )
     try:
         result = export_bundle(format, bundle, graph)
     except ValueError as exc:

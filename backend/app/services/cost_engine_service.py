@@ -52,6 +52,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import manufacturing
+from app.services.standards.manufacturing_lookup import (
+    lead_times_weeks_map as _lead_times_weeks_map_db,
+    moq_units_map as _moq_units_map_db,
+)
 from app.services.pricing import (
     build_pricing_knowledge,
     load_snapshot,
@@ -159,8 +163,9 @@ async def build_cost_engine_knowledge(
     )
 
     # Layer in the non-pricing fields the cost-engine prompt expects.
-    # Manufacturing lead times + MOQ remain on the legacy module for
-    # now — Stage 3 migrates them.
+    # Manufacturing lead times + MOQ now come from the versioned
+    # ``mfg_lead_time_*`` and ``mfg_moq_*`` rows; the legacy literal
+    # serves as a per-key fallback when the DB row is missing.
     core["theme_rule_pack"] = (
         {
             "display_name": (pack or {}).get("display_name") or req.theme,
@@ -170,9 +175,11 @@ async def build_cost_engine_knowledge(
         if pack
         else None
     )
+    lead_times = await _lead_times_weeks_map_db(session)
+    moq_units = await _moq_units_map_db(session)
     core["manufacturing_brd"] = {
-        "lead_times_weeks": dict(manufacturing.LEAD_TIMES_WEEKS),
-        "moq_units": dict(manufacturing.MOQ),
+        "lead_times_weeks": lead_times or dict(manufacturing.LEAD_TIMES_WEEKS),
+        "moq_units": moq_units or dict(manufacturing.MOQ),
     }
     core["vocab"] = {
         "labor_trades_in_scope": list(LABOR_TRADES_IN_SCOPE),

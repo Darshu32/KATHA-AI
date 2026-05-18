@@ -30,10 +30,12 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import ergonomics, themes
 from app.services.drawings import elevation_view
+from app.services.themes import get_theme as _get_theme_db
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -134,8 +136,12 @@ def _midpoint(rng: Any) -> float | None:
     return (float(rng[0]) + float(rng[1])) / 2.0
 
 
-def build_elevation_knowledge(req: ElevationViewRequest) -> dict[str, Any]:
-    pack = themes.get(req.theme) or {}
+def build_elevation_knowledge(
+    req: ElevationViewRequest,
+    *,
+    theme_pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    pack = theme_pack if theme_pack is not None else (themes.get(req.theme) or {})
     piece = _resolve_piece_envelope(req)
     ergo_envelope = _ergonomic_lookup(piece.get("type", "")) if piece else {}
 
@@ -354,14 +360,25 @@ class ElevationViewError(RuntimeError):
     """Raised when the LLM elevation stage cannot produce a grounded spec."""
 
 
-async def generate_elevation_view_drawing(req: ElevationViewRequest) -> dict[str, Any]:
+async def generate_elevation_view_drawing(
+    req: ElevationViewRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise ElevationViewError(
             "OpenAI API key is not configured. The elevation-view stage requires "
             "a live LLM call; no static fallback is served."
         )
 
-    knowledge = build_elevation_knowledge(req)
+    if session is not None:
+        theme_pack = await _get_theme_db(session, req.theme)
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            theme_pack = await _get_theme_db(own_session, req.theme)
+    knowledge = build_elevation_knowledge(req, theme_pack=theme_pack)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise ElevationViewError(
             f"Unknown theme '{req.theme}'. No theme rule pack to ground the drawing."

@@ -47,8 +47,33 @@ def _money(v: object) -> str:
         return _e(v)
 
 
+_LEGACY_BRD_BANDS: dict = {
+    "manufacturer_margin_by_volume": {
+        "one_off": [50.0, 60.0],
+        "small_batch": [40.0, 55.0],
+        "production": [35.0, 45.0],
+        "mass_production": [30.0, 40.0],
+    },
+    "designer_margin": [25.0, 50.0],
+    "retail_markup": [40.0, 100.0],
+    "customization_premium_by_level": {
+        "none": [0.0, 0.0],
+        "light_finish": [5.0, 10.0],
+        "moderate": [10.0, 15.0],
+        "heavy": [15.0, 20.0],
+        "fully_bespoke": [20.0, 25.0],
+    },
+}
+
+
 def _payload(spec: dict, graph: dict) -> dict:
-    """The JSON the client-side script reads to drive the calculator."""
+    """The JSON the client-side script reads to drive the calculator.
+
+    ``brd_bands`` prefers the bundle-supplied dict (DB-backed when the
+    caller pre-loaded it from ``cost_factors``) and falls back to the
+    legacy literal so the exporter still produces valid HTML when called
+    with a stub bundle.
+    """
     meta = spec.get("meta") or {}
     cost = spec.get("cost") or {}
     totals = cost.get("totals") or {}
@@ -61,23 +86,7 @@ def _payload(spec: dict, graph: dict) -> dict:
         "manufacturing_cost_inr": float(totals.get("base") or totals.get("low") or 0),
         "totals": totals,
         "objects_count": spec.get("objects_count", 0),
-        "brd_bands": {
-            "manufacturer_margin_by_volume": {
-                "one_off": [50.0, 60.0],
-                "small_batch": [40.0, 55.0],
-                "production": [35.0, 45.0],
-                "mass_production": [30.0, 40.0],
-            },
-            "designer_margin": [25.0, 50.0],
-            "retail_markup": [40.0, 100.0],
-            "customization_premium_by_level": {
-                "none": [0.0, 0.0],
-                "light_finish": [5.0, 10.0],
-                "moderate": [10.0, 15.0],
-                "heavy": [15.0, 20.0],
-                "fully_bespoke": [20.0, 25.0],
-            },
-        },
+        "brd_bands": spec.get("brd_bands") or _LEGACY_BRD_BANDS,
     }
 
 

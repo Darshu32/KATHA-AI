@@ -32,10 +32,12 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import mep, themes
 from app.services.importers import supported_extensions
+from app.services.themes import get_theme as _get_theme_db
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -123,8 +125,15 @@ class ImportAdvisorRequest(BaseModel):
 # ── Knowledge slice ─────────────────────────────────────────────────────────
 
 
-def build_import_advisor_knowledge(req: ImportAdvisorRequest) -> dict[str, Any]:
-    pack = themes.get(req.theme) if req.theme else None
+def build_import_advisor_knowledge(
+    req: ImportAdvisorRequest,
+    *,
+    theme_pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if theme_pack is not None:
+        pack = theme_pack
+    else:
+        pack = themes.get(req.theme) if req.theme else None
     return {
         "project": {
             "name": req.project_name,
@@ -528,7 +537,11 @@ class ImportAdvisorError(RuntimeError):
     """Raised when the LLM import-advisor stage cannot produce a grounded sheet."""
 
 
-async def generate_import_manifest(req: ImportAdvisorRequest) -> dict[str, Any]:
+async def generate_import_manifest(
+    req: ImportAdvisorRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise ImportAdvisorError(
             "OpenAI API key is not configured. The import advisor stage requires "
@@ -537,7 +550,18 @@ async def generate_import_manifest(req: ImportAdvisorRequest) -> dict[str, Any]:
     if not req.imports:
         raise ImportAdvisorError("No imports provided — at least one parsed file is required.")
 
-    knowledge = build_import_advisor_knowledge(req)
+    if session is not None:
+        theme_pack = (
+            await _get_theme_db(session, req.theme) if req.theme else None
+        )
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            theme_pack = (
+                await _get_theme_db(own_session, req.theme) if req.theme else None
+            )
+    knowledge = build_import_advisor_knowledge(req, theme_pack=theme_pack)
     user_message = _user_message(req, knowledge)
     client = _client_instance()
 

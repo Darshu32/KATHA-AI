@@ -42,6 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.knowledge import mep as mep_kb
 from app.knowledge import regional_materials, themes
+from app.services.standards.mep_spec_pack import load_mep_spec_pack
 from app.services.themes import get_theme as _get_theme_db
 
 logger = logging.getLogger(__name__)
@@ -196,6 +197,7 @@ def build_mep_spec_knowledge(
     req: MEPSpecRequest,
     *,
     theme_pack: dict[str, Any] | None = None,
+    mep_db: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     use = _normalise_use(req.room_use_type)
     length = req.dimensions.length_m
@@ -203,94 +205,72 @@ def build_mep_spec_knowledge(
     height = req.dimensions.height_m
     area = length * width
     volume = area * height
-
-    hvac_calc = mep_kb.hvac_cfm(volume, use)
     cooling_use = _cooling_use_for(use)
-    cooling_calc = mep_kb.cooling_tr(area, cooling_use)
-    equipment = (
-        mep_kb.equipment_capacity(cooling_calc.get("tonnage") or 0)
-        if cooling_calc.get("tonnage") is not None else {}
-    )
-    equipment_pick = (
-        mep_kb.equipment_shortlist(cooling_calc.get("tonnage") or 0)
-        if cooling_calc.get("tonnage") is not None else {}
-    )
-    cfm = hvac_calc.get("cfm_total") if isinstance(hvac_calc, dict) else None
-    duct_round = mep_kb.duct_round_diameter(cfm) if cfm else {}
-    duct_rect = (
-        mep_kb.duct_rectangular_for_cfm(cfm, velocity_m_s=5.0, aspect_ratio=2.0)
-        if cfm else {}
-    )
-
     power_use = _power_use_for(use)
-    lighting = mep_kb.lighting_circuits(area, power_use) if area else {}
-
-    fixtures_in = [_normalise_use(f) for f in (req.fixtures or [])]
-    fixtures_in = [f for f in fixtures_in if f in mep_kb.WSFU_PER_FIXTURE]
-    supply_summary = mep_kb.fixture_water_supply_summary(fixtures_in) if fixtures_in else {}
-    total_dfu_pre = sum(
-        mep_kb.DFU_PER_FIXTURE.get(f, 0) for f in fixtures_in
-    )
-    drain_pick = mep_kb.pipe_size_for_dfu(total_dfu_pre) if total_dfu_pre else {}
-    vent_pick = (
-        mep_kb.vent_size_for_dfu(total_dfu_pre, developed_length_m=15.0)
-        if total_dfu_pre else {}
-    )
-    trap_picks = [
-        {
-            "fixture": f,
-            **(mep_kb.TRAP_SIZE_MM_PER_FIXTURE.get(f) or {}),
-        }
-        for f in fixtures_in
-    ]
-
-    ambient_lux = mep_kb.LUX_LEVELS.get(f"{use}_general") or 200
-    task_lux = mep_kb.LUX_LEVELS.get(f"{use}_task") or ambient_lux
-    ambient_pick = (
-        mep_kb.ambient_fixture_count(area, ambient_lux, fixture_key="led_downlight_18w")
-        if area else {}
-    )
-    perimeter = 2 * (length + width)
-    outlet_pick = mep_kb.outlet_estimate(use, perimeter) if perimeter else {}
-    task_recipe = mep_kb.TASK_LIGHTING_RECIPE.get(use) or []
-
-    if theme_pack is not None:
-        pack = theme_pack
-    else:
-        pack = themes.get(req.theme) if req.theme else None
-
     hvac_system = _hvac_system_for(use, area)
     electrical_system = _electrical_system_for(use)
     plumbing_system = _plumbing_system_for(use)
+    perimeter = 2 * (length + width)
+    fixtures_in = [_normalise_use(f) for f in (req.fixtures or [])]
 
-    city_index_value = regional_materials.price_index_for_city(req.city or None)
-    if not isinstance(city_index_value, (int, float)):
-        city_index_value = 1.0
+    # DB-backed pack when supplied; otherwise compute the whole thing
+    # via the legacy ``mep_kb`` literal (defensive fallback for fresh
+    # dev DBs and callers that haven't plumbed the session through).
+    if mep_db is not None:
+        kb = mep_db
+        hvac_brd = kb.get("hvac_brd", {})
+        hvac_pre = kb.get("hvac_pre_calc", {})
+        electrical_brd = kb.get("electrical_brd", {})
+        electrical_pre = kb.get("electrical_pre_calc", {})
+        plumbing_brd = kb.get("plumbing_brd", {})
+        plumbing_pre = kb.get("plumbing_pre_calc", {})
+        cost_bands = kb.get("cost_bands", {})
+        city_index_value = kb.get("city_price_index", 1.0)
+    else:
+        # Legacy literal path — mirrors the original behaviour exactly.
+        hvac_calc = mep_kb.hvac_cfm(volume, use)
+        cooling_calc = mep_kb.cooling_tr(area, cooling_use)
+        equipment = (
+            mep_kb.equipment_capacity(cooling_calc.get("tonnage") or 0)
+            if cooling_calc.get("tonnage") is not None else {}
+        )
+        equipment_pick = (
+            mep_kb.equipment_shortlist(cooling_calc.get("tonnage") or 0)
+            if cooling_calc.get("tonnage") is not None else {}
+        )
+        cfm = hvac_calc.get("cfm_total") if isinstance(hvac_calc, dict) else None
+        duct_round = mep_kb.duct_round_diameter(cfm) if cfm else {}
+        duct_rect = (
+            mep_kb.duct_rectangular_for_cfm(cfm, velocity_m_s=5.0, aspect_ratio=2.0)
+            if cfm else {}
+        )
+        lighting = mep_kb.lighting_circuits(area, power_use) if area else {}
+        valid_fixtures = [f for f in fixtures_in if f in mep_kb.WSFU_PER_FIXTURE]
+        supply_summary = (
+            mep_kb.fixture_water_supply_summary(valid_fixtures) if valid_fixtures else {}
+        )
+        total_dfu_pre = sum(
+            mep_kb.DFU_PER_FIXTURE.get(f, 0) for f in valid_fixtures
+        )
+        drain_pick = mep_kb.pipe_size_for_dfu(total_dfu_pre) if total_dfu_pre else {}
+        vent_pick = (
+            mep_kb.vent_size_for_dfu(total_dfu_pre, developed_length_m=15.0)
+            if total_dfu_pre else {}
+        )
+        trap_picks = [
+            {"fixture": f, **(mep_kb.TRAP_SIZE_MM_PER_FIXTURE.get(f) or {})}
+            for f in valid_fixtures
+        ]
+        ambient_lux = mep_kb.LUX_LEVELS.get(f"{use}_general") or 200
+        task_lux = mep_kb.LUX_LEVELS.get(f"{use}_task") or ambient_lux
+        ambient_pick = (
+            mep_kb.ambient_fixture_count(area, ambient_lux, fixture_key="led_downlight_18w")
+            if area else {}
+        )
+        outlet_pick = mep_kb.outlet_estimate(use, perimeter) if perimeter else {}
+        task_recipe = mep_kb.TASK_LIGHTING_RECIPE.get(use) or []
 
-    cost_bands = {
-        "hvac": mep_kb.system_cost_estimate(hvac_system, area),
-        "electrical": mep_kb.system_cost_estimate(electrical_system, area),
-        "plumbing": mep_kb.system_cost_estimate(plumbing_system, area),
-    }
-
-    return {
-        "project": {
-            "name": req.project_name,
-            "room_name": req.room_name,
-            "room_use_type": use,
-            "city": req.city or None,
-            "theme": req.theme or None,
-            "occupancy": req.occupancy,
-            "fixtures_declared": list(req.fixtures or []),
-        },
-        "geometry": {
-            "length_m": length,
-            "width_m": width,
-            "height_m": height,
-            "area_m2": round(area, 2),
-            "volume_m3": round(volume, 2),
-        },
-        "hvac_brd": {
+        hvac_brd = {
             "ach_table": dict(mep_kb.AIR_CHANGES_PER_HOUR),
             "cfm_per_person_table": dict(mep_kb.CFM_PER_PERSON),
             "cooling_load_tr_per_m2": dict(mep_kb.COOLING_LOAD_TR_PER_M2),
@@ -308,8 +288,8 @@ def build_mep_spec_knowledge(
                 for cfm_lim, dia in mep_kb.DUCT_ROUND_DIAMETER_MM_BY_CFM
             ],
             "register_cfm_rating": dict(mep_kb.REGISTER_CFM_RATING),
-        },
-        "hvac_pre_calc": {
+        }
+        hvac_pre = {
             "ach_target": hvac_calc.get("ach"),
             "cfm_total": cfm,
             "cooling_tonnage": cooling_calc.get("tonnage"),
@@ -323,8 +303,8 @@ def build_mep_spec_knowledge(
                 "velocity_m_s": duct_rect.get("velocity_m_s"),
             },
             "cooling_use_mapped": cooling_use,
-        },
-        "electrical_brd": {
+        }
+        electrical_brd = {
             "lux_levels": dict(mep_kb.LUX_LEVELS),
             "circuit_load_w": dict(mep_kb.CIRCUIT_LOAD_W),
             "power_density_w_per_m2": dict(mep_kb.POWER_DENSITY_W_PER_M2),
@@ -340,8 +320,8 @@ def build_mep_spec_knowledge(
                 for k, v in mep_kb.TASK_LIGHTING_RECIPE.items()
             },
             "lighting_layout_rules": dict(mep_kb.LIGHTING_LAYOUT_RULES),
-        },
-        "electrical_pre_calc": {
+        }
+        electrical_pre = {
             "power_use_mapped": power_use,
             "ambient_lux_target": ambient_lux,
             "task_lux_target": task_lux,
@@ -352,8 +332,8 @@ def build_mep_spec_knowledge(
             "outlet_pick": outlet_pick,
             "task_lighting_recipe_for_use": task_recipe,
             "perimeter_m": round(perimeter, 2),
-        },
-        "plumbing_brd": {
+        }
+        plumbing_brd = {
             "dfu_per_fixture": dict(mep_kb.DFU_PER_FIXTURE),
             "pipe_size_mm_by_dfu": [
                 {"dfu_max": lim, "pipe_mm": size}
@@ -386,15 +366,52 @@ def build_mep_spec_knowledge(
             ],
             "vent_rules": dict(mep_kb.VENT_RULES),
             "gpm_to_lpm": mep_kb.GPM_TO_LPM,
-        },
-        "plumbing_pre_calc": {
-            "fixtures_normalised": fixtures_in,
+        }
+        plumbing_pre = {
+            "fixtures_normalised": valid_fixtures,
             "supply_summary": supply_summary,
             "total_dfu": total_dfu_pre,
             "drain_pipe_pick": drain_pick,
             "vent_pick": vent_pick,
             "trap_picks": trap_picks,
+        }
+        cost_bands = {
+            "hvac": mep_kb.system_cost_estimate(hvac_system, area),
+            "electrical": mep_kb.system_cost_estimate(electrical_system, area),
+            "plumbing": mep_kb.system_cost_estimate(plumbing_system, area),
+        }
+        city_index_value = regional_materials.price_index_for_city(req.city or None)
+        if not isinstance(city_index_value, (int, float)):
+            city_index_value = 1.0
+
+    if theme_pack is not None:
+        pack = theme_pack
+    else:
+        pack = themes.get(req.theme) if req.theme else None
+
+    return {
+        "project": {
+            "name": req.project_name,
+            "room_name": req.room_name,
+            "room_use_type": use,
+            "city": req.city or None,
+            "theme": req.theme or None,
+            "occupancy": req.occupancy,
+            "fixtures_declared": list(req.fixtures or []),
         },
+        "geometry": {
+            "length_m": length,
+            "width_m": width,
+            "height_m": height,
+            "area_m2": round(area, 2),
+            "volume_m3": round(volume, 2),
+        },
+        "hvac_brd": hvac_brd,
+        "hvac_pre_calc": hvac_pre,
+        "electrical_brd": electrical_brd,
+        "electrical_pre_calc": electrical_pre,
+        "plumbing_brd": plumbing_brd,
+        "plumbing_pre_calc": plumbing_pre,
         "cost_bands": cost_bands,
         "system_picks": {
             "hvac": hvac_system,
@@ -1945,8 +1962,25 @@ async def generate_mep_spec(
             f"Pick from: {', '.join(sorted(mep_kb.DFU_PER_FIXTURE.keys()))}."
         )
 
+    use_normalised = _normalise_use(req.room_use_type)
+    pack_kwargs = dict(
+        room_use_type=use_normalised,
+        length_m=req.dimensions.length_m,
+        width_m=req.dimensions.width_m,
+        height_m=req.dimensions.height_m,
+        fixtures=list(req.fixtures or []),
+        city=req.city or None,
+        hvac_system=_hvac_system_for(
+            use_normalised, req.dimensions.length_m * req.dimensions.width_m
+        ),
+        electrical_system=_electrical_system_for(use_normalised),
+        plumbing_system=_plumbing_system_for(use_normalised),
+        cooling_use=_cooling_use_for(use_normalised),
+        power_use=_power_use_for(use_normalised),
+    )
     if session is not None:
         theme_pack = await _get_theme_db(session, req.theme) if req.theme else None
+        mep_db = await load_mep_spec_pack(session, **pack_kwargs)
     else:
         from app.database import async_session_factory  # local import
 
@@ -1954,7 +1988,8 @@ async def generate_mep_spec(
             theme_pack = (
                 await _get_theme_db(own_session, req.theme) if req.theme else None
             )
-    knowledge = build_mep_spec_knowledge(req, theme_pack=theme_pack)
+            mep_db = await load_mep_spec_pack(own_session, **pack_kwargs)
+    knowledge = build_mep_spec_knowledge(req, theme_pack=theme_pack, mep_db=mep_db)
     user_message = _user_message(req, knowledge)
     client = _client_instance()
 

@@ -27,10 +27,12 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import themes
 from app.services.diagrams import hierarchy, volumetric
+from app.services.themes import get_theme as _get_theme_db
 from app.services.diagrams.svg_base import (
     ACCENT_WARM,
     INK,
@@ -87,8 +89,12 @@ class VolumetricDiagramRequest(BaseModel):
 # ── Knowledge slice ─────────────────────────────────────────────────────────
 
 
-def build_volumetric_knowledge(req: VolumetricDiagramRequest) -> dict[str, Any]:
-    pack = themes.get(req.theme) or {}
+def build_volumetric_knowledge(
+    req: VolumetricDiagramRequest,
+    *,
+    theme_pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    pack = theme_pack if theme_pack is not None else (themes.get(req.theme) or {})
     graph = req.design_graph or {}
     objects = graph.get("objects", [])
     obj_summary = []
@@ -333,14 +339,25 @@ class VolumetricDiagramError(RuntimeError):
     """Raised when the volumetric LLM stage cannot produce a grounded spec."""
 
 
-async def generate_volumetric_diagram(req: VolumetricDiagramRequest) -> dict[str, Any]:
+async def generate_volumetric_diagram(
+    req: VolumetricDiagramRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise VolumetricDiagramError(
             "OpenAI API key is not configured. The volumetric-hierarchy stage requires "
             "a live LLM call; no static fallback is served."
         )
 
-    knowledge = build_volumetric_knowledge(req)
+    if session is not None:
+        theme_pack = await _get_theme_db(session, req.theme)
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            theme_pack = await _get_theme_db(own_session, req.theme)
+    knowledge = build_volumetric_knowledge(req, theme_pack=theme_pack)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise VolumetricDiagramError(
             f"Unknown theme '{req.theme}'. No theme rule pack to ground the diagram."
@@ -391,7 +408,7 @@ async def generate_volumetric_diagram(req: VolumetricDiagramRequest) -> dict[str
     }
 
     base = volumetric.generate(
-        req.design_graph or _stub_graph(req),
+        req.design_graph or _stub_graph(req, pack=theme_pack),
         canvas_w=req.canvas_width,
         canvas_h=req.canvas_height,
     )
@@ -417,13 +434,24 @@ async def generate_volumetric_diagram(req: VolumetricDiagramRequest) -> dict[str
     }
 
 
-def _stub_graph(req: VolumetricDiagramRequest) -> dict[str, Any]:
+def _stub_graph(
+    req: VolumetricDiagramRequest,
+    *,
+    pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     geom = (req.parametric_spec or {}).get("geometry") or {}
     length_m = max(2.0, (geom.get("overall_length_mm") or 4000) / 1000.0)
     width_m = max(2.0, (geom.get("overall_width_mm") or 3000) / 1000.0)
     height_m = max(2.4, (geom.get("overall_height_mm") or 2700) / 1000.0)
     return {
         "room": {"dimensions": {"length": length_m, "width": width_m, "height": height_m}},
-        "style": {"primary": (themes.get(req.theme) or {}).get("display_name") or req.theme},
+        "style": {
+            "primary": (
+                (pack if pack is not None else (themes.get(req.theme) or {})).get(
+                    "display_name"
+                )
+                or req.theme
+            )
+        },
         "objects": [],
     }

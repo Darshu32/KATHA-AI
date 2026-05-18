@@ -14,8 +14,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.database import get_db
 from app.models.schemas import ErrorResponse
 from app.services.import_advisor_service import (
     ImportAdvisorError,
@@ -25,6 +27,7 @@ from app.services.import_advisor_service import (
 )
 from app.services.importers import parse as parse_file
 from app.services.importers import supported_extensions
+from app.services.themes import get_theme as _get_theme_db
 
 logger = logging.getLogger(__name__)
 
@@ -65,10 +68,16 @@ async def parse_uploads(files: list[UploadFile] = File(...)) -> dict:
 
 
 @router.post("/advisor/knowledge")
-async def import_advisor_knowledge(payload: ImportAdvisorRequest) -> dict:
+async def import_advisor_knowledge(
+    payload: ImportAdvisorRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the knowledge slice the import-advisor LLM stage will see."""
     try:
-        knowledge = build_import_advisor_knowledge(payload)
+        theme_pack = (
+            await _get_theme_db(db, payload.theme) if payload.theme else None
+        )
+        knowledge = build_import_advisor_knowledge(payload, theme_pack=theme_pack)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -82,10 +91,13 @@ async def import_advisor_knowledge(payload: ImportAdvisorRequest) -> dict:
 
 
 @router.post("/advisor")
-async def import_advisor_endpoint(payload: ImportAdvisorRequest) -> dict:
+async def import_advisor_endpoint(
+    payload: ImportAdvisorRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM import-advisor author + return the structured manifest."""
     try:
-        return await generate_import_manifest(payload)
+        return await generate_import_manifest(payload, session=db)
     except ImportAdvisorError as exc:
         msg = str(exc)
         if "No imports provided" in msg:

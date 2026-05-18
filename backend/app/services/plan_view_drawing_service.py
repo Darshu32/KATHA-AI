@@ -29,10 +29,12 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import themes
 from app.services.drawings import plan_view
+from app.services.themes import get_theme as _get_theme_db
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -66,8 +68,12 @@ class PlanViewRequest(BaseModel):
 # ── Knowledge slice ─────────────────────────────────────────────────────────
 
 
-def build_plan_knowledge(req: PlanViewRequest) -> dict[str, Any]:
-    pack = themes.get(req.theme) or {}
+def build_plan_knowledge(
+    req: PlanViewRequest,
+    *,
+    theme_pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    pack = theme_pack if theme_pack is not None else (themes.get(req.theme) or {})
     palette = pack.get("material_palette", {})
     graph = req.design_graph or {}
     objects = graph.get("objects", [])
@@ -251,14 +257,25 @@ class PlanViewError(RuntimeError):
     """Raised when the LLM plan-view stage cannot produce a grounded spec."""
 
 
-async def generate_plan_view_drawing(req: PlanViewRequest) -> dict[str, Any]:
+async def generate_plan_view_drawing(
+    req: PlanViewRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise PlanViewError(
             "OpenAI API key is not configured. The plan-view stage requires "
             "a live LLM call; no static fallback is served."
         )
 
-    knowledge = build_plan_knowledge(req)
+    if session is not None:
+        theme_pack = await _get_theme_db(session, req.theme)
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            theme_pack = await _get_theme_db(own_session, req.theme)
+    knowledge = build_plan_knowledge(req, theme_pack=theme_pack)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise PlanViewError(
             f"Unknown theme '{req.theme}'. No theme rule pack to ground the drawing."
@@ -294,7 +311,7 @@ async def generate_plan_view_drawing(req: PlanViewRequest) -> dict[str, Any]:
     validation = _validate(spec, knowledge)
 
     rendered = plan_view.render_plan_view(
-        graph=req.design_graph or _stub_graph(req),
+        graph=req.design_graph or _stub_graph(req, pack=theme_pack),
         plan_spec=spec,
         canvas_w=req.canvas_width,
         canvas_h=req.canvas_height,
@@ -320,13 +337,24 @@ async def generate_plan_view_drawing(req: PlanViewRequest) -> dict[str, Any]:
     }
 
 
-def _stub_graph(req: PlanViewRequest) -> dict[str, Any]:
+def _stub_graph(
+    req: PlanViewRequest,
+    *,
+    pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     geom = (req.parametric_spec or {}).get("geometry") or {}
     length_m = max(2.0, (geom.get("overall_length_mm") or 4000) / 1000.0)
     width_m = max(2.0, (geom.get("overall_width_mm") or 3000) / 1000.0)
     height_m = max(2.4, (geom.get("overall_height_mm") or 2700) / 1000.0)
     return {
         "room": {"dimensions": {"length": length_m, "width": width_m, "height": height_m}},
-        "style": {"primary": (themes.get(req.theme) or {}).get("display_name") or req.theme},
+        "style": {
+            "primary": (
+                (pack if pack is not None else (themes.get(req.theme) or {})).get(
+                    "display_name"
+                )
+                or req.theme
+            )
+        },
         "objects": [],
     }

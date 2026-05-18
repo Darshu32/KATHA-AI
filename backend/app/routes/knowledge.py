@@ -45,6 +45,11 @@ from app.services.knowledge_integration_service import (
     generate_knowledge_application,
 )
 from app.services.pricing.knowledge_service import load_labor_rate_bands
+from app.services.standards.recommendations_pack import (
+    load_knowledge_integration_pack,
+    load_recommendations_pack,
+)
+from app.services.themes import get_theme as _get_theme_db
 from app.services.recommendations_service import (
     RecommendationsError,
     RecommendationsRequest,
@@ -117,11 +122,21 @@ async def apply_preview(
 ) -> dict:
     """Deterministic slice only — instant inline validation, no LLM call."""
     try:
+        theme_value = (payload.payload or {}).get("theme") or ""
         labor_bands = await load_labor_rate_bands(
             db, defaults=costing.LABOR_RATES_INR_PER_HOUR
         )
+        kb = await load_knowledge_integration_pack(
+            db, city=(payload.payload or {}).get("city")
+        )
+        theme_pack = (
+            await _get_theme_db(db, theme_value) if theme_value else None
+        )
         knowledge = build_knowledge_integration_slice(
-            payload, labor_rates=labor_bands
+            payload,
+            labor_rates=labor_bands,
+            theme_pack=theme_pack,
+            knowledge_kb=kb,
         )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
@@ -136,10 +151,19 @@ async def apply_preview(
 
 
 @router.post("/recommendations/preview")
-async def recommendations_preview(payload: RecommendationsRequest) -> dict:
+async def recommendations_preview(
+    payload: RecommendationsRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Deterministic knowledge slice — no LLM call. UI can use for live hints."""
     try:
-        knowledge = build_recommendations_knowledge(payload)
+        theme_pack = (
+            await _get_theme_db(db, payload.theme) if payload.theme else None
+        )
+        kb = await load_recommendations_pack(db, city=payload.city or None)
+        knowledge = build_recommendations_knowledge(
+            payload, theme_pack=theme_pack, recommendations_kb=kb
+        )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -153,10 +177,13 @@ async def recommendations_preview(payload: RecommendationsRequest) -> dict:
 
 
 @router.post("/recommendations")
-async def recommendations_endpoint(payload: RecommendationsRequest) -> dict:
+async def recommendations_endpoint(
+    payload: RecommendationsRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM recommendations author + return ranked suggestions."""
     try:
-        return await generate_recommendations(payload)
+        return await generate_recommendations(payload, session=db)
     except RecommendationsError as exc:
         msg = str(exc)
         code = status.HTTP_503_SERVICE_UNAVAILABLE

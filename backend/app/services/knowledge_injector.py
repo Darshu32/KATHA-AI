@@ -50,6 +50,10 @@ from app.models.brief import (
     ProjectTypeEnum,
 )
 from app.services.standards import codes_lookup
+from app.services.standards.manufacturing_lookup import (
+    tolerances_mm_map as _tolerances_mm_map_db,
+)
+from app.services.themes import get_theme as _get_theme_db
 
 
 # Project type → space_standards segment used by the knowledge tables.
@@ -72,7 +76,11 @@ def _segment(project_type: ProjectTypeEnum) -> str:
 
 # ── 1. Standard dimensions ──────────────────────────────────────────────────
 
-def _standard_dimensions(segment: str) -> dict[str, Any]:
+def _standard_dimensions(
+    segment: str,
+    *,
+    tolerances_mm: dict[str, float] | None = None,
+) -> dict[str, Any]:
     corridor_spec = clearances.CORRIDORS.get(
         "residential" if segment == "residential" else "commercial",
         clearances.CORRIDORS["residential"],
@@ -105,9 +113,18 @@ def _standard_dimensions(segment: str) -> dict[str, Any]:
         },
         "ceiling_height_min_m": habitable["habitable_room_min_height_m"],
         "circulation_mm": dict(clearances.CIRCULATION),
-        "manufacturing_tolerances_mm": {
-            name: spec["+-mm"] for name, spec in manufacturing.TOLERANCES.items()
-        } if hasattr(manufacturing, "TOLERANCES") else {},
+        "manufacturing_tolerances_mm": (
+            dict(tolerances_mm)
+            if tolerances_mm
+            else (
+                {
+                    name: spec["+-mm"]
+                    for name, spec in manufacturing.TOLERANCES.items()
+                }
+                if hasattr(manufacturing, "TOLERANCES")
+                else {}
+            )
+        ),
     }
 
 
@@ -217,8 +234,13 @@ def _climate_considerations(zone_value: str | None) -> dict[str, Any]:
 
 # ── 4. Material availability by region ──────────────────────────────────────
 
-def _material_availability(theme_value: str, city: str | None) -> dict[str, Any]:
-    pack = themes.get(theme_value) or {}
+def _material_availability(
+    theme_value: str,
+    city: str | None,
+    *,
+    theme_pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    pack = theme_pack if theme_pack is not None else (themes.get(theme_value) or {})
     palette = pack.get("material_palette", {})
     themed_materials: list[str] = []
     for bucket in ("primary", "secondary", "upholstery", "accent"):
@@ -443,12 +465,29 @@ async def inject_knowledge(
     if dims.unit == "ft":
         area_m2 *= 0.092903
 
+    # Pre-load DB-backed knowledge when a session is supplied so the
+    # sync sub-helpers get versioned values; otherwise they fall back to
+    # the legacy ``app.knowledge.*`` literals.
+    theme_value = brief.theme.theme.value
+    if session is not None:
+        theme_pack_db = (
+            await _get_theme_db(session, theme_value)
+            if brief.theme.theme != BriefThemeEnum.CUSTOM
+            else None
+        )
+        tolerances_mm = await _tolerances_mm_map_db(session)
+    else:
+        theme_pack_db = None
+        tolerances_mm = None
+
     bundle = {
         "brief_id": brief.brief_id,
         "segment": segment,
-        "theme": brief.theme.theme.value,
+        "theme": theme_value,
         "footprint_area_m2": round(area_m2, 2),
-        "standard_dimensions": _standard_dimensions(segment),
+        "standard_dimensions": _standard_dimensions(
+            segment, tolerances_mm=tolerances_mm
+        ),
         "building_codes": await _building_codes(
             session,
             brief.project_type.type,
@@ -456,7 +495,9 @@ async def inject_knowledge(
             segment,
         ),
         "climate": _climate_considerations(zone_value),
-        "regional_materials": _material_availability(brief.theme.theme.value, brief.regulatory.city),
+        "regional_materials": _material_availability(
+            theme_value, brief.regulatory.city, theme_pack=theme_pack_db
+        ),
         "structural": _structural_logic(brief.project_type.type, segment),
         "mep": _mep_strategy(brief.project_type.type, area_m2),
         "room_program_reference": _suggested_room_program(segment),
@@ -466,7 +507,7 @@ async def inject_knowledge(
         bundle["international_code_overlay"] = overlay
 
     if brief.theme.theme != BriefThemeEnum.CUSTOM:
-        theme_pack = themes.get(brief.theme.theme.value)
+        theme_pack = theme_pack_db or themes.get(brief.theme.theme.value)
         if theme_pack:
             bundle["theme_rules"] = {
                 "display_name": theme_pack.get("display_name"),

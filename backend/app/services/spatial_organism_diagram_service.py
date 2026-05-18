@@ -32,10 +32,12 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import clearances, ergonomics, themes
 from app.services.diagrams import spatial_organism
+from app.services.themes import get_theme as _get_theme_db
 from app.services.diagrams.svg_base import (
     ACCENT_COOL,
     ACCENT_WARM,
@@ -129,9 +131,13 @@ def _summarise_objects_for_organism(graph: dict[str, Any]) -> list[dict[str, Any
     return out
 
 
-def build_organism_knowledge(req: SpatialOrganismRequest) -> dict[str, Any]:
-    pack = themes.get(req.theme) or {}
-    graph = req.design_graph or _stub_graph(req)
+def build_organism_knowledge(
+    req: SpatialOrganismRequest,
+    *,
+    theme_pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    pack = theme_pack if theme_pack is not None else (themes.get(req.theme) or {})
+    graph = req.design_graph or _stub_graph(req, pack=pack)
     return {
         "theme_rule_pack": {
             "display_name": pack.get("display_name") or req.theme,
@@ -353,14 +359,25 @@ class SpatialOrganismError(RuntimeError):
     """Raised when the LLM spatial-organism stage cannot produce a grounded spec."""
 
 
-async def generate_spatial_organism_diagram(req: SpatialOrganismRequest) -> dict[str, Any]:
+async def generate_spatial_organism_diagram(
+    req: SpatialOrganismRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise SpatialOrganismError(
             "OpenAI API key is not configured. The spatial-organism stage requires "
             "a live LLM call; no static fallback is served."
         )
 
-    knowledge = build_organism_knowledge(req)
+    if session is not None:
+        theme_pack = await _get_theme_db(session, req.theme)
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            theme_pack = await _get_theme_db(own_session, req.theme)
+    knowledge = build_organism_knowledge(req, theme_pack=theme_pack)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise SpatialOrganismError(
             f"Unknown theme '{req.theme}'. No theme rule pack to ground the diagram."
@@ -405,7 +422,7 @@ async def generate_spatial_organism_diagram(req: SpatialOrganismRequest) -> dict
     }
 
     base = spatial_organism.generate(
-        req.design_graph or _stub_graph(req),
+        req.design_graph or _stub_graph(req, pack=theme_pack),
         canvas_w=req.canvas_width,
         canvas_h=req.canvas_height,
     )
@@ -432,13 +449,24 @@ async def generate_spatial_organism_diagram(req: SpatialOrganismRequest) -> dict
     }
 
 
-def _stub_graph(req: SpatialOrganismRequest) -> dict[str, Any]:
+def _stub_graph(
+    req: SpatialOrganismRequest,
+    *,
+    pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     geom = (req.parametric_spec or {}).get("geometry") or {}
     length_m = max(2.0, (geom.get("overall_length_mm") or 4000) / 1000.0)
     width_m = max(2.0, (geom.get("overall_width_mm") or 3000) / 1000.0)
     height_m = max(2.4, (geom.get("overall_height_mm") or 2700) / 1000.0)
     return {
         "room": {"dimensions": {"length": length_m, "width": width_m, "height": height_m}},
-        "style": {"primary": (themes.get(req.theme) or {}).get("display_name") or req.theme},
+        "style": {
+            "primary": (
+                (pack if pack is not None else (themes.get(req.theme) or {})).get(
+                    "display_name"
+                )
+                or req.theme
+            )
+        },
         "objects": [],
     }

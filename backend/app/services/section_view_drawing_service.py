@@ -30,6 +30,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import ergonomics, manufacturing, materials, themes
@@ -39,6 +40,8 @@ from app.services.elevation_view_drawing_service import (
     _ergonomic_lookup,
     _midpoint,
 )
+from app.services.standards.manufacturing_lookup import tolerances_mm_map
+from app.services.themes import get_theme as _get_theme_db
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -104,8 +107,13 @@ def _resolve_piece_envelope(req: SectionViewRequest) -> dict[str, Any]:
     return {}
 
 
-def build_section_knowledge(req: SectionViewRequest) -> dict[str, Any]:
-    pack = themes.get(req.theme) or {}
+def build_section_knowledge(
+    req: SectionViewRequest,
+    *,
+    theme_pack: dict[str, Any] | None = None,
+    tolerances_mm: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    pack = theme_pack if theme_pack is not None else (themes.get(req.theme) or {})
     piece = _resolve_piece_envelope(req)
     ergo_envelope = _ergonomic_lookup(piece.get("type", "")) if piece else {}
 
@@ -136,7 +144,11 @@ def build_section_knowledge(req: SectionViewRequest) -> dict[str, Any]:
         "piece_envelope": piece,
         "ergonomic_envelope_mm": ergo_envelope,
         "joinery_catalogue": joinery_pack,
-        "tolerances_mm": {k: v["+-mm"] for k, v in manufacturing.TOLERANCES.items()},
+        "tolerances_mm": (
+            dict(tolerances_mm)
+            if tolerances_mm
+            else {k: v["+-mm"] for k, v in manufacturing.TOLERANCES.items()}
+        ),
         "material_envelopes": material_envelopes,
         "scale_options": list(section_view.SECTION_SCALE_OPTIONS),
         "joinery_keys_in_scope": list(section_view.JOINERY_KEYS),
@@ -342,14 +354,29 @@ class SectionViewError(RuntimeError):
     """Raised when the LLM section stage cannot produce a grounded spec."""
 
 
-async def generate_section_view_drawing(req: SectionViewRequest) -> dict[str, Any]:
+async def generate_section_view_drawing(
+    req: SectionViewRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise SectionViewError(
             "OpenAI API key is not configured. The section-view stage requires "
             "a live LLM call; no static fallback is served."
         )
 
-    knowledge = build_section_knowledge(req)
+    if session is not None:
+        theme_pack = await _get_theme_db(session, req.theme)
+        tolerances = await tolerances_mm_map(session)
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            theme_pack = await _get_theme_db(own_session, req.theme)
+            tolerances = await tolerances_mm_map(own_session)
+    knowledge = build_section_knowledge(
+        req, theme_pack=theme_pack, tolerances_mm=tolerances
+    )
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise SectionViewError(
             f"Unknown theme '{req.theme}'. No theme rule pack to ground the drawing."

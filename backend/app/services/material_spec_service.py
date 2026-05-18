@@ -34,6 +34,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import get_settings
 from app.knowledge import costing, manufacturing, materials, regional_materials, themes
 from app.services.pricing.knowledge_service import load_cost_factor_bands
+from app.services.standards.material_spec_pack import load_material_spec_pack
 from app.services.themes import get_theme as _get_theme_db
 
 logger = logging.getLogger(__name__)
@@ -93,26 +94,38 @@ def build_material_spec_knowledge(
     *,
     cost_bands: dict[str, list[float]] | None = None,
     theme_pack: dict[str, Any] | None = None,
+    materials_kb: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     pack = theme_pack if theme_pack is not None else (themes.get(req.theme) or {})
     palette = pack.get("material_palette", {})
     primary_candidates = palette.get("primary", []) or []
     secondary_candidates = palette.get("secondary", []) or []
 
-    # Wood candidate envelopes for any palette species we know.
-    wood_envelopes = {
-        sp: dict(materials.WOOD[sp])
-        for sp in (primary_candidates + secondary_candidates)
-        if sp in materials.WOOD
+    # Materials KB — DB-backed pack when supplied; per-key fallback to
+    # the legacy literal so a fresh dev DB (or callers that haven't
+    # plumbed the session through yet) still produce a usable sheet.
+    kb = materials_kb or {}
+    wood_catalogue: dict[str, dict[str, Any]] = kb.get("wood_catalogue") or {
+        sp: dict(spec) for sp, spec in materials.WOOD.items()
     }
-    metal_envelopes = {
-        sp: dict(materials.METALS[sp])
-        for sp in (primary_candidates + secondary_candidates)
-        if sp in materials.METALS
+    metal_catalogue: dict[str, dict[str, Any]] = kb.get("metal_catalogue") or {
+        sp: dict(spec) for sp, spec in materials.METALS.items()
     }
 
-    # Regional availability for every candidate the LLM (and hardware section)
-    # may pick from — primary + secondary + accent + upholstery.
+    # Wood candidate envelopes for any palette species we know.
+    wood_envelopes = {
+        sp: dict(wood_catalogue[sp])
+        for sp in (primary_candidates + secondary_candidates)
+        if sp in wood_catalogue
+    }
+    metal_envelopes = {
+        sp: dict(metal_catalogue[sp])
+        for sp in (primary_candidates + secondary_candidates)
+        if sp in metal_catalogue
+    }
+
+    # Regional availability stays on the legacy helper for now — the BRD
+    # regional-sourcing bullet hasn't landed in DB yet (downstream work).
     accent_candidates = palette.get("accent", []) or []
     upholstery_candidates = palette.get("upholstery", []) or []
     availability = regional_materials.availability_report(
@@ -127,6 +140,41 @@ def build_material_spec_knowledge(
         "hardware_material": (req.parametric_spec or {}).get("hardware_spec", {}).get("material"),
     }
 
+    wood_brd = kb.get("wood_brd") or {
+        "ranges": materials.WOOD_BRD_RANGES,
+        "finish_palette": list(materials.WOOD_BRD_FINISH_PALETTE),
+    }
+    metal_brd = kb.get("metal_brd") or {
+        "specs": materials.METALS_BRD_SPECS,
+        "cost_inr_kg": materials.METALS_BRD_COST_INR_KG,
+        "finish_palette": list(materials.METALS_BRD_FINISH_PALETTE),
+        "fabrication": list(materials.METALS_BRD_FABRICATION),
+    }
+    upholstery_catalogue = kb.get("upholstery_catalogue") or {
+        name: dict(spec) for name, spec in materials.UPHOLSTERY.items()
+    }
+    upholstery_brd = kb.get("upholstery_brd") or {
+        "leather": dict(materials.UPHOLSTERY_LEATHER_BRD_SPEC),
+        "fabric": dict(materials.UPHOLSTERY_FABRIC_BRD_SPEC),
+        "durability": dict(materials.UPHOLSTERY_DURABILITY_BRD),
+        "colourfastness_min_of_5": materials.UPHOLSTERY_COLOURFASTNESS_MIN,
+    }
+    foam_catalogue = kb.get("foam_catalogue") or {
+        name: dict(spec) for name, spec in materials.FOAM.items()
+    }
+    foam_brd = kb.get("foam_brd") or dict(materials.FOAM_BRD_SPEC)
+    upholstery_assembly_brd = kb.get("upholstery_assembly_brd") or dict(
+        manufacturing.UPHOLSTERY_ASSEMBLY_BRD_SPEC
+    )
+    finishes_catalogue = kb.get("finishes_catalogue") or {
+        name: dict(spec) for name, spec in materials.FINISHES.items()
+    }
+    city_price_index = (
+        kb.get("city_price_index")
+        if kb.get("city_price_index") is not None
+        else regional_materials.price_index_for_city(req.city or None)
+    )
+
     return {
         "theme_rule_pack": {
             "display_name": pack.get("display_name") or req.theme,
@@ -140,40 +188,21 @@ def build_material_spec_knowledge(
         "parametric_summary": parametric_summary,
         "wood_envelopes": wood_envelopes,
         "metal_envelopes": metal_envelopes,
-        "wood_brd": {
-            "ranges": materials.WOOD_BRD_RANGES,
-            "finish_palette": list(materials.WOOD_BRD_FINISH_PALETTE),
-        },
-        "metal_brd": {
-            "specs": materials.METALS_BRD_SPECS,
-            "cost_inr_kg": materials.METALS_BRD_COST_INR_KG,
-            "finish_palette": list(materials.METALS_BRD_FINISH_PALETTE),
-            "fabrication": list(materials.METALS_BRD_FABRICATION),
-        },
-        "upholstery_catalogue": {
-            name: dict(spec) for name, spec in materials.UPHOLSTERY.items()
-        },
-        "upholstery_brd": {
-            "leather": dict(materials.UPHOLSTERY_LEATHER_BRD_SPEC),
-            "fabric": dict(materials.UPHOLSTERY_FABRIC_BRD_SPEC),
-            "durability": dict(materials.UPHOLSTERY_DURABILITY_BRD),
-            "colourfastness_min_of_5": materials.UPHOLSTERY_COLOURFASTNESS_MIN,
-        },
-        "foam_catalogue": {
-            name: dict(spec) for name, spec in materials.FOAM.items()
-        },
-        "foam_brd": dict(materials.FOAM_BRD_SPEC),
-        "upholstery_assembly_brd": dict(manufacturing.UPHOLSTERY_ASSEMBLY_BRD_SPEC),
-        "finishes_catalogue": {
-            name: dict(spec) for name, spec in materials.FINISHES.items()
-        },
-        "wood_finish_palette": list(materials.WOOD_BRD_FINISH_PALETTE),
-        "metal_finish_palette": list(materials.METALS_BRD_FINISH_PALETTE),
+        "wood_brd": wood_brd,
+        "metal_brd": metal_brd,
+        "upholstery_catalogue": upholstery_catalogue,
+        "upholstery_brd": upholstery_brd,
+        "foam_catalogue": foam_catalogue,
+        "foam_brd": foam_brd,
+        "upholstery_assembly_brd": upholstery_assembly_brd,
+        "finishes_catalogue": finishes_catalogue,
+        "wood_finish_palette": list(wood_brd.get("finish_palette") or []),
+        "metal_finish_palette": list(metal_brd.get("finish_palette") or []),
         "waste_factor_pct_band": (cost_bands or {}).get(
             "waste_factor_pct", list(costing.WASTE_FACTOR_PCT)
         ),
         "regional_availability": availability,
-        "city_price_index": regional_materials.price_index_for_city(req.city or None),
+        "city_price_index": city_price_index,
         "city": req.city or None,
         "sections_requested": list(req.sections or ["primary_structure"]),
     }
@@ -1288,14 +1317,23 @@ async def generate_material_spec_sheet(
     if session is not None:
         bands = await load_material_spec_bands(session)
         theme_pack = await _get_theme_db(session, req.theme)
+        materials_kb = await load_material_spec_pack(
+            session, city=req.city or None
+        )
     else:
         from app.database import async_session_factory  # local import
 
         async with async_session_factory() as own_session:
             bands = await load_material_spec_bands(own_session)
             theme_pack = await _get_theme_db(own_session, req.theme)
+            materials_kb = await load_material_spec_pack(
+                own_session, city=req.city or None
+            )
     knowledge = build_material_spec_knowledge(
-        req, cost_bands=bands, theme_pack=theme_pack
+        req,
+        cost_bands=bands,
+        theme_pack=theme_pack,
+        materials_kb=materials_kb,
     )
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise MaterialSpecError(

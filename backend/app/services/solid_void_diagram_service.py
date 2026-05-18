@@ -31,10 +31,12 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import clearances, themes
 from app.services.diagrams import solid_void
+from app.services.themes import get_theme as _get_theme_db
 from app.services.diagrams.svg_base import (
     ACCENT_COOL,
     ACCENT_WARM,
@@ -101,9 +103,13 @@ def _circulation_floor_mm(graph: dict[str, Any]) -> dict[str, int]:
     }
 
 
-def build_solid_void_knowledge(req: SolidVoidRequest) -> dict[str, Any]:
-    pack = themes.get(req.theme) or {}
-    graph = req.design_graph or _stub_graph(req)
+def build_solid_void_knowledge(
+    req: SolidVoidRequest,
+    *,
+    theme_pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    pack = theme_pack if theme_pack is not None else (themes.get(req.theme) or {})
+    graph = req.design_graph or _stub_graph(req, pack=pack)
 
     # Run the deterministic geometry analysis first so the LLM gets real numbers.
     base_meta = solid_void.generate(graph, canvas_w=req.canvas_width, canvas_h=req.canvas_height).get("meta", {})
@@ -331,14 +337,25 @@ class SolidVoidError(RuntimeError):
     """Raised when the LLM solid/void stage cannot produce a grounded spec."""
 
 
-async def generate_solid_void_diagram(req: SolidVoidRequest) -> dict[str, Any]:
+async def generate_solid_void_diagram(
+    req: SolidVoidRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise SolidVoidError(
             "OpenAI API key is not configured. The solid/void diagram requires "
             "a live LLM call; no static fallback is served."
         )
 
-    knowledge = build_solid_void_knowledge(req)
+    if session is not None:
+        theme_pack = await _get_theme_db(session, req.theme)
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            theme_pack = await _get_theme_db(own_session, req.theme)
+    knowledge = build_solid_void_knowledge(req, theme_pack=theme_pack)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise SolidVoidError(
             f"Unknown theme '{req.theme}'. No theme rule pack to ground the diagram."
@@ -395,7 +412,7 @@ async def generate_solid_void_diagram(req: SolidVoidRequest) -> dict[str, Any]:
     }
 
     base = solid_void.generate(
-        req.design_graph or _stub_graph(req),
+        req.design_graph or _stub_graph(req, pack=theme_pack),
         canvas_w=req.canvas_width,
         canvas_h=req.canvas_height,
     )
@@ -419,13 +436,24 @@ async def generate_solid_void_diagram(req: SolidVoidRequest) -> dict[str, Any]:
     }
 
 
-def _stub_graph(req: SolidVoidRequest) -> dict[str, Any]:
+def _stub_graph(
+    req: SolidVoidRequest,
+    *,
+    pack: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     geom = (req.parametric_spec or {}).get("geometry") or {}
     length_m = max(2.0, (geom.get("overall_length_mm") or 4000) / 1000.0)
     width_m = max(2.0, (geom.get("overall_width_mm") or 3000) / 1000.0)
     height_m = max(2.4, (geom.get("overall_height_mm") or 2700) / 1000.0)
     return {
         "room": {"dimensions": {"length": length_m, "width": width_m, "height": height_m}},
-        "style": {"primary": (themes.get(req.theme) or {}).get("display_name") or req.theme},
+        "style": {
+            "primary": (
+                (pack if pack is not None else (themes.get(req.theme) or {})).get(
+                    "display_name"
+                )
+                or req.theme
+            )
+        },
         "objects": [],
     }

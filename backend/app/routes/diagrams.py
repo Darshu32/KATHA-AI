@@ -14,6 +14,7 @@ from app.database import get_db
 from app.knowledge import themes
 from app.models.schemas import ErrorResponse
 from app.services.standards.variations_lookup import list_parametric_flex
+from app.services.themes import get_theme as _get_theme_db
 from app.services.concept_diagram_service import (
     ConceptDiagramError,
     ConceptDiagramRequest,
@@ -49,6 +50,12 @@ from app.services.spatial_organism_diagram_service import (
     SpatialOrganismRequest,
     build_organism_knowledge,
     generate_spatial_organism_diagram,
+)
+from app.services.massing_diagram_service import (
+    MassingDiagramError,
+    MassingDiagramRequest,
+    build_massing_knowledge,
+    generate_massing_diagram,
 )
 from app.services.volumetric_block_diagram_service import (
     VolumetricBlockError,
@@ -86,9 +93,15 @@ async def list_diagram_types() -> dict:
                 "summary": "Four-stage evolution — volume → grid → subtract → articulate, with theme signature moves.",
             },
             {
+                "id": "massing",
+                "name": "Massing",
+                "stage": "BRD 2B #3",
+                "summary": "Horizontal + vertical massing — silhouette, weight distribution, BRD height-band space allocation.",
+            },
+            {
                 "id": "volumetric_hierarchy",
                 "name": "Volumetric Hierarchy",
-                "stage": "BRD 2B #3",
+                "stage": "BRD 2B #3+",
                 "summary": "Vertical × horizontal reading — silhouette, weight distribution, space allocation, stacking logic.",
             },
             {
@@ -126,9 +139,13 @@ async def list_diagram_types() -> dict:
 
 
 @router.post("/concept-transparency/knowledge")
-async def concept_knowledge(payload: ConceptDiagramRequest) -> dict:
+async def concept_knowledge(
+    payload: ConceptDiagramRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the knowledge slice the LLM will see — no model call."""
-    knowledge = build_concept_knowledge(payload)
+    theme_pack = await _get_theme_db(db, payload.theme)
+    knowledge = build_concept_knowledge(payload, theme_pack=theme_pack)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -145,10 +162,13 @@ async def concept_knowledge(payload: ConceptDiagramRequest) -> dict:
 
 
 @router.post("/concept-transparency")
-async def concept_transparency_endpoint(payload: ConceptDiagramRequest) -> dict:
+async def concept_transparency_endpoint(
+    payload: ConceptDiagramRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM concept-author pipeline + render the annotated SVG."""
     try:
-        return await generate_concept_diagram(payload)
+        return await generate_concept_diagram(payload, session=db)
     except ConceptDiagramError as exc:
         msg = str(exc)
         if "Unknown theme" in msg:
@@ -170,7 +190,10 @@ async def form_knowledge(
 ) -> dict:
     """Preview the knowledge slice the form-development LLM stage will see."""
     flex = await list_parametric_flex(db)
-    knowledge = build_form_knowledge(payload, parametric_dimension_flex=flex)
+    theme_pack = await _get_theme_db(db, payload.theme)
+    knowledge = build_form_knowledge(
+        payload, parametric_dimension_flex=flex, theme_pack=theme_pack
+    )
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -209,9 +232,13 @@ async def form_development_endpoint(
 
 
 @router.post("/volumetric-hierarchy/knowledge")
-async def volumetric_knowledge(payload: VolumetricDiagramRequest) -> dict:
+async def volumetric_knowledge(
+    payload: VolumetricDiagramRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the knowledge slice the volumetric LLM stage will see."""
-    knowledge = build_volumetric_knowledge(payload)
+    theme_pack = await _get_theme_db(db, payload.theme)
+    knowledge = build_volumetric_knowledge(payload, theme_pack=theme_pack)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -228,10 +255,13 @@ async def volumetric_knowledge(payload: VolumetricDiagramRequest) -> dict:
 
 
 @router.post("/volumetric-hierarchy")
-async def volumetric_hierarchy_endpoint(payload: VolumetricDiagramRequest) -> dict:
+async def volumetric_hierarchy_endpoint(
+    payload: VolumetricDiagramRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM volumetric-author pipeline + render annotated axonometric SVG."""
     try:
-        return await generate_volumetric_diagram(payload)
+        return await generate_volumetric_diagram(payload, session=db)
     except VolumetricDiagramError as exc:
         msg = str(exc)
         if "Unknown theme" in msg:
@@ -247,9 +277,13 @@ async def volumetric_hierarchy_endpoint(payload: VolumetricDiagramRequest) -> di
 
 
 @router.post("/volumetric/knowledge")
-async def volumetric_block_knowledge(payload: VolumetricBlockRequest) -> dict:
+async def volumetric_block_knowledge(
+    payload: VolumetricBlockRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the knowledge slice the volumetric (block) LLM stage will see."""
-    knowledge = build_block_knowledge(payload)
+    theme_pack = await _get_theme_db(db, payload.theme)
+    knowledge = build_block_knowledge(payload, theme_pack=theme_pack)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -266,10 +300,13 @@ async def volumetric_block_knowledge(payload: VolumetricBlockRequest) -> dict:
 
 
 @router.post("/volumetric")
-async def volumetric_block_endpoint(payload: VolumetricBlockRequest) -> dict:
+async def volumetric_block_endpoint(
+    payload: VolumetricBlockRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM block/void/relationship pipeline + render annotated axo SVG."""
     try:
-        return await generate_volumetric_block_diagram(payload)
+        return await generate_volumetric_block_diagram(payload, session=db)
     except VolumetricBlockError as exc:
         msg = str(exc)
         if "Unknown theme" in msg:
@@ -285,9 +322,13 @@ async def volumetric_block_endpoint(payload: VolumetricBlockRequest) -> dict:
 
 
 @router.post("/design-process/knowledge")
-async def design_process_knowledge(payload: DesignProcessRequest) -> dict:
+async def design_process_knowledge(
+    payload: DesignProcessRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the knowledge slice the design-process LLM stage will see."""
-    knowledge = build_process_knowledge(payload)
+    theme_pack = await _get_theme_db(db, payload.theme)
+    knowledge = build_process_knowledge(payload, theme_pack=theme_pack)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -304,10 +345,13 @@ async def design_process_knowledge(payload: DesignProcessRequest) -> dict:
 
 
 @router.post("/design-process")
-async def design_process_endpoint(payload: DesignProcessRequest) -> dict:
+async def design_process_endpoint(
+    payload: DesignProcessRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM design-process narrator pipeline + render annotated flow SVG."""
     try:
-        return await generate_design_process_diagram(payload)
+        return await generate_design_process_diagram(payload, session=db)
     except DesignProcessError as exc:
         msg = str(exc)
         if "Unknown theme" in msg:
@@ -323,9 +367,13 @@ async def design_process_endpoint(payload: DesignProcessRequest) -> dict:
 
 
 @router.post("/solid-void/knowledge")
-async def solid_void_knowledge(payload: SolidVoidRequest) -> dict:
+async def solid_void_knowledge(
+    payload: SolidVoidRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the knowledge slice (incl. computed geometry) the LLM will see."""
-    knowledge = build_solid_void_knowledge(payload)
+    theme_pack = await _get_theme_db(db, payload.theme)
+    knowledge = build_solid_void_knowledge(payload, theme_pack=theme_pack)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -342,10 +390,13 @@ async def solid_void_knowledge(payload: SolidVoidRequest) -> dict:
 
 
 @router.post("/solid-void")
-async def solid_void_endpoint(payload: SolidVoidRequest) -> dict:
+async def solid_void_endpoint(
+    payload: SolidVoidRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM solid/void interpreter + render annotated plan SVG."""
     try:
-        return await generate_solid_void_diagram(payload)
+        return await generate_solid_void_diagram(payload, session=db)
     except SolidVoidError as exc:
         msg = str(exc)
         if "Unknown theme" in msg:
@@ -361,9 +412,13 @@ async def solid_void_endpoint(payload: SolidVoidRequest) -> dict:
 
 
 @router.post("/spatial-organism/knowledge")
-async def spatial_organism_knowledge(payload: SpatialOrganismRequest) -> dict:
+async def spatial_organism_knowledge(
+    payload: SpatialOrganismRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the knowledge slice the spatial-organism LLM stage will see."""
-    knowledge = build_organism_knowledge(payload)
+    theme_pack = await _get_theme_db(db, payload.theme)
+    knowledge = build_organism_knowledge(payload, theme_pack=theme_pack)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -380,10 +435,13 @@ async def spatial_organism_knowledge(payload: SpatialOrganismRequest) -> dict:
 
 
 @router.post("/spatial-organism")
-async def spatial_organism_endpoint(payload: SpatialOrganismRequest) -> dict:
+async def spatial_organism_endpoint(
+    payload: SpatialOrganismRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM body-in-space interpreter + render annotated plan SVG."""
     try:
-        return await generate_spatial_organism_diagram(payload)
+        return await generate_spatial_organism_diagram(payload, session=db)
     except SpatialOrganismError as exc:
         msg = str(exc)
         if "Unknown theme" in msg:
@@ -399,9 +457,13 @@ async def spatial_organism_endpoint(payload: SpatialOrganismRequest) -> dict:
 
 
 @router.post("/hierarchy/knowledge")
-async def hierarchy_knowledge(payload: HierarchyRequest) -> dict:
+async def hierarchy_knowledge(
+    payload: HierarchyRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Preview the knowledge slice the hierarchy LLM stage will see."""
-    knowledge = build_hierarchy_knowledge(payload)
+    theme_pack = await _get_theme_db(db, payload.theme)
+    knowledge = build_hierarchy_knowledge(payload, theme_pack=theme_pack)
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
@@ -418,11 +480,59 @@ async def hierarchy_knowledge(payload: HierarchyRequest) -> dict:
 
 
 @router.post("/hierarchy")
-async def hierarchy_endpoint(payload: HierarchyRequest) -> dict:
+async def hierarchy_endpoint(
+    payload: HierarchyRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
     """Run the LLM three-rank hierarchy author + render annotated SVG."""
     try:
-        return await generate_hierarchy_diagram(payload)
+        return await generate_hierarchy_diagram(payload, session=db)
     except HierarchyError as exc:
+        msg = str(exc)
+        if "Unknown theme" in msg:
+            code = status.HTTP_400_BAD_REQUEST
+            err = "invalid_theme"
+        else:
+            code = status.HTTP_503_SERVICE_UNAVAILABLE
+            err = "llm_unavailable"
+        raise HTTPException(
+            status_code=code,
+            detail=ErrorResponse(error=err, message=msg).model_dump(),
+        ) from exc
+
+
+@router.post("/massing/knowledge")
+async def massing_knowledge(
+    payload: MassingDiagramRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Preview the knowledge slice the massing LLM stage will see."""
+    theme_pack = await _get_theme_db(db, payload.theme)
+    knowledge = build_massing_knowledge(payload, theme_pack=theme_pack)
+    if not knowledge["theme_rule_pack"].get("display_name"):
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=ErrorResponse(
+                error="unknown_theme",
+                message=f"No theme rule pack for '{payload.theme}'.",
+            ).model_dump(),
+        )
+    return {
+        "theme": payload.theme,
+        "available_themes": themes.list_names(),
+        "knowledge": knowledge,
+    }
+
+
+@router.post("/massing")
+async def massing_endpoint(
+    payload: MassingDiagramRequest,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """Run the LLM massing-author pipeline + render the annotated 2-panel SVG."""
+    try:
+        return await generate_massing_diagram(payload, session=db)
+    except MassingDiagramError as exc:
         msg = str(exc)
         if "Unknown theme" in msg:
             code = status.HTTP_400_BAD_REQUEST

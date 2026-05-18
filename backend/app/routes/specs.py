@@ -60,6 +60,19 @@ from app.services.pricing.knowledge_service import (
 from app.services.themes import get_theme as _get_theme_db
 from app.services.pricing_service import _PRICING_BRD_DEFAULTS
 from app.services.sensitivity_service import _SENSITIVITY_BRD_DEFAULTS
+from app.services.standards.manufacturing_spec_pack import (
+    load_manufacturing_spec_pack,
+)
+from app.services.mep_spec_service import (
+    _cooling_use_for as _mep_cooling_use_for,
+    _electrical_system_for as _mep_electrical_system_for,
+    _hvac_system_for as _mep_hvac_system_for,
+    _normalise_use as _mep_normalise_use,
+    _plumbing_system_for as _mep_plumbing_system_for,
+    _power_use_for as _mep_power_use_for,
+)
+from app.services.standards.material_spec_pack import load_material_spec_pack
+from app.services.standards.mep_spec_pack import load_mep_spec_pack
 from app.services.sensitivity_service import (
     SensitivityError,
     SensitivityRequest,
@@ -230,8 +243,12 @@ async def material_spec_knowledge(
     """Preview the knowledge slice the material-spec LLM stage will see."""
     bands = await load_material_spec_bands(db)
     theme_pack = await _get_theme_db(db, payload.theme)
+    materials_kb = await load_material_spec_pack(db, city=payload.city or None)
     knowledge = build_material_spec_knowledge(
-        payload, cost_bands=bands, theme_pack=theme_pack
+        payload,
+        cost_bands=bands,
+        theme_pack=theme_pack,
+        materials_kb=materials_kb,
     )
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
@@ -280,8 +297,14 @@ async def manufacturing_spec_knowledge(
         db, defaults=_costing_legacy.LABOR_RATES_INR_PER_HOUR
     )
     theme_pack = await _get_theme_db(db, payload.theme)
+    manufacturing_kb = await load_manufacturing_spec_pack(
+        db, city=payload.city or None
+    )
     knowledge = build_manufacturing_spec_knowledge(
-        payload, labor_rates_inr_hour=labor_bands, theme_pack=theme_pack
+        payload,
+        labor_rates_inr_hour=labor_bands,
+        theme_pack=theme_pack,
+        manufacturing_kb=manufacturing_kb,
     )
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise HTTPException(
@@ -330,7 +353,25 @@ async def mep_spec_knowledge(
         theme_pack = (
             await _get_theme_db(db, payload.theme) if payload.theme else None
         )
-        knowledge = build_mep_spec_knowledge(payload, theme_pack=theme_pack)
+        use = _mep_normalise_use(payload.room_use_type)
+        area = payload.dimensions.length_m * payload.dimensions.width_m
+        mep_db = await load_mep_spec_pack(
+            db,
+            room_use_type=use,
+            length_m=payload.dimensions.length_m,
+            width_m=payload.dimensions.width_m,
+            height_m=payload.dimensions.height_m,
+            fixtures=list(payload.fixtures or []),
+            city=payload.city or None,
+            hvac_system=_mep_hvac_system_for(use, area),
+            electrical_system=_mep_electrical_system_for(use),
+            plumbing_system=_mep_plumbing_system_for(use),
+            cooling_use=_mep_cooling_use_for(use),
+            power_use=_mep_power_use_for(use),
+        )
+        knowledge = build_mep_spec_knowledge(
+            payload, theme_pack=theme_pack, mep_db=mep_db
+        )
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

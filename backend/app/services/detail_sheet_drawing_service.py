@@ -29,6 +29,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import get_settings
 from app.knowledge import manufacturing, materials, themes
@@ -38,6 +39,8 @@ from app.services.elevation_view_drawing_service import (
     _ergonomic_lookup,
     _midpoint,
 )
+from app.services.standards.manufacturing_lookup import tolerances_mm_map
+from app.services.themes import get_theme as _get_theme_db
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
@@ -92,8 +95,13 @@ def _resolve_piece_envelope(req: DetailSheetRequest) -> dict[str, Any]:
     }
 
 
-def build_detail_knowledge(req: DetailSheetRequest) -> dict[str, Any]:
-    pack = themes.get(req.theme) or {}
+def build_detail_knowledge(
+    req: DetailSheetRequest,
+    *,
+    theme_pack: dict[str, Any] | None = None,
+    tolerances_mm: dict[str, float] | None = None,
+) -> dict[str, Any]:
+    pack = theme_pack if theme_pack is not None else (themes.get(req.theme) or {})
     piece = _resolve_piece_envelope(req)
     return {
         "theme_rule_pack": {
@@ -107,7 +115,11 @@ def build_detail_knowledge(req: DetailSheetRequest) -> dict[str, Any]:
         },
         "piece_envelope": piece,
         "joinery_catalogue": {k: dict(v) for k, v in manufacturing.JOINERY.items()},
-        "tolerances_mm": {k: v["+-mm"] for k, v in manufacturing.TOLERANCES.items()},
+        "tolerances_mm": (
+            dict(tolerances_mm)
+            if tolerances_mm
+            else {k: v["+-mm"] for k, v in manufacturing.TOLERANCES.items()}
+        ),
         "qa_gates": list(manufacturing.QUALITY_GATES_BRD_SPEC),
         "upholstery_assembly_brd": dict(manufacturing.UPHOLSTERY_ASSEMBLY_BRD_SPEC),
         "wood_finish_palette": list(materials.WOOD_BRD_FINISH_PALETTE),
@@ -275,14 +287,29 @@ class DetailSheetError(RuntimeError):
     """Raised when the LLM detail-sheet stage cannot produce a grounded spec."""
 
 
-async def generate_detail_sheet_drawing(req: DetailSheetRequest) -> dict[str, Any]:
+async def generate_detail_sheet_drawing(
+    req: DetailSheetRequest,
+    *,
+    session: AsyncSession | None = None,
+) -> dict[str, Any]:
     if not settings.openai_api_key or not settings.openai_api_key.strip():
         raise DetailSheetError(
             "OpenAI API key is not configured. The detail-sheet stage requires "
             "a live LLM call; no static fallback is served."
         )
 
-    knowledge = build_detail_knowledge(req)
+    if session is not None:
+        theme_pack = await _get_theme_db(session, req.theme)
+        tolerances = await tolerances_mm_map(session)
+    else:
+        from app.database import async_session_factory  # local import
+
+        async with async_session_factory() as own_session:
+            theme_pack = await _get_theme_db(own_session, req.theme)
+            tolerances = await tolerances_mm_map(own_session)
+    knowledge = build_detail_knowledge(
+        req, theme_pack=theme_pack, tolerances_mm=tolerances
+    )
     if not knowledge["theme_rule_pack"].get("display_name"):
         raise DetailSheetError(
             f"Unknown theme '{req.theme}'. No theme rule pack to ground the drawing."
