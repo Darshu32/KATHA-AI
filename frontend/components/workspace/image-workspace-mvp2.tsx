@@ -55,6 +55,45 @@ const DIMS: { id: Dim; label: string; tagline: string }[] = [
 
 const RATIOS: ImageRatio[] = ["16:9", "4:3", "1:1", "3:4", "9:16"];
 
+/* BRD §3A working-drawing catalogue. Mirrors the backend
+ * /working-drawings/types response so the UI can render the picker
+ * without an extra fetch on mount. If the backend gains a new
+ * drawing type, sync this list (or upgrade ViewsTab to fetch /types
+ * on mount). */
+const DRAWINGS_CATALOGUE: {
+  id: string;
+  name: string;
+  stage: string;
+  summary: string;
+  /** True when the project-scoped fetch path is wired in api-client. */
+  wired: boolean;
+}[] = [
+  { id: "plan_view",       name: "Plan View",       stage: "BRD 3A §1", summary: "Top-down — overall dims, key measurements, section refs, hatches.",                 wired: true },
+  { id: "elevation_view",  name: "Elevation View",  stage: "BRD 3A §2", summary: "Front/side — heights, leg-base proportions, hardware + detail callouts.",          wired: false },
+  { id: "section_view",    name: "Section View",    stage: "BRD 3A §3", summary: "Cut-through — internal layers, joints, seat depth, leg taper details.",            wired: false },
+  { id: "isometric_view",  name: "Isometric View",  stage: "BRD 3A §4", summary: "3D iso — overall form, material finishes, superimposed dimensions.",               wired: false },
+  { id: "detail_sheet",    name: "Detail Sheet",    stage: "BRD 3A §5", summary: "Zoomed details — joints, hardware, edge profiles, seams, transitions.",            wired: false },
+];
+
+/* BRD §2B diagram catalogue. Mirrors /diagrams/types. All 9 are wired
+ * via design.generateDiagrams(projectId, version, diagramId). */
+const DIAGRAMS_CATALOGUE: {
+  id: string;
+  name: string;
+  stage: string;
+  summary: string;
+}[] = [
+  { id: "concept_transparency", name: "Concept Transparency", stage: "BRD 2B §1",  summary: "Core design intent — material/form relationship, functional zones." },
+  { id: "form_development",     name: "Form Development",     stage: "BRD 2B §2",  summary: "Four-stage evolution — volume → grid → subtract → articulate." },
+  { id: "massing",              name: "Massing",              stage: "BRD 2B §3",  summary: "Horizontal + vertical massing — silhouette, weight, height bands." },
+  { id: "volumetric_hierarchy", name: "Volumetric Hierarchy", stage: "BRD 2B §3+", summary: "Vertical × horizontal reading — stacking + allocation logic." },
+  { id: "volumetric_block",     name: "Volumetric (Block)",   stage: "BRD 2B §4",  summary: "3D block read — masses, voids, slicing strategy." },
+  { id: "design_process",       name: "Design Process",       stage: "BRD 2B §5",  summary: "Step-by-step narrative — decision points, rule drivers." },
+  { id: "solid_void",           name: "Solid vs Void",        stage: "BRD 2B §6",  summary: "Solid % / void % — weight pattern, breathing room." },
+  { id: "spatial_organism",     name: "Spatial Organism",     stage: "BRD 2B §7",  summary: "How a body inhabits the space — touchpoints, movement." },
+  { id: "hierarchy",            name: "Hierarchy",            stage: "BRD 2B §8",  summary: "Three rankings — visual, material, functional." },
+];
+
 export default function ImageWorkspaceMvp2() {
   const {
     prompt,
@@ -116,6 +155,11 @@ export default function ImageWorkspaceMvp2() {
   // OpenedProject callback that swaps the gallery + activeProjectId
   // in one shot.
   const [pickerOpen, setPickerOpen] = useState(false);
+
+  // ── BRD §5A: export modal open/close ────────────────────────────────
+  // Lives at the workspace level so the modal mounts as a top-level
+  // portal-like overlay rather than nested inside the canvas header.
+  const [exportOpen, setExportOpen] = useState(false);
 
   /* Handle opening an existing project from the picker. The picker
      has already fetched the latest version; we replace the gallery
@@ -455,6 +499,13 @@ export default function ImageWorkspaceMvp2() {
         activeProjectId={activeProjectId}
         token={token}
       />
+      <ExportModal
+        open={exportOpen}
+        onClose={() => setExportOpen(false)}
+        projectId={activeProjectId}
+        latestVersion={latestGeneration?.version ?? null}
+        token={token ?? ""}
+      />
 
       {/* BRD §3.6 — chat→image-gen handoff banner. Shown after the
           chat workspace's "Ready to design" pill seeds this store.
@@ -503,6 +554,7 @@ export default function ImageWorkspaceMvp2() {
             themeSwitchError={themeSwitchError}
             generations={generations}
             hasActiveProject={!!activeProjectId && !!latestGeneration}
+            onOpenExport={() => setExportOpen(true)}
           />
           <div className="flex-1 overflow-auto draft-scroll grid-paper">
             {generations.length === 0 ? (
@@ -560,6 +612,11 @@ export default function ImageWorkspaceMvp2() {
           editError={editError}
           canEdit={!!activeProjectId}
           codeCompliance={latestGeneration?.codeCompliance}
+          validation={latestGeneration?.validation}
+          mepCost={latestGeneration?.mepCostEstimate}
+          activeProjectId={activeProjectId}
+          latestVersion={latestGeneration?.version ?? null}
+          token={token ?? ""}
         />
       </div>
 
@@ -708,6 +765,70 @@ function TopBar({
 
 // ── Left: controls ─────────────────────────────────────────────────────
 
+/* AccordionSection — collapsible card used by the left rail.
+ * Title sits in a clickable header row with a chevron; expanded body
+ * sits below. Mono uppercase title to match the SectionTag register. */
+function AccordionSection({
+  title,
+  badge,
+  open,
+  onToggle,
+  children,
+  defaultOpen,
+}: {
+  title: string;
+  badge?: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+}) {
+  void defaultOpen; // reserved for future "remember last state" wiring
+  return (
+    <section className="border-b border-hairline last:border-b-0">
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className="w-full px-5 py-3 flex items-center justify-between gap-2 text-left hover:bg-paper transition-colors group"
+      >
+        <span className="font-mono text-[10.5px] uppercase tracking-tagged text-ink-soft group-hover:text-ink-deep transition-colors">
+          {title}
+        </span>
+        <span className="flex items-center gap-2">
+          {badge ? (
+            <span className="font-mono text-[9.5px] uppercase tracking-tagged text-ink-mute">
+              {badge}
+            </span>
+          ) : null}
+          <svg
+            width="10"
+            height="10"
+            viewBox="0 0 10 10"
+            className={`text-ink-mute transition-transform ${open ? "rotate-90" : ""}`}
+            aria-hidden="true"
+          >
+            <path d="M3 1.5l3 3.5-3 3.5" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" fill="none" />
+          </svg>
+        </span>
+      </button>
+      {open ? <div className="px-5 pb-4">{children}</div> : null}
+    </section>
+  );
+}
+
+/* LeftControls — BRD §1A 5-section brief in a vertical accordion.
+ *
+ * Section map (Brief is expanded by default; the rest collapse for
+ * focused entry, multi-open supported):
+ *   1. Brief        — Project type, Scope, Theme (TBD), Dimensionality, Aspect ratio
+ *   2. Space & Site — Dimensions, climate, site constraints (Day 2)
+ *   3. Requirements — Functional, aesthetic, budget, timeline (Day 2)
+ *   4. Regulatory   — Country/state/city, codes, compliance notes (Day 2)
+ *
+ * Day 1 ships the accordion shell with the existing brief controls
+ * landed under section 1. Sections 2–4 carry "Coming Day 2" placeholders
+ * so the architect sees where the brief grows into. */
 function LeftControls({
   projectType,
   setProjectType,
@@ -729,70 +850,133 @@ function LeftControls({
   ratio: ImageRatio;
   setRatio: (r: ImageRatio) => void;
 }) {
+  // Multi-open accordion — architects often want to see Brief + Space
+  // simultaneously when tuning a design. Set tracks which sections are
+  // currently expanded. Brief is open by default.
+  const [openSections, setOpenSections] = useState<Set<string>>(
+    () => new Set(["brief"]),
+  );
+  const toggle = (id: string) => {
+    setOpenSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
   return (
     <aside className="w-72 shrink-0 bg-paper-soft border-r border-hairline overflow-y-auto draft-scroll">
-      <div className="px-5 py-5 space-y-6">
-        <ProjectTypeSelector
-          value={projectType}
-          defs={projectTypeDefs}
-          onChange={setProjectType}
-        />
+      <AccordionSection
+        title="Brief"
+        open={openSections.has("brief")}
+        onToggle={() => toggle("brief")}
+      >
+        <div className="space-y-5">
+          <ProjectTypeSelector
+            value={projectType}
+            defs={projectTypeDefs}
+            onChange={setProjectType}
+          />
+          <section>
+            <SectionTag>Scope</SectionTag>
+            <div className="mt-2.5 grid grid-cols-2 gap-1.5">
+              {SCOPES.map((s) => (
+                <button
+                  key={s.id}
+                  type="button"
+                  className="slide-pill text-center"
+                  data-active={s.id === scope}
+                  onClick={() => setScope(s.id)}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+          </section>
+          <section>
+            <SectionTag>Dimensionality</SectionTag>
+            <div className="mt-2.5 flex gap-1.5">
+              {DIMS.map((d) => (
+                <button
+                  key={d.id}
+                  type="button"
+                  className="slide-pill flex-1 text-center"
+                  data-active={d.id === dim}
+                  onClick={() => setDim(d.id)}
+                >
+                  {d.label}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-[12px] text-ink-mute">
+              {DIMS.find((d) => d.id === dim)?.tagline}
+            </p>
+          </section>
+          <section>
+            <SectionTag>Aspect ratio</SectionTag>
+            <div className="mt-2.5 grid grid-cols-5 gap-1">
+              {RATIOS.map((r) => (
+                <button
+                  key={r}
+                  type="button"
+                  className="slide-pill text-center !text-[11px] !px-1.5"
+                  data-active={r === ratio}
+                  onClick={() => setRatio(r)}
+                >
+                  {r}
+                </button>
+              ))}
+            </div>
+          </section>
+        </div>
+      </AccordionSection>
 
-        <section>
-          <SectionTag>Scope</SectionTag>
-          <div className="mt-2.5 grid grid-cols-2 gap-1.5">
-            {SCOPES.map((s) => (
-              <button
-                key={s.id}
-                type="button"
-                className="slide-pill text-center"
-                data-active={s.id === scope}
-                onClick={() => setScope(s.id)}
-              >
-                {s.label}
-              </button>
-            ))}
-          </div>
-        </section>
+      <AccordionSection
+        title="Space & Site"
+        badge="Day 2"
+        open={openSections.has("space")}
+        onToggle={() => toggle("space")}
+      >
+        <p className="text-[13px] text-ink-soft leading-relaxed">
+          Dimensions (W × D × H mm), site constraints, climate zone.
+          Wires to <span className="font-mono text-[12px]">/brief/intake</span> §1A.3.
+        </p>
+        <p className="mt-2 font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
+          Coming Day 2
+        </p>
+      </AccordionSection>
 
-        <section>
-          <SectionTag>Dimensionality</SectionTag>
-          <div className="mt-2.5 flex gap-1.5">
-            {DIMS.map((d) => (
-              <button
-                key={d.id}
-                type="button"
-                className="slide-pill flex-1 text-center"
-                data-active={d.id === dim}
-                onClick={() => setDim(d.id)}
-              >
-                {d.label}
-              </button>
-            ))}
-          </div>
-          <p className="mt-2 text-[12px] text-ink-mute">
-            {DIMS.find((d) => d.id === dim)?.tagline}
-          </p>
-        </section>
+      <AccordionSection
+        title="Requirements"
+        badge="Day 2"
+        open={openSections.has("requirements")}
+        onToggle={() => toggle("requirements")}
+      >
+        <p className="text-[13px] text-ink-soft leading-relaxed">
+          Functional needs, aesthetic preference, budget band, timeline.
+          Wires to <span className="font-mono text-[12px]">/brief/intake</span> §1A.4.
+        </p>
+        <p className="mt-2 font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
+          Coming Day 2
+        </p>
+      </AccordionSection>
 
-        <section>
-          <SectionTag>Aspect ratio</SectionTag>
-          <div className="mt-2.5 grid grid-cols-5 gap-1">
-            {RATIOS.map((r) => (
-              <button
-                key={r}
-                type="button"
-                className="slide-pill text-center !text-[11px] !px-1.5"
-                data-active={r === ratio}
-                onClick={() => setRatio(r)}
-              >
-                {r}
-              </button>
-            ))}
-          </div>
-        </section>
-
-      </div>
+      <AccordionSection
+        title="Regulatory"
+        badge="Day 2"
+        open={openSections.has("regulatory")}
+        onToggle={() => toggle("regulatory")}
+      >
+        <p className="text-[13px] text-ink-soft leading-relaxed">
+          Country / state / city, applicable codes (NBC · IBC · ECBC),
+          compliance notes. Wires to{" "}
+          <span className="font-mono text-[12px]">/brief/intake</span> §1A.5.
+        </p>
+        <p className="mt-2 font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
+          Coming Day 2
+        </p>
+      </AccordionSection>
     </aside>
   );
 }
@@ -874,6 +1058,7 @@ function CanvasHeader({
   themeSwitchError,
   generations,
   hasActiveProject,
+  onOpenExport,
 }: {
   scope: Scope;
   dim: Dim;
@@ -886,35 +1071,39 @@ function CanvasHeader({
   themeSwitchError: string | null;
   generations: import("@/lib/types").ImageGeneration[];
   hasActiveProject: boolean;
+  onOpenExport: () => void;
 }) {
   void projectType; // explicitly unused — kept on signature for future telemetry
+  void projectTypeLabel; // unused since the breadcrumb moved to left rail
+  void scope;
+  void dim;
   const projectGenerations = generations.filter((g) => g.version != null);
+  // The left-side breadcrumb ("Canvas · Residential · Interior · 3D")
+  // was redundant once the left rail's Brief accordion landed — that
+  // info lives there now. Header is trimmed to the action controls
+  // (Theme switcher + Version timeline) on the right.
   return (
-    <div className="px-6 py-2 border-b border-hairline bg-paper/85 backdrop-blur-sm flex items-center justify-between gap-4">
-      <div className="flex items-center gap-3 min-w-0">
-        <SectionTag>Canvas</SectionTag>
-        <span className="text-[12px] text-ink-mute truncate">
-          {projectTypeLabel} ·{" "}
-          {SCOPES.find((s) => s.id === scope)?.label} · {dim.toUpperCase()}
+    <div className="px-6 py-2 border-b border-hairline bg-paper/85 backdrop-blur-sm flex items-center justify-end gap-3">
+      {themeSwitchError ? (
+        <span className="text-[11px] font-mono text-brick mr-auto">
+          {themeSwitchError}
         </span>
-        {themeSwitchError ? (
-          <span className="text-[11px] font-mono text-brick">
-            {themeSwitchError}
-          </span>
-        ) : null}
-      </div>
-      <div className="flex items-center gap-3 shrink-0">
-        <ThemeSwitchChip
-          theme={theme}
-          themesList={themesList}
-          onChoose={onChooseTheme}
-          isSwitching={isSwitchingTheme}
-          hasActiveProject={hasActiveProject}
-        />
-        {projectGenerations.length > 0 ? (
-          <VersionTimeline generations={projectGenerations} />
-        ) : null}
-      </div>
+      ) : null}
+      <ThemeSwitchChip
+        theme={theme}
+        themesList={themesList}
+        onChoose={onChooseTheme}
+        isSwitching={isSwitchingTheme}
+        hasActiveProject={hasActiveProject}
+      />
+      <HapticReadyBadge hasActiveProject={hasActiveProject} />
+      <ExportButton
+        onClick={onOpenExport}
+        disabled={!hasActiveProject}
+      />
+      {projectGenerations.length > 0 ? (
+        <VersionTimeline generations={projectGenerations} />
+      ) : null}
     </div>
   );
 }
@@ -1433,6 +1622,8 @@ type GraphObject = {
   dimensions?: { length: number; width: number; height: number } | null;
 };
 
+type RightTab = "summary" | "views" | "specs" | "cost" | "compliance" | "recs";
+
 function RightSummary({
   hasDesign,
   dim,
@@ -1447,6 +1638,11 @@ function RightSummary({
   editError,
   canEdit,
   codeCompliance,
+  validation,
+  mepCost,
+  activeProjectId,
+  latestVersion,
+  token,
 }: {
   hasDesign: boolean;
   dim: Dim;
@@ -1461,90 +1657,1172 @@ function RightSummary({
   editError: string | null;
   canEdit: boolean;
   codeCompliance?: import("@/lib/types").CodeComplianceEntry[];
+  validation?: import("@/lib/types").ValidationReport;
+  mepCost?: import("@/lib/types").MepCostEstimate;
+  activeProjectId: string | null;
+  latestVersion: number | null;
+  token: string;
 }) {
   const hasGraph = objects.length > 0;
+  const [tab, setTab] = useState<RightTab>("summary");
+
+  // Tab definitions — all six surfaces visible at full width. Specs
+  // is the placeholder tab; its body carries the "Post-sprint" note,
+  // so no badge is needed on the strip itself.
+  const tabs: { id: RightTab; label: string; badge?: string }[] = [
+    { id: "summary", label: "Summary" },
+    { id: "views", label: "Views" },
+    { id: "specs", label: "Specs" },
+    { id: "cost", label: "Cost" },
+    { id: "compliance", label: "Checks" },
+    { id: "recs", label: "Recs" },
+  ];
+
   return (
-    <aside className="w-80 shrink-0 bg-paper-soft border-l border-hairline overflow-y-auto draft-scroll">
-      <div className="px-5 py-5">
-        <SectionTag>Specification summary</SectionTag>
-        {!hasDesign ? (
-          <p className="mt-3 text-[13px] text-ink-soft leading-relaxed">
-            Specs, materials, and BOQ will appear here once you generate a
-            design. Every value carries its source inline.
-          </p>
-        ) : hasGraph ? (
-          // Project-pipeline path — graph_data present, objects are
-          // editable. The architect clicks any row to open an inline
-          // prompt below it; submit calls /projects/{id}/edit and
-          // pushes a new version into the gallery.
-          <div className="mt-4 space-y-5">
-            <ObjectsPanel
-              objects={objects}
-              selectedObjectId={selectedObjectId}
-              onSelect={onSelectObject}
-              editPrompt={editPrompt}
-              onEditPromptChange={onEditPromptChange}
-              onSubmit={onSubmitEdit}
-              isEditing={isEditing}
-              editError={editError}
-              canEdit={canEdit}
-            />
-            <div>
-              <h4 className="font-mono text-[10px] tracking-[0.14em] uppercase text-ink-mute mb-2">
-                Meta
-              </h4>
-              <div className="border-t border-hairline">
-                <CitedKV k="Dim" v={dim.toUpperCase()} />
-                <CitedKV k="Theme" v={theme} />
-              </div>
-            </div>
-            <CodeComplianceBlock entries={codeCompliance} />
-          </div>
+    <aside className="w-80 shrink-0 bg-paper-soft border-l border-hairline overflow-y-auto draft-scroll flex flex-col">
+      {/* Sticky tab bar — sits at the top of the rail; pencil-red
+          underline marks the active tab (same register as the bottom
+          terminal tabs for visual continuity). ARIA roles let screen
+          readers and keyboard users navigate with arrow keys + Tab. */}
+      <div
+        role="tablist"
+        aria-label="Design review surfaces"
+        className="sticky top-0 z-10 bg-paper-soft border-b border-hairline px-2 flex items-center overflow-x-auto draft-scroll"
+      >
+        {tabs.map((t) => {
+          const active = t.id === tab;
+          return (
+            <button
+              key={t.id}
+              type="button"
+              role="tab"
+              id={`tab-${t.id}`}
+              aria-selected={active}
+              aria-controls={`tabpanel-${t.id}`}
+              tabIndex={active ? 0 : -1}
+              onClick={() => setTab(t.id)}
+              className={`font-mono text-[10.5px] uppercase tracking-[0.10em] px-2 py-2.5 transition-colors border-b-2 whitespace-nowrap focus:outline-none focus-visible:ring-2 focus-visible:ring-pencil/40 focus-visible:rounded-sm ${
+                active
+                  ? "text-ink-deep border-pencil"
+                  : "text-ink-mute hover:text-ink-soft border-transparent"
+              }`}
+            >
+              {t.label}
+              {t.badge ? (
+                <span className="ml-1 text-ink-mute/70">·{t.badge}</span>
+              ) : null}
+            </button>
+          );
+        })}
+      </div>
+
+      <div
+        role="tabpanel"
+        id={`tabpanel-${tab}`}
+        aria-labelledby={`tab-${tab}`}
+        className="px-5 py-5 flex-1"
+      >
+        {tab === "summary" ? (
+          <SummaryTab
+            hasDesign={hasDesign}
+            hasGraph={hasGraph}
+            dim={dim}
+            theme={theme}
+            objects={objects}
+            selectedObjectId={selectedObjectId}
+            onSelectObject={onSelectObject}
+            editPrompt={editPrompt}
+            onEditPromptChange={onEditPromptChange}
+            onSubmitEdit={onSubmitEdit}
+            isEditing={isEditing}
+            editError={editError}
+            canEdit={canEdit}
+          />
+        ) : tab === "compliance" ? (
+          <ChecksTab
+            validation={validation}
+            codeCompliance={codeCompliance}
+          />
+        ) : tab === "recs" ? (
+          <RecsTab
+            hasActiveProject={!!activeProjectId && hasDesign}
+            activeProjectId={activeProjectId}
+            latestVersion={latestVersion}
+            token={token}
+          />
+        ) : tab === "views" ? (
+          <ViewsTab
+            hasActiveProject={!!activeProjectId && hasDesign}
+            activeProjectId={activeProjectId}
+            latestVersion={latestVersion}
+            token={token}
+          />
+        ) : tab === "cost" ? (
+          <CostTab hasDesign={hasDesign} mepCost={mepCost} />
         ) : (
-          // Anonymous / image-only fallback — no graph_data was
-          // returned. Keep the static specification surfaces so the
-          // page stays informative without an editable graph.
-          <div className="mt-4 space-y-5">
-            <div>
-              <h4 className="font-mono text-[10px] tracking-[0.14em] uppercase text-ink-mute mb-2">
-                Meta
-              </h4>
-              <div className="border-t border-hairline">
-                <CitedKV k="Dim" v={dim.toUpperCase()} />
-                <CitedKV k="Theme" v={theme} />
-                <CitedKV k="Version" v="01" />
-              </div>
-            </div>
-            <div>
-              <h4 className="font-mono text-[10px] tracking-[0.14em] uppercase text-ink-mute mb-2">
-                Primary materials
-              </h4>
-              <div className="border-t border-hairline">
-                <CitedKV
-                  k="Walnut (top)"
-                  v="₹560/kg"
-                  src="MCX live · timber composite"
-                  srcWhen="3 hrs ago"
-                />
-                <CitedKV
-                  k="Brass (handles)"
-                  v="₹820/kg"
-                  src="MCX live · brass scrap"
-                  srcWhen="3 hrs ago"
-                />
-                <CitedKV
-                  k="Leather A"
-                  v="₹1,950/m²"
-                  src="Vendor · TanCo grade-A"
-                  srcWhen="catalog · 4 days ago"
-                />
-              </div>
-            </div>
-            <CodeComplianceBlock entries={codeCompliance} />
-          </div>
+          <TabPlaceholder tab={tab} />
         )}
       </div>
     </aside>
+  );
+}
+
+/* ViewsTab — BRD §2B diagrams + §3A working drawings as click-to-view
+ * cards. Clicking a wired entry fires the right project-scoped API call
+ * and opens a modal with the returned SVG. Unwired drawings (everything
+ * except plan_view today) surface a transparent "Coming Day 3" tag so
+ * the architect sees the full surface area without bumping into dead
+ * buttons silently. */
+function ViewsTab({
+  hasActiveProject,
+  activeProjectId,
+  latestVersion,
+  token,
+}: {
+  hasActiveProject: boolean;
+  activeProjectId: string | null;
+  latestVersion: number | null;
+  token: string;
+}) {
+  const [loading, setLoading] = useState<string | null>(null);
+  const [view, setView] = useState<{
+    title: string;
+    svg: string;
+  } | null>(null);
+  const notify = useToastStore((s) => s.notify);
+
+  // Fires the right project-scoped backend call. Drawings only have
+  // plan_view wired today (via design.getFloorPlan); other drawings
+  // need a project-pipeline endpoint that the design.* namespace will
+  // gain later in the sprint. Diagrams are all wired via
+  // design.generateDiagrams, which targets a single diagram_id.
+  const open = async (kind: "drawing" | "diagram", id: string, name: string) => {
+    if (!hasActiveProject || !activeProjectId) {
+      notify({
+        type: "warning",
+        title: "Generate a design first",
+        message: "Views unlock once the canvas has a project version to read from.",
+      });
+      return;
+    }
+    setLoading(`${kind}:${id}`);
+    try {
+      if (kind === "diagram") {
+        const res = await designApi.generateDiagrams(
+          token,
+          activeProjectId,
+          latestVersion ?? undefined,
+          id,
+        );
+        const match = res.diagrams.find((d) => d.id === id) ?? res.diagrams[0];
+        if (!match?.svg) {
+          notify({
+            type: "warning",
+            title: name,
+            message: match?.error ?? "Generator returned no SVG.",
+          });
+        } else {
+          setView({ title: name, svg: match.svg });
+        }
+      } else if (id === "plan_view") {
+        const res = await designApi.getFloorPlan(
+          token,
+          activeProjectId,
+          latestVersion ?? undefined,
+        );
+        if (!res.preview_svg) {
+          notify({ type: "warning", title: name, message: "No preview returned." });
+        } else {
+          setView({ title: name, svg: res.preview_svg });
+        }
+      } else {
+        notify({
+          type: "info",
+          title: `${name} — Day 3`,
+          message: "Project-pipeline route for this drawing lands in Day 3.",
+        });
+      }
+    } catch (e) {
+      toastError(e, `Could not load ${name}`);
+    } finally {
+      setLoading(null);
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <ViewsSection title="Working Drawings" badge="BRD §3A">
+        {DRAWINGS_CATALOGUE.map((d) => (
+          <ViewCard
+            key={d.id}
+            name={d.name}
+            stage={d.stage}
+            summary={d.summary}
+            loading={loading === `drawing:${d.id}`}
+            disabled={!hasActiveProject}
+            extra={d.wired ? null : "Day 3"}
+            onClick={() => open("drawing", d.id, d.name)}
+          />
+        ))}
+      </ViewsSection>
+
+      <ViewsSection title="BRD Diagrams" badge="BRD §2B · 9 types">
+        {DIAGRAMS_CATALOGUE.map((d) => (
+          <ViewCard
+            key={d.id}
+            name={d.name}
+            stage={d.stage}
+            summary={d.summary}
+            loading={loading === `diagram:${d.id}`}
+            disabled={!hasActiveProject}
+            onClick={() => open("diagram", d.id, d.name)}
+          />
+        ))}
+      </ViewsSection>
+
+      {view ? (
+        <ViewModal
+          title={view.title}
+          svg={view.svg}
+          onClose={() => setView(null)}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+/* ViewsSection — grouped cards with a quiet header. */
+function ViewsSection({
+  title,
+  badge,
+  children,
+}: {
+  title: string;
+  badge: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <section>
+      <div className="flex items-baseline justify-between mb-2.5">
+        <SectionTag>{title}</SectionTag>
+        <span className="font-mono text-[10px] uppercase tracking-tagged text-ink-mute">
+          {badge}
+        </span>
+      </div>
+      <div className="space-y-1.5">{children}</div>
+    </section>
+  );
+}
+
+/* ViewCard — one row in the catalogue list. Loading spinner + disabled
+ * style + optional "Day N" tag for unwired entries. */
+function ViewCard({
+  name,
+  stage,
+  summary,
+  loading,
+  disabled,
+  extra,
+  onClick,
+}: {
+  name: string;
+  stage: string;
+  summary: string;
+  loading: boolean;
+  disabled: boolean;
+  extra?: string | null;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled || loading}
+      className={`w-full text-left px-3 py-2 border border-hairline rounded-md bg-paper hover:bg-paper-deep/40 hover:border-graphite transition-colors ${
+        disabled ? "opacity-50 cursor-not-allowed" : ""
+      }`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <span className="text-[13px] font-medium text-ink-deep">
+          {name}
+        </span>
+        <span className="font-mono text-[10px] uppercase tracking-tagged text-ink-mute shrink-0">
+          {loading ? "…" : extra ?? stage}
+        </span>
+      </div>
+      <p className="mt-0.5 text-[11.5px] text-ink-soft leading-snug line-clamp-2">
+        {summary}
+      </p>
+    </button>
+  );
+}
+
+/* ViewModal — full-bleed overlay that frames the returned SVG against
+ * a paper-soft scrim. Click outside or press × to dismiss. */
+function ViewModal({
+  title,
+  svg,
+  onClose,
+}: {
+  title: string;
+  svg: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-ink-deep/40 backdrop-blur-sm flex items-center justify-center p-8"
+      onClick={onClose}
+    >
+      <div
+        className="bg-paper rounded-lg shadow-card max-w-5xl max-h-[90vh] w-full overflow-hidden flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 py-3 border-b border-hairline flex items-center justify-between">
+          <SectionTag>{title}</SectionTag>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-ink-mute hover:text-ink-deep transition-colors"
+            aria-label="Close"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+        <div
+          className="flex-1 overflow-auto p-5 bg-paper-soft"
+          // SVG comes from the backend generator; it's our own server-
+          // rendered output, not user input.
+          dangerouslySetInnerHTML={{ __html: svg }}
+        />
+      </div>
+    </div>
+  );
+}
+
+/* CostTab — BRD §4 cost engine surfaced into the right rail. Reads
+ * the MepCostEstimate that arrives on every generation (no extra
+ * fetch needed); falls back to a friendly placeholder when no design
+ * is loaded yet. Sensitivity ±10% lands in Day 4 alongside the
+ * recommendations panel — the placeholder strip below holds its slot. */
+function CostTab({
+  hasDesign,
+  mepCost,
+}: {
+  hasDesign: boolean;
+  mepCost?: import("@/lib/types").MepCostEstimate;
+}) {
+  if (!hasDesign) {
+    return (
+      <div className="space-y-3">
+        <SectionTag>Cost</SectionTag>
+        <p className="text-[13px] text-ink-soft leading-relaxed">
+          Cost engine output — material / labor / overhead / margin
+          breakdown, with live MCX prices and ±10% sensitivity — populates
+          here after the first generation.
+        </p>
+        <p className="font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
+          ← /estimates/* · BRD §4
+        </p>
+      </div>
+    );
+  }
+  if (!mepCost) {
+    return (
+      <div className="space-y-3">
+        <SectionTag>Cost</SectionTag>
+        <p className="text-[13px] text-ink-soft leading-relaxed italic">
+          This version didn't produce a cost estimate. Re-prompt or
+          regenerate to engage the cost engine.
+        </p>
+      </div>
+    );
+  }
+
+  const total = mepCost.total_inr;
+  const formatINR = (n?: number) =>
+    n == null ? "—" : `₹${Math.round(n).toLocaleString("en-IN")}`;
+
+  return (
+    <div className="space-y-5">
+      {/* Headline band — total cost range, area, and jurisdiction
+          carry the BRD §4 framing in one glance. */}
+      <section>
+        <SectionTag>Total estimate</SectionTag>
+        <div className="mt-2 border border-hairline rounded-md bg-paper p-3">
+          <div className="font-mono text-[20px] text-ink-deep tnum tracking-tight">
+            {formatINR(total.low)}
+            <span className="text-ink-mute mx-1.5">→</span>
+            {formatINR(total.high)}
+          </div>
+          <div className="mt-1 flex items-center justify-between font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
+            <span>{mepCost.area_m2.toFixed(1)} m² · {mepCost.currency}</span>
+            <span>{mepCost.jurisdiction || "—"}</span>
+          </div>
+        </div>
+      </section>
+
+      {/* Per-system breakdown — HVAC / Electrical / Plumbing / Fire-fighting.
+          Each row shows the system, its rate band per m², and total band. */}
+      <section>
+        <SectionTag>By system</SectionTag>
+        <div className="mt-2 border-t border-hairline">
+          {mepCost.systems.map((s) => (
+            <div
+              key={s.system + s.key}
+              className="py-2 border-b border-hairline last:border-b-0 flex items-baseline justify-between gap-2"
+            >
+              <div className="min-w-0">
+                <div className="text-[12.5px] text-ink-deep font-medium capitalize">
+                  {s.system.replace(/_/g, " ")}
+                </div>
+                <div className="font-mono text-[10.5px] text-ink-mute tnum">
+                  {formatINR(s.rate_inr_m2.low)}/m²
+                  <span className="mx-1">→</span>
+                  {formatINR(s.rate_inr_m2.high)}/m²
+                </div>
+              </div>
+              <div className="text-right shrink-0 font-mono text-[12px] text-ink tnum">
+                {formatINR(s.total_inr.low)}
+                <span className="text-ink-mute mx-1">→</span>
+                {formatINR(s.total_inr.high)}
+              </div>
+            </div>
+          ))}
+        </div>
+      </section>
+
+      {/* Sensitivity placeholder — slot reserved for Day 4 wiring of
+          /sensitivity. The 4 BRD what-ifs (material/labor/overhead ±10%)
+          + volume curves (1·5·10 pieces) will land here. */}
+      <section>
+        <div className="flex items-baseline justify-between mb-2">
+          <SectionTag>Sensitivity</SectionTag>
+          <span className="font-mono text-[10px] uppercase tracking-tagged text-pencil">
+            Day 4
+          </span>
+        </div>
+        <p className="text-[11.5px] text-ink-soft leading-snug">
+          ±10% shocks on material · labor · overhead and volume curves
+          at 1 / 5 / 10 pieces land in Day 4 — wires to{" "}
+          <span className="font-mono text-[11px]">/sensitivity</span>.
+        </p>
+      </section>
+    </div>
+  );
+}
+
+/* ExportModal — opens from the Export chip in the canvas header.
+ * Lists every backend-supported format, grouped by family so the
+ * architect picks by recipient (Documents · CAD · BIM · 3D · CNC ·
+ * Data). Click triggers design.exportFile() and downloads the blob. */
+const EXPORT_FAMILIES: {
+  family: string;
+  formats: { id: import("@/lib/types").ExportFormat | string; label: string; ext: string }[];
+}[] = [
+  {
+    family: "Documents",
+    formats: [
+      { id: "pdf",  label: "PDF",         ext: ".pdf" },
+      { id: "docx", label: "Word",        ext: ".docx" },
+      { id: "xlsx", label: "Excel",       ext: ".xlsx" },
+      { id: "pptx", label: "PowerPoint",  ext: ".pptx" },
+      { id: "html", label: "HTML Viewer", ext: ".html" },
+    ],
+  },
+  {
+    family: "CAD 2D",
+    formats: [{ id: "dxf", label: "AutoCAD DXF", ext: ".dxf" }],
+  },
+  {
+    family: "3D Mesh",
+    formats: [
+      { id: "obj",  label: "OBJ",  ext: ".obj"  },
+      { id: "gltf", label: "GLTF", ext: ".gltf" },
+      { id: "fbx",  label: "FBX",  ext: ".fbx"  },
+    ],
+  },
+  {
+    family: "BIM",
+    formats: [{ id: "ifc", label: "IFC4 (Revit-compatible)", ext: ".ifc" }],
+  },
+  {
+    family: "CAD Exchange",
+    formats: [
+      { id: "step", label: "STEP", ext: ".step" },
+      { id: "iges", label: "IGES", ext: ".iges" },
+    ],
+  },
+  {
+    family: "CNC",
+    formats: [
+      { id: "gcode",    label: "G-code",   ext: ".gcode" },
+      { id: "cam_prep", label: "CAM Prep", ext: ".zip"   },
+    ],
+  },
+  {
+    family: "Data",
+    formats: [{ id: "geojson", label: "GeoJSON", ext: ".geojson" }],
+  },
+];
+
+function ExportModal({
+  open,
+  onClose,
+  projectId,
+  latestVersion,
+  token,
+}: {
+  open: boolean;
+  onClose: () => void;
+  projectId: string | null;
+  latestVersion: number | null;
+  token: string;
+}) {
+  const [available, setAvailable] = useState<Set<string> | null>(null);
+  const [downloading, setDownloading] = useState<string | null>(null);
+  const notify = useToastStore((s) => s.notify);
+
+  // Pull the live list of formats the backend actually exposes — if
+  // an exporter is broken or behind a flag, we want it dimmed rather
+  // than handed to the architect as a dead button.
+  useEffect(() => {
+    if (!open || !projectId) return;
+    designApi
+      .listExportFormats(token, projectId)
+      .then((res) => setAvailable(new Set(res.formats)))
+      .catch(() => setAvailable(null));
+  }, [open, projectId, token]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [open, onClose]);
+
+  if (!open) return null;
+
+  const download = async (format: string, label: string) => {
+    if (!projectId) {
+      notify({
+        type: "warning",
+        title: "No project",
+        message: "Open or generate a project before exporting.",
+      });
+      return;
+    }
+    setDownloading(format);
+    try {
+      const { blob, filename } = await designApi.exportFile(
+        token,
+        projectId,
+        format as import("@/lib/types").ExportFormat,
+        latestVersion ?? undefined,
+      );
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      notify({
+        type: "success",
+        title: `${label} exported`,
+        message: filename,
+        durationMs: 3000,
+      });
+    } catch (e) {
+      toastError(e, `Could not export ${label}`);
+    } finally {
+      setDownloading(null);
+    }
+  };
+
+  return (
+    <div
+      className="fixed inset-0 z-50 bg-ink-deep/40 backdrop-blur-sm flex items-center justify-center p-8"
+      onClick={onClose}
+    >
+      <div
+        className="bg-paper rounded-lg shadow-card max-w-2xl w-full max-h-[85vh] overflow-hidden flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-5 py-3 border-b border-hairline flex items-center justify-between">
+          <div>
+            <SectionTag>Export</SectionTag>
+            <p className="mt-0.5 text-[11.5px] text-ink-mute">
+              Pick a format. Files download immediately — no email handoff.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-ink-mute hover:text-ink-deep transition-colors"
+            aria-label="Close"
+          >
+            <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+              <path d="M4 4l8 8M12 4l-8 8" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+          </button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5 space-y-5">
+          {EXPORT_FAMILIES.map((g) => (
+            <section key={g.family}>
+              <div className="flex items-baseline justify-between mb-2">
+                <SectionTag>{g.family}</SectionTag>
+                <span className="font-mono text-[10px] uppercase tracking-tagged text-ink-mute">
+                  {g.formats.length} format{g.formats.length === 1 ? "" : "s"}
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-2">
+                {g.formats.map((f) => {
+                  const isAvailable = !available || available.has(f.id);
+                  const isDownloading = downloading === f.id;
+                  return (
+                    <button
+                      key={f.id}
+                      type="button"
+                      disabled={!isAvailable || isDownloading || !projectId}
+                      onClick={() => download(f.id, f.label)}
+                      className={`px-3 py-2 text-left border border-hairline rounded-md bg-paper hover:bg-paper-deep/40 hover:border-graphite transition-colors ${
+                        !isAvailable || !projectId ? "opacity-40 cursor-not-allowed" : ""
+                      }`}
+                      title={!isAvailable ? "Not exposed by backend" : f.ext}
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-[12.5px] font-medium text-ink-deep">
+                          {f.label}
+                        </span>
+                        <span className="font-mono text-[10px] uppercase tracking-tagged text-ink-mute">
+                          {isDownloading ? "…" : f.ext}
+                        </span>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </section>
+          ))}
+        </div>
+        <div className="px-5 py-2.5 border-t border-hairline bg-paper-soft">
+          <p className="font-mono text-[10px] uppercase tracking-tagged text-ink-mute">
+            ← /projects/{"{id}"}/export · {EXPORT_FAMILIES.reduce((n, g) => n + g.formats.length, 0)} formats supported
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* HapticReadyBadge — BRD §Layer 7 "Phase 1 taste". Static visual chip
+ * that signals the design is haptic-ready: the Stage 9 catalog + JSON
+ * exporter (textures · thermal · friction · firmness · dimension rules
+ * · feedback loops) already produce a full payload, and Phase 2 (Aug-
+ * Sept 2026) is the hardware integration. No interactive control — the
+ * payload is consumed by the agent tool `export_haptic_payload`, not a
+ * REST surface, so this chip's job is purely communicative. Hover for
+ * the BRD trail explaining what's wired today vs what's hardware. */
+function HapticReadyBadge({ hasActiveProject }: { hasActiveProject: boolean }) {
+  if (!hasActiveProject) return null;
+  return (
+    <span
+      className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-pencil-bg/60 text-pencil text-[11px] font-medium border border-pencil/20"
+      title="Haptic-ready data layer shipped (BRD §Layer 7). Hardware integration lands Phase 2 — Aug–Sept 2026."
+    >
+      <span className="w-1.5 h-1.5 rounded-full bg-pencil" aria-hidden />
+      Haptic ready
+    </span>
+  );
+}
+
+/* ExportButton — chip-style trigger that opens the ExportModal. Sits
+ * in the canvas header next to ThemeSwitchChip + VersionTimeline. */
+function ExportButton({
+  onClick,
+  disabled,
+}: {
+  onClick: () => void;
+  disabled: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={disabled}
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1 border border-hairline rounded-md bg-paper hover:border-graphite hover:bg-paper-soft transition-colors text-[12px] font-medium text-ink-deep ${
+        disabled ? "opacity-40 cursor-not-allowed" : ""
+      }`}
+      title={disabled ? "Generate a design first" : "Export to 15 formats"}
+    >
+      <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+        <path d="M6 1.5v6.5m0 0L3 5m3 3l3-3M2 10h8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+      Export
+    </button>
+  );
+}
+
+/* ChecksTab — BRD §1B + §11.3 unified Checks panel. Combines the
+ * validation report headline (ok/fail + summary, errors + warnings +
+ * suggestions counts with per-issue rows) on top of the existing
+ * CodeComplianceBlock. One scrollable column — architects scan the
+ * top band for blockers, then drop into compliance citations below. */
+function ChecksTab({
+  validation,
+  codeCompliance,
+}: {
+  validation?: import("@/lib/types").ValidationReport;
+  codeCompliance?: import("@/lib/types").CodeComplianceEntry[];
+}) {
+  return (
+    <div className="space-y-5">
+      <ValidationSummary report={validation} />
+      <CodeComplianceBlock entries={codeCompliance} />
+    </div>
+  );
+}
+
+function ValidationSummary({
+  report,
+}: {
+  report?: import("@/lib/types").ValidationReport;
+}) {
+  if (!report) {
+    return (
+      <div>
+        <SectionTag>Validator</SectionTag>
+        <p className="mt-2 text-[11.5px] text-ink-mute italic">
+          Validation report populates after the first generation.
+        </p>
+      </div>
+    );
+  }
+  const counts = {
+    errors:      report.errors?.length ?? 0,
+    warnings:    report.warnings?.length ?? 0,
+    suggestions: report.suggestions?.length ?? 0,
+  };
+  const ok = report.ok;
+  return (
+    <div>
+      <div className="flex items-baseline justify-between mb-2">
+        <SectionTag>Validator</SectionTag>
+        <span className="font-mono text-[10px] tnum">
+          {counts.errors > 0 && (
+            <span className="text-rose-700">{counts.errors} error</span>
+          )}
+          {counts.errors > 0 && counts.warnings > 0 && (
+            <span className="text-ink-mute"> · </span>
+          )}
+          {counts.warnings > 0 && (
+            <span className="text-amber-700">{counts.warnings} warn</span>
+          )}
+          {counts.errors + counts.warnings === 0 && (
+            <span className={ok ? "text-emerald-700" : "text-ink-mute"}>
+              {ok ? "ok" : "—"}
+            </span>
+          )}
+        </span>
+      </div>
+      <p className="text-[12px] text-ink-soft leading-snug">
+        {report.summary}
+      </p>
+      {/* Issue list — errors first, then warnings, then suggestions —
+          each row is the rule code + message. Bottom-terminal Problems
+          tab carries the full breakdown; this is the in-rail digest. */}
+      {(counts.errors + counts.warnings + counts.suggestions) > 0 && (
+        <div className="mt-3 border-t border-hairline">
+          {report.errors?.map((e, i) => (
+            <IssueRow key={`e-${i}`} kind="error" issue={e} />
+          ))}
+          {report.warnings?.map((w, i) => (
+            <IssueRow key={`w-${i}`} kind="warn" issue={w} />
+          ))}
+          {report.suggestions?.slice(0, 3).map((s, i) => (
+            <IssueRow key={`s-${i}`} kind="suggest" issue={s} />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function IssueRow({
+  kind,
+  issue,
+}: {
+  kind: "error" | "warn" | "suggest";
+  issue: import("@/lib/types").ValidationIssue;
+}) {
+  const dot = {
+    error:   "bg-rose-600",
+    warn:    "bg-amber-500",
+    suggest: "bg-ink-mute",
+  }[kind];
+  // Best-effort label extraction — ValidationIssue carries a code +
+  // message + path; we prefer code, fall back to path, then message.
+  const issueObj = issue as unknown as {
+    code?: string;
+    path?: string;
+    message?: string;
+  };
+  const code = issueObj.code ?? issueObj.path ?? "rule";
+  return (
+    <div className="py-2 border-b border-hairline last:border-b-0">
+      <div className="flex items-start gap-2">
+        <span className={`shrink-0 mt-1.5 w-1.5 h-1.5 rounded-full ${dot}`} aria-hidden />
+        <div className="min-w-0 flex-1">
+          <div className="font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
+            {code}
+          </div>
+          {issueObj.message && (
+            <p className="mt-0.5 text-[11.5px] text-ink-soft leading-snug">
+              {issueObj.message}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* RecsTab — BRD §6 two-speed recommendations advisor in the right rail.
+ *
+ * Calls design.validate() once per project version when the tab is
+ * opened (cheap on backend — Python recommendations engine is ~1ms).
+ * Renders the returned recommendations grouped by severity so the
+ * architect scans nudges first, then tips, then info-level. Each item
+ * shows its category as a mono tag and the message body.
+ *
+ * The LLM-driven full advisor (BRD §6 second speed) is reachable via
+ * "Run full review" — placeholder for now since the route round-trip
+ * is 3-8s and needs its own progress affordance (lands in polish day). */
+function RecsTab({
+  hasActiveProject,
+  activeProjectId,
+  latestVersion,
+  token,
+}: {
+  hasActiveProject: boolean;
+  activeProjectId: string | null;
+  latestVersion: number | null;
+  token: string;
+}) {
+  const [recs, setRecs] = useState<
+    import("@/lib/types").RecommendationItem[] | null
+  >(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // Fetch once when the tab mounts and a project is loaded. Re-fires
+  // when the project / version changes (so v01 → v02 pulls fresh recs).
+  useEffect(() => {
+    if (!hasActiveProject || !activeProjectId) {
+      setRecs(null);
+      return;
+    }
+    setLoading(true);
+    setErr(null);
+    designApi
+      .validate(token, activeProjectId, latestVersion ?? undefined)
+      .then((res) => setRecs(res.recommendations ?? []))
+      .catch((e) => setErr(e instanceof Error ? e.message : "Could not load recommendations"))
+      .finally(() => setLoading(false));
+  }, [hasActiveProject, activeProjectId, latestVersion, token]);
+
+  if (!hasActiveProject) {
+    return (
+      <div className="space-y-3">
+        <SectionTag>Recommendations</SectionTag>
+        <p className="text-[13px] text-ink-soft leading-relaxed">
+          Two-speed advisor — quick deterministic checks (~1 ms) on every
+          generation, plus a full LLM review with confidence + impact + effort
+          labels. Populates once a project exists.
+        </p>
+        <p className="font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
+          ← /projects/{"{id}"}/validate · BRD §6
+        </p>
+      </div>
+    );
+  }
+  if (loading) {
+    return (
+      <div className="space-y-3">
+        <SectionTag>Recommendations</SectionTag>
+        <p className="text-[13px] text-ink-soft italic">Running checks…</p>
+      </div>
+    );
+  }
+  if (err) {
+    return (
+      <div className="space-y-3">
+        <SectionTag>Recommendations</SectionTag>
+        <p className="text-[13px] text-brick">{err}</p>
+      </div>
+    );
+  }
+  const items = recs ?? [];
+  // Severity rank so nudges (most urgent) show first, then tips, then info.
+  const rank: Record<string, number> = { nudge: 0, tip: 1, info: 2 };
+  const sorted = [...items].sort(
+    (a, b) => (rank[a.severity] ?? 9) - (rank[b.severity] ?? 9),
+  );
+  const counts = {
+    nudge: items.filter((i) => i.severity === "nudge").length,
+    tip:   items.filter((i) => i.severity === "tip").length,
+    info:  items.filter((i) => i.severity === "info").length,
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex items-baseline justify-between">
+        <SectionTag>Recommendations</SectionTag>
+        <span className="font-mono text-[10.5px] text-ink-mute tnum">
+          {items.length === 0 ? "all clear" : (
+            <>
+              {counts.nudge > 0 && <span className="text-pencil">{counts.nudge} nudge</span>}
+              {counts.nudge > 0 && (counts.tip + counts.info) > 0 && " · "}
+              {counts.tip > 0 && <span className="text-mustard">{counts.tip} tip</span>}
+              {counts.tip > 0 && counts.info > 0 && " · "}
+              {counts.info > 0 && <span className="text-ink-mute">{counts.info} info</span>}
+            </>
+          )}
+        </span>
+      </div>
+
+      {sorted.length === 0 ? (
+        <p className="text-[12.5px] text-ink-soft italic">
+          No recommendations on this version. The deterministic engine
+          had nothing to flag — design looks solid.
+        </p>
+      ) : (
+        <div className="border-t border-hairline">
+          {sorted.map((item) => (
+            <RecRow key={item.id} item={item} />
+          ))}
+        </div>
+      )}
+
+      <div className="pt-2 border-t border-hairline">
+        <button
+          type="button"
+          disabled
+          className="w-full text-left px-3 py-2 border border-hairline border-dashed rounded-md text-[12.5px] text-ink-mute opacity-70 cursor-not-allowed"
+          title="LLM advisor lands in Day 5 polish"
+        >
+          Run full LLM review
+          <span className="ml-2 font-mono text-[10px] uppercase tracking-tagged text-pencil">
+            Day 5
+          </span>
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function RecRow({ item }: { item: import("@/lib/types").RecommendationItem }) {
+  const dot = {
+    nudge: "bg-pencil",
+    tip:   "bg-mustard",
+    info:  "bg-ink-mute",
+  }[item.severity];
+  return (
+    <div className="py-2.5 border-b border-hairline last:border-b-0">
+      <div className="flex items-start gap-2">
+        <span className={`shrink-0 mt-1.5 w-1.5 h-1.5 rounded-full ${dot}`} aria-hidden />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline justify-between gap-2">
+            <span className="text-[12.5px] text-ink-deep font-medium">
+              {item.title}
+            </span>
+            <span className="font-mono text-[10px] uppercase tracking-tagged text-ink-mute shrink-0">
+              {item.category}
+            </span>
+          </div>
+          {item.message && (
+            <p className="mt-0.5 text-[11.5px] text-ink-soft leading-snug">
+              {item.message}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* TabPlaceholder — used for the Specs tab that ships later in the
+   sprint. States what's coming and which BRD section / backend route
+   it lights up. */
+function TabPlaceholder({ tab }: { tab: RightTab }) {
+  const meta: Record<RightTab, { title: string; body: string; day: string; backend: string }> = {
+    summary: { title: "", body: "", day: "", backend: "" },
+    compliance: { title: "", body: "", day: "", backend: "" },
+    views: {
+      title: "Views",
+      body: "Switcher for 5 working drawings (plan · elevation · section · isometric · detail) and 8 BRD diagrams (concept · form · massing · volumetric · process · solid-vs-void · spatial organism · hierarchy). Click a thumbnail → it swaps into the canvas.",
+      day: "Day 2",
+      backend: "/drawings/* · /diagrams/*",
+    },
+    specs: {
+      title: "Specs",
+      body: "Material · Manufacturing · MEP spec sheets, with supplier, lead time, cost per unit, tolerances. Lands post-sprint — needs its own three-column layout the current rail width can't hold.",
+      day: "Post-sprint",
+      backend: "/specs/* (material · manufacturing · mep)",
+    },
+    cost: {
+      title: "Cost",
+      body: "Shipped Day 3.",
+      day: "Day 3",
+      backend: "/estimates/*",
+    },
+    recs: {
+      title: "Recommendations",
+      body: "Shipped Day 4.",
+      day: "Day 4",
+      backend: "/projects/{id}/validate",
+    },
+  };
+  const m = meta[tab];
+  return (
+    <div className="space-y-3">
+      <SectionTag>{m.title}</SectionTag>
+      <p className="text-[13px] text-ink-soft leading-relaxed">{m.body}</p>
+      <div className="pt-2 flex flex-col gap-1.5">
+        <span className="font-mono text-[10.5px] uppercase tracking-tagged text-pencil">
+          Coming {m.day}
+        </span>
+        <span className="font-mono text-[11px] text-ink-mute">
+          ← {m.backend}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+/* SummaryTab — current RightSummary body, lifted into its own component
+   so the parent tab shell stays small. The "no design yet" placeholder
+   and the populated meta/materials/objects path both render here. */
+function SummaryTab({
+  hasDesign,
+  hasGraph,
+  dim,
+  theme,
+  objects,
+  selectedObjectId,
+  onSelectObject,
+  editPrompt,
+  onEditPromptChange,
+  onSubmitEdit,
+  isEditing,
+  editError,
+  canEdit,
+}: {
+  hasDesign: boolean;
+  hasGraph: boolean;
+  dim: Dim;
+  theme: ArchTheme;
+  objects: GraphObject[];
+  selectedObjectId: string | null;
+  onSelectObject: (id: string | null) => void;
+  editPrompt: string;
+  onEditPromptChange: (v: string) => void;
+  onSubmitEdit: () => void;
+  isEditing: boolean;
+  editError: string | null;
+  canEdit: boolean;
+}) {
+  return (
+    <>
+      <SectionTag>Specification summary</SectionTag>
+      {!hasDesign ? (
+        <p className="mt-3 text-[13px] text-ink-soft leading-relaxed">
+          Specs, materials, and BOQ will appear here once you generate a
+          design. Every value carries its source inline.
+        </p>
+      ) : hasGraph ? (
+        // Project-pipeline path — graph_data present, objects are
+        // editable. Clicking a row opens an inline edit popover.
+        // CodeCompliance is intentionally NOT rendered here — it lives
+        // in the dedicated Checks tab in the new tabbed shell.
+        <div className="mt-4 space-y-5">
+          <ObjectsPanel
+            objects={objects}
+            selectedObjectId={selectedObjectId}
+            onSelect={onSelectObject}
+            editPrompt={editPrompt}
+            onEditPromptChange={onEditPromptChange}
+            onSubmit={onSubmitEdit}
+            isEditing={isEditing}
+            editError={editError}
+            canEdit={canEdit}
+          />
+          <div>
+            <h4 className="font-mono text-[10px] tracking-[0.14em] uppercase text-ink-mute mb-2">
+              Meta
+            </h4>
+            <div className="border-t border-hairline">
+              <CitedKV k="Dim" v={dim.toUpperCase()} />
+              <CitedKV k="Theme" v={theme} />
+            </div>
+          </div>
+        </div>
+      ) : (
+        // Anonymous / image-only fallback — no graph_data was returned.
+        // Static spec surfaces so the page stays informative. Code
+        // compliance has moved out to the Checks tab.
+        <div className="mt-4 space-y-5">
+          <div>
+            <h4 className="font-mono text-[10px] tracking-[0.14em] uppercase text-ink-mute mb-2">
+              Meta
+            </h4>
+            <div className="border-t border-hairline">
+              <CitedKV k="Dim" v={dim.toUpperCase()} />
+              <CitedKV k="Theme" v={theme} />
+              <CitedKV k="Version" v="01" />
+            </div>
+          </div>
+          <div>
+            <h4 className="font-mono text-[10px] tracking-[0.14em] uppercase text-ink-mute mb-2">
+              Primary materials
+            </h4>
+            <div className="border-t border-hairline">
+              <CitedKV
+                k="Walnut (top)"
+                v="₹560/kg"
+                src="MCX live · timber composite"
+                srcWhen="3 hrs ago"
+              />
+              <CitedKV
+                k="Brass (handles)"
+                v="₹820/kg"
+                src="MCX live · brass scrap"
+                srcWhen="3 hrs ago"
+              />
+              <CitedKV
+                k="Leather A"
+                v="₹1,950/m²"
+                src="Vendor · TanCo grade-A"
+                srcWhen="catalog · 4 days ago"
+              />
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 

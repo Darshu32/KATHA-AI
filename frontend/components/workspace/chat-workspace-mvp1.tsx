@@ -298,8 +298,6 @@ export default function ChatWorkspaceMvp1() {
         ) : null}
 
         <main className="flex-1 flex flex-col min-w-0 border-l border-hairline">
-          <ModeBar mode={chatMode} setMode={setChatMode} />
-
           <div
             ref={transcriptRef}
             className="flex-1 overflow-y-auto draft-scroll"
@@ -322,6 +320,7 @@ export default function ChatWorkspaceMvp1() {
             onStop={stop}
             mode={chatMode}
             streaming={isStreaming}
+            setMode={setChatMode}
           />
         </main>
 
@@ -504,7 +503,7 @@ function ConversationSidebar({
             if (items.length === 0) return null;
             return (
               <div key={label} className="mt-3 first:mt-0">
-                <p className="px-3 py-1 font-mono text-[10px] uppercase tracking-tagged text-ink-mute">
+                <p className="px-3 py-1.5 font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
                   {label}
                 </p>
                 <div className="space-y-0.5">
@@ -523,7 +522,7 @@ function ConversationSidebar({
                       >
                         <div className="flex items-center justify-between gap-2">
                           <span
-                            className={`text-[13px] truncate flex-1 tracking-tight ${
+                            className={`text-[14.5px] truncate flex-1 tracking-tight leading-snug ${
                               active
                                 ? "text-ink-deep font-semibold"
                                 : "text-ink-soft font-medium"
@@ -531,7 +530,7 @@ function ConversationSidebar({
                           >
                             {c.title || "Untitled"}
                           </span>
-                          <span className="group-hover:hidden text-[10.5px] text-ink-mute font-mono tracking-wider tnum shrink-0">
+                          <span className="group-hover:hidden text-[11.5px] text-ink-mute font-mono tracking-wider tnum shrink-0">
                             {timeAgoShort(c.updatedAt)}
                           </span>
                           <button
@@ -561,7 +560,7 @@ function ConversationSidebar({
                         </div>
                         {projectName ? (
                           <p
-                            className="mt-0.5 truncate font-mono text-[10px] uppercase tracking-tagged text-ink-mute"
+                            className="mt-1 truncate font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute"
                             title={`Project: ${projectName}`}
                           >
                             <span className="mr-1">▸</span>
@@ -581,7 +580,11 @@ function ConversationSidebar({
   );
 }
 
-function ModeBar({
+/* Compact mode toggle — lives below the prompt input (Claude / ChatGPT
+   register). Pills are subtle: ink-mute at rest, paper-deep + ink-deep
+   when active. The placeholder text in the textarea above carries the
+   mode's tagline, so no inline subtitle is needed here. */
+function ModeToggle({
   mode,
   setMode,
 }: {
@@ -589,21 +592,25 @@ function ModeBar({
   setMode: (m: ChatMode) => void;
 }) {
   return (
-    <div className="px-6 py-3 border-b border-hairline flex items-center gap-2">
-      {MODES.map((m) => (
-        <button
-          key={m.id}
-          type="button"
-          className="slide-pill"
-          data-active={m.id === mode}
-          onClick={() => setMode(m.id)}
-        >
-          {m.label}
-        </button>
-      ))}
-      <span className="ml-2 text-ink-mute text-[13px]">
-        {MODES.find((m) => m.id === mode)?.tagline}
-      </span>
+    <div className="inline-flex items-center gap-0.5 p-0.5 rounded-lg bg-paper-soft border border-hairline">
+      {MODES.map((m) => {
+        const active = m.id === mode;
+        return (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => setMode(m.id)}
+            title={m.tagline}
+            className={`px-3 py-1 rounded-md text-[12.5px] font-medium transition-colors ${
+              active
+                ? "bg-paper text-ink-deep shadow-card"
+                : "text-ink-mute hover:text-ink"
+            }`}
+          >
+            {m.label}
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -616,23 +623,23 @@ function EmptyHero({ onPick }: { onPick: (prompt: string) => void }) {
     "Explain ECBC envelope U-value targets for warm-humid climates.",
   ];
   return (
-    <div className="px-6 md:px-10 py-20 max-w-chat mx-auto">
-      <h1 className="text-[2rem] md:text-[2.25rem] text-ink-deep leading-[1.15] tracking-[-0.02em] font-semibold">
+    <div className="px-6 md:px-10 py-12 max-w-chat mx-auto">
+      <h1 className="text-[1.875rem] md:text-[2.125rem] text-ink-deep leading-[1.15] tracking-[-0.02em] font-semibold">
         Good to see you, architect.
       </h1>
-      <p className="mt-5 text-ink-soft text-[15px] leading-relaxed max-w-xl">
+      <p className="mt-4 text-ink-soft text-[15px] leading-relaxed max-w-xl">
         Ask anything about codes, materials, ergonomics, structural logic,
         manufacturing, or cost. Switch to Deep for a long-form
         conversation with a notes pane that writes itself.
       </p>
 
-      <div className="mt-10 space-y-2">
+      <div className="mt-7 space-y-2">
         {suggestions.map((s) => (
           <button
             key={s}
             type="button"
             onClick={() => onPick(s)}
-            className="w-full text-left px-4 py-3 border border-hairline bg-paper hover:bg-paper-soft hover:border-graphite rounded-md transition-colors text-[15px] text-ink leading-snug"
+            className="w-full text-left px-4 py-2.5 border border-hairline bg-paper hover:bg-paper-soft hover:border-graphite rounded-md transition-colors text-[14.5px] text-ink leading-snug"
           >
             {s}
           </button>
@@ -652,7 +659,7 @@ function Transcript({
   onEditUserMessage: (content: string) => void;
 }) {
   return (
-    <div className="px-6 md:px-10 py-10 max-w-chat mx-auto space-y-8">
+    <div className="px-6 md:px-10 py-7 max-w-chat mx-auto space-y-5">
       {messages.map((m) => (
         <MessageRow
           key={m.id}
@@ -1026,6 +1033,7 @@ function PromptInput({
   onStop,
   mode,
   streaming,
+  setMode,
 }: {
   value: string;
   onChange: (v: string) => void;
@@ -1033,6 +1041,7 @@ function PromptInput({
   onStop: () => void;
   mode: ChatMode;
   streaming: boolean;
+  setMode: (m: ChatMode) => void;
 }) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
 
@@ -1089,8 +1098,14 @@ function PromptInput({
             </button>
           )}
         </div>
-        <div className="mt-2 px-1 text-[11px] text-ink-mute">
-          ↵ to send · ⇧↵ for newline
+        {/* Mode toggle + keyboard hint row — sits below the input the
+            way ChatGPT / Claude / Perplexity place it. Active mode
+            controls the textarea placeholder, so no inline subtitle. */}
+        <div className="mt-3 flex items-center justify-between gap-3">
+          <ModeToggle mode={mode} setMode={setMode} />
+          <span className="text-[11px] text-ink-mute hidden sm:block">
+            ↵ to send · ⇧↵ for newline
+          </span>
         </div>
       </div>
     </div>

@@ -90,6 +90,28 @@ The BRD frames Phase 2 as **hardware integration on top of the data structure al
 
 ---
 
+## 3.5. Active sprint — Frontend (next 5 days from 2026-05-19)
+
+Founder direction 2026-05-19: focus purely on frontend for 5 days, then engine-tool wiring, then API keys + prototype handoff to beta architect.
+
+| Day | Deliverable | Status |
+|---|---|---|
+| 1 | `/design` layout restructure — left accordion (Brief / Space / Requirements / Regulatory), right sidebar tabbed shell | pending |
+| 2 | **Views tab** — 5 working drawings + 8 diagrams click-to-swap canvas | pending |
+| 3 | **Cost panel** moves out of terminal into right sidebar + **Export button** opens 15-format modal | pending |
+| 4 | **Recommendations panel** (two-speed engine) + extended Validation/Citations + Version chip wiring | pending |
+| 5 | Polish + **Haptic-ready badge** + responsive + accessibility | pending |
+
+Open product questions to lock before Day 1:
+- Tabs vs accordion in right sidebar (recommended: tabs)
+- Brief in sidebar accordion vs separate route (recommended: sidebar)
+- Top bar redundant strip (recommended: kill)
+- Dark sidebars on `/design` revisit (reference: Autodesk Forma — see `docs/research/architecture-ai-platforms.md`)
+
+After Frontend sprint:
+1. **Engine-tool wiring** — verify every UI surface fires the right backend agent tool; end-to-end test
+2. **API keys + prototype** — wire Anthropic / OpenAI / Vertex / MCX feed keys; run a real architectural project end-to-end; hand to a beta architect
+
 ## 4. Sequencing recommendation
 
 ```
