@@ -20,12 +20,18 @@ Common return shape:
 from __future__ import annotations
 
 from app.services.importers import (
+    cdr_importer,
     csv_importer,
     docx_importer,
+    dwg_importer,
     dxf_importer,
+    ifc_importer,
     image_importer,
     obj_importer,
     pdf_importer,
+    psd_importer,
+    rhino_importer,
+    skp_importer,
     step_importer,
     text_importer,
     xlsx_importer,
@@ -36,8 +42,15 @@ _REGISTRY = {
     "png":  image_importer,
     "jpg":  image_importer,
     "jpeg": image_importer,
+    "psd":  psd_importer,         # Photoshop (universal — 80-90% adoption)
+    "psb":  psd_importer,         # Photoshop large-document format
     "dxf":  dxf_importer,
-    "dwg":  dxf_importer,         # graceful: emits warning, asks for DXF
+    "dwg":  dwg_importer,         # version detect + redirect to DXF/IFC
+    "ifc":  ifc_importer,         # BIM — Revit/ArchiCAD/Vectorworks export here
+    "ifczip": ifc_importer,       # zip-compressed IFC
+    "3dm":  rhino_importer,       # Rhino / Grasshopper (parametric)
+    "skp":  skp_importer,         # SketchUp — version detect + redirect to OBJ
+    "cdr":  cdr_importer,         # CorelDRAW — India/LatAm budget segments
     "step": step_importer,
     "stp":  step_importer,
     "iges": step_importer,

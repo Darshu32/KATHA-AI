@@ -24,14 +24,15 @@ import {
 } from "@/lib/api-client";
 
 const ACCEPT =
-  ".pdf,.png,.jpg,.jpeg,.dxf,.dwg,.step,.stp,.iges,.obj,.fbx,.gltf,.csv,.xlsx,.xls,.docx,.txt,.md";
+  ".pdf,.png,.jpg,.jpeg,.psd,.psb,.dxf,.dwg,.ifc,.ifczip,.3dm,.skp,.cdr,.step,.stp,.iges,.obj,.fbx,.gltf,.csv,.xlsx,.xls,.docx,.txt,.md";
 
 const FORMAT_HINTS: { label: string; exts: string }[] = [
   { label: "Briefs", exts: "pdf · docx · txt · md" },
-  { label: "Plans", exts: "dxf · dwg · step" },
-  { label: "3D", exts: "obj · fbx · gltf" },
+  { label: "BIM", exts: "ifc (Revit · ArchiCAD · Vectorworks)" },
+  { label: "Plans", exts: "dxf · dwg · cdr · step" },
+  { label: "3D", exts: "obj · fbx · gltf · 3dm · skp" },
   { label: "Data", exts: "csv · xlsx" },
-  { label: "Reference", exts: "png · jpg" },
+  { label: "Reference", exts: "png · jpg · psd" },
 ];
 
 type DialogState = "idle" | "parsing" | "ready" | "error";

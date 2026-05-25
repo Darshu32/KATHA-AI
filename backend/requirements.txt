@@ -49,6 +49,14 @@ ezdxf==1.4.3
 ifcopenshell==0.8.4.post1
 # STEP + G-code written without extra deps (pure stdlib)
 
+# ── Tier 2 importers (parametric + design files) ────
+# rhino3dm = McNeel's official openNURBS Python binding (MIT).
+# Powers app/services/importers/rhino_importer.py — reads .3dm files
+# with the same kernel Rhinoceros itself uses.
+# PSD + DWG + CDR importers are stdlib-only (header parsers with
+# actionable redirects to formats we can fully parse).
+rhino3dm==8.17.0
+
 # ── Dev / Testing ───────────────────────────────────
 httpx==0.28.1
 pytest==8.3.4
