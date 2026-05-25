@@ -65,6 +65,10 @@ export function ProjectPicker({
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [openingId, setOpeningId] = useState<string | null>(null);
+  // Two-step archive — single-click feels destructive; a 4-second
+  // confirmation window prevents accidental loss of a project the
+  // architect has spent days on. Reset on close + on commit.
+  const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
 
   const loadProjects = useCallback(async () => {
     setState("loading");
@@ -98,8 +102,24 @@ export function ProjectPicker({
   const closeAndReset = () => {
     setRenamingId(null);
     setRenameValue("");
+    setConfirmArchiveId(null);
     setError(null);
     onClose();
+  };
+
+  // Two-step archive flow:
+  //   first click  → setConfirmArchiveId(p.id); the row swaps to
+  //                  "Archive?" + "Yes" / "Cancel" affordances
+  //   second click on Yes → actually fires archiveProject(p)
+  //   click anywhere else → clears confirm state via row-specific
+  //                          onMouseLeave or explicit Cancel
+  const requestArchive = (p: ProjectOut) => {
+    if (confirmArchiveId === p.id) {
+      void archiveProject(p);
+      setConfirmArchiveId(null);
+    } else {
+      setConfirmArchiveId(p.id);
+    }
   };
 
   const openProject = async (p: ProjectOut) => {
@@ -281,7 +301,7 @@ export function ProjectPicker({
                         type="button"
                         onClick={() => void openProject(p)}
                         disabled={!!openingId}
-                        className="flex-1 text-left flex items-baseline gap-2 disabled:opacity-50 disabled:cursor-wait"
+                        className="flex-1 text-left flex items-baseline gap-2 min-w-0 disabled:opacity-50 disabled:cursor-wait"
                       >
                         {active ? (
                           <span className="text-pencil text-[10px]" aria-hidden>
@@ -290,39 +310,80 @@ export function ProjectPicker({
                         ) : null}
                         <span className="text-[13px] text-ink-deep font-medium truncate">
                           {p.name}
-                          {openingId === p.id ? (
-                            <span className="ml-2 font-mono text-[10px] text-ink-mute">
-                              opening…
-                            </span>
-                          ) : null}
                         </span>
+                        {/* Project-type badge — gives the architect
+                            at-a-glance category context (Residential
+                            / Commercial / etc) without opening the
+                            project. */}
+                        {p.project_type ? (
+                          <span className="font-mono text-[9.5px] uppercase tracking-tagged text-ink-mute border border-hairline px-1.5 py-0.5 rounded shrink-0">
+                            {p.project_type}
+                          </span>
+                        ) : null}
+                        {openingId === p.id ? (
+                          <span className="ml-1 font-mono text-[10px] text-ink-mute shrink-0">
+                            opening…
+                          </span>
+                        ) : null}
                       </button>
                     )}
                     <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-mute tnum shrink-0">
                       {formatRelative(p.updated_at)}
                     </span>
-                    <div className="opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-2 shrink-0">
-                      {!renaming ? (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setRenamingId(p.id);
-                            setRenameValue(p.name);
-                          }}
-                          className="text-ink-mute hover:text-ink text-[11px] font-mono"
-                          aria-label={`Rename ${p.name}`}
-                        >
-                          Rename
-                        </button>
-                      ) : null}
-                      <button
-                        type="button"
-                        onClick={() => void archiveProject(p)}
-                        className="text-ink-mute hover:text-brick text-[11px] font-mono"
-                        aria-label={`Archive ${p.name}`}
-                      >
-                        Archive
-                      </button>
+                    <div
+                      className={`flex items-center gap-2 shrink-0 transition-opacity ${
+                        confirmArchiveId === p.id
+                          ? "opacity-100"
+                          : "opacity-0 group-hover:opacity-100"
+                      }`}
+                    >
+                      {confirmArchiveId === p.id ? (
+                        <>
+                          <span className="font-mono text-[10px] uppercase tracking-tagged text-brick">
+                            Archive?
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => requestArchive(p)}
+                            className="text-[11px] font-mono text-brick hover:underline"
+                            aria-label={`Confirm archive ${p.name}`}
+                          >
+                            Yes
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmArchiveId(null)}
+                            className="text-[11px] font-mono text-ink-mute hover:text-ink"
+                            aria-label="Cancel archive"
+                          >
+                            Cancel
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          {!renaming ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setRenamingId(p.id);
+                                setRenameValue(p.name);
+                              }}
+                              className="text-ink-mute hover:text-ink text-[11px] font-mono"
+                              aria-label={`Rename ${p.name}`}
+                            >
+                              Rename
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            onClick={() => requestArchive(p)}
+                            className="text-ink-mute hover:text-brick text-[11px] font-mono"
+                            aria-label={`Archive ${p.name}`}
+                          >
+                            Archive
+                          </button>
+                        </>
+                      )}
                     </div>
                   </li>
                 );

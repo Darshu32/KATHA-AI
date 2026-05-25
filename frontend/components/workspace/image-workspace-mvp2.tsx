@@ -12,6 +12,7 @@ import Link from "next/link";
 import { useAuthStore, useConfigStore, useImageGenStore } from "@/lib/store";
 import {
   ApiError,
+  brief as briefApi,
   design as designApi,
   projects as projectsApi,
   resolveAssetUrl,
@@ -27,6 +28,7 @@ import {
   PaperCard,
   SectionTag,
 } from "@/components/primitives";
+import BackendHealthBanner from "@/components/primitives/backend-health-banner";
 import { ImportDialog } from "@/components/workspace/import-dialog";
 import {
   ProjectPicker,
@@ -473,6 +475,7 @@ export default function ImageWorkspaceMvp2() {
 
   return (
     <div className="h-screen w-full flex flex-col bg-paper">
+      <BackendHealthBanner />
       <TopBar
         onToggleTerminal={toggleTerminal}
         terminalOpen={terminalOpen}
@@ -829,6 +832,379 @@ function AccordionSection({
  * Day 1 ships the accordion shell with the existing brief controls
  * landed under section 1. Sections 2–4 carry "Coming Day 2" placeholders
  * so the architect sees where the brief grows into. */
+// ── Brief form schemas (BRD §1A.3/4/5) ────────────────────────────────────
+//
+// Form state is kept loose (strings, comma-separated lists) so inputs
+// feel forgiving. Serialisers below coerce into the strict types the
+// backend Pydantic models expect:
+//   BriefSpace        → SpaceParameters + DimensionsIn + SiteConditions
+//   BriefRequirements → ClientRequirements
+//   BriefRegulatory   → RegulatoryContext + ClimaticZoneEnum
+
+type DimUnit = "m" | "mm" | "ft";
+type ClimaticZone = "" | "hot_dry" | "warm_humid" | "composite" | "temperate" | "cold";
+
+type BriefSpace = {
+  length: string;
+  width: string;
+  height: string;
+  unit: DimUnit;
+  orientation: string;
+  constraints: string;       // comma-separated, "no basement, slope ≤ 5%"
+  site_notes: string;        // free-text rolling up floor/access/light/vent/noise
+};
+
+type BriefRequirements = {
+  functional_needs: string;  // comma-separated
+  aesthetic_preferences: string;
+  narrative: string;
+  budget: string;            // numeric string for input flexibility
+  timeline_weeks: string;
+};
+
+type BriefRegulatory = {
+  country: string;
+  state: string;
+  city: string;
+  postal_code: string;
+  building_codes: string;    // comma-separated
+  climatic_zone: ClimaticZone;
+  compliance_notes: string;
+};
+
+const emptySpace: BriefSpace = {
+  length: "", width: "", height: "", unit: "m",
+  orientation: "", constraints: "", site_notes: "",
+};
+
+const emptyRequirements: BriefRequirements = {
+  functional_needs: "", aesthetic_preferences: "", narrative: "",
+  budget: "", timeline_weeks: "",
+};
+
+const emptyRegulatory: BriefRegulatory = {
+  country: "", state: "", city: "", postal_code: "",
+  building_codes: "", climatic_zone: "", compliance_notes: "",
+};
+
+const splitCsv = (s: string): string[] =>
+  s.split(",").map((x) => x.trim()).filter(Boolean);
+
+function serialiseSpace(s: BriefSpace): Record<string, unknown> | undefined {
+  const length = parseFloat(s.length);
+  const width = parseFloat(s.width);
+  // SpaceParameters requires length+width; skip the section if blank
+  // (the backend tolerates omitted sections via Optional fields on
+  // BriefIntakePayload). Architects can save without dimensions yet.
+  if (!isFinite(length) || !isFinite(width) || length <= 0 || width <= 0) {
+    return undefined;
+  }
+  const height = parseFloat(s.height);
+  return {
+    dimensions: {
+      length,
+      width,
+      ...(isFinite(height) && height > 0 ? { height } : {}),
+      unit: s.unit,
+    },
+    constraints: splitCsv(s.constraints),
+    site_conditions: {
+      orientation: s.orientation,
+      noise_context: s.site_notes,  // rolled into noise_context for v1
+    },
+  };
+}
+
+function serialiseRequirements(r: BriefRequirements): Record<string, unknown> | undefined {
+  const empty = !r.functional_needs && !r.aesthetic_preferences && !r.narrative && !r.budget && !r.timeline_weeks;
+  if (empty) return undefined;
+  const budget = parseFloat(r.budget);
+  const weeks = parseInt(r.timeline_weeks, 10);
+  return {
+    functional_needs: splitCsv(r.functional_needs),
+    aesthetic_preferences: splitCsv(r.aesthetic_preferences),
+    narrative: r.narrative,
+    ...(isFinite(budget) && budget >= 0 ? { budget, currency: "INR" } : {}),
+    ...(isFinite(weeks) && weeks >= 0 ? { timeline_weeks: weeks } : {}),
+  };
+}
+
+function serialiseRegulatory(g: BriefRegulatory): Record<string, unknown> | undefined {
+  const empty = !g.country && !g.state && !g.city && !g.postal_code && !g.building_codes && !g.climatic_zone && !g.compliance_notes;
+  if (empty) return undefined;
+  return {
+    country: g.country,
+    state: g.state,
+    city: g.city,
+    postal_code: g.postal_code,
+    building_codes: splitCsv(g.building_codes),
+    ...(g.climatic_zone ? { climatic_zone: g.climatic_zone } : {}),
+    compliance_notes: g.compliance_notes,
+  };
+}
+
+// ── Brief form primitives — tiny styled inputs shared by all three
+//    section forms. All keep the paper/ink/hairline register and
+//    quiet hover/focus states. Width-100% so they stack cleanly in
+//    the narrow left rail. ─────────────────────────────────────────
+
+function FieldLabel({ children }: { children: React.ReactNode }) {
+  return (
+    <label className="block font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute mb-1">
+      {children}
+    </label>
+  );
+}
+
+function TextInput({
+  value, onChange, placeholder, type = "text",
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  type?: "text" | "number";
+}) {
+  return (
+    <input
+      type={type}
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      className="w-full px-2 py-1.5 text-[12.5px] bg-paper border border-hairline rounded-sm outline-none focus:border-graphite placeholder:text-ink-mute"
+    />
+  );
+}
+
+function TextArea({
+  value, onChange, placeholder, rows = 2,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  placeholder?: string;
+  rows?: number;
+}) {
+  return (
+    <textarea
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      placeholder={placeholder}
+      rows={rows}
+      className="w-full px-2 py-1.5 text-[12.5px] bg-paper border border-hairline rounded-sm outline-none focus:border-graphite resize-none leading-snug placeholder:text-ink-mute"
+    />
+  );
+}
+
+function SelectInput<T extends string>({
+  value, onChange, options, placeholder,
+}: {
+  value: T;
+  onChange: (v: T) => void;
+  options: { value: T; label: string }[];
+  placeholder?: string;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value as T)}
+      className="w-full px-2 py-1.5 text-[12.5px] bg-paper border border-hairline rounded-sm outline-none focus:border-graphite"
+    >
+      {placeholder ? <option value="">{placeholder}</option> : null}
+      {options.map((o) => (
+        <option key={o.value} value={o.value}>{o.label}</option>
+      ))}
+    </select>
+  );
+}
+
+// ── Form components — one per BRD §1A section ─────────────────────────────
+
+const ORIENTATIONS = ["N", "NE", "E", "SE", "S", "SW", "W", "NW"];
+const UNITS: DimUnit[] = ["m", "mm", "ft"];
+const CLIMATE_ZONES: { value: ClimaticZone; label: string }[] = [
+  { value: "hot_dry",     label: "Hot-Dry" },
+  { value: "warm_humid",  label: "Warm-Humid" },
+  { value: "composite",   label: "Composite" },
+  { value: "temperate",   label: "Temperate" },
+  { value: "cold",        label: "Cold" },
+];
+
+function SpaceSiteForm({
+  value, onChange,
+}: {
+  value: BriefSpace;
+  onChange: (v: BriefSpace) => void;
+}) {
+  const set = <K extends keyof BriefSpace>(k: K, v: BriefSpace[K]) =>
+    onChange({ ...value, [k]: v });
+  return (
+    <div className="space-y-4">
+      <div>
+        <FieldLabel>Dimensions</FieldLabel>
+        <div className="grid grid-cols-3 gap-1 mb-1.5">
+          <TextInput type="number" placeholder="L"
+            value={value.length} onChange={(v) => set("length", v)} />
+          <TextInput type="number" placeholder="W"
+            value={value.width} onChange={(v) => set("width", v)} />
+          <TextInput type="number" placeholder="H"
+            value={value.height} onChange={(v) => set("height", v)} />
+        </div>
+        <div className="flex gap-1">
+          {UNITS.map((u) => (
+            <button
+              key={u}
+              type="button"
+              className="slide-pill flex-1 text-center !text-[11px] !px-1.5"
+              data-active={u === value.unit}
+              onClick={() => set("unit", u)}
+            >
+              {u}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <FieldLabel>Orientation</FieldLabel>
+        <div className="grid grid-cols-4 gap-1">
+          {ORIENTATIONS.map((o) => (
+            <button
+              key={o}
+              type="button"
+              className="slide-pill text-center !text-[11px] !px-1.5"
+              data-active={o === value.orientation}
+              onClick={() => set("orientation", o === value.orientation ? "" : o)}
+            >
+              {o}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div>
+        <FieldLabel>Constraints (comma-separated)</FieldLabel>
+        <TextArea rows={2}
+          placeholder="No basement, slope ≤ 5%, retain 2 trees"
+          value={value.constraints}
+          onChange={(v) => set("constraints", v)} />
+      </div>
+      <div>
+        <FieldLabel>Site notes</FieldLabel>
+        <TextArea rows={2}
+          placeholder="Floor level, access, natural light, ventilation, noise context"
+          value={value.site_notes}
+          onChange={(v) => set("site_notes", v)} />
+      </div>
+    </div>
+  );
+}
+
+function RequirementsForm({
+  value, onChange,
+}: {
+  value: BriefRequirements;
+  onChange: (v: BriefRequirements) => void;
+}) {
+  const set = <K extends keyof BriefRequirements>(k: K, v: BriefRequirements[K]) =>
+    onChange({ ...value, [k]: v });
+  return (
+    <div className="space-y-4">
+      <div>
+        <FieldLabel>Functional needs (comma-separated)</FieldLabel>
+        <TextArea rows={2}
+          placeholder="3 bedrooms, home office, prayer room"
+          value={value.functional_needs}
+          onChange={(v) => set("functional_needs", v)} />
+      </div>
+      <div>
+        <FieldLabel>Aesthetic preferences (comma-separated)</FieldLabel>
+        <TextArea rows={2}
+          placeholder="Minimal, warm woods, indoor planting"
+          value={value.aesthetic_preferences}
+          onChange={(v) => set("aesthetic_preferences", v)} />
+      </div>
+      <div>
+        <FieldLabel>Narrative</FieldLabel>
+        <TextArea rows={3}
+          placeholder="Long-form description of the client's intent"
+          value={value.narrative}
+          onChange={(v) => set("narrative", v)} />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <FieldLabel>Budget (₹)</FieldLabel>
+          <TextInput type="number" placeholder="2500000"
+            value={value.budget}
+            onChange={(v) => set("budget", v)} />
+        </div>
+        <div>
+          <FieldLabel>Timeline (weeks)</FieldLabel>
+          <TextInput type="number" placeholder="12"
+            value={value.timeline_weeks}
+            onChange={(v) => set("timeline_weeks", v)} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function RegulatoryForm({
+  value, onChange,
+}: {
+  value: BriefRegulatory;
+  onChange: (v: BriefRegulatory) => void;
+}) {
+  const set = <K extends keyof BriefRegulatory>(k: K, v: BriefRegulatory[K]) =>
+    onChange({ ...value, [k]: v });
+  return (
+    <div className="space-y-4">
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <FieldLabel>Country</FieldLabel>
+          <TextInput placeholder="India"
+            value={value.country} onChange={(v) => set("country", v)} />
+        </div>
+        <div>
+          <FieldLabel>State</FieldLabel>
+          <TextInput placeholder="Karnataka"
+            value={value.state} onChange={(v) => set("state", v)} />
+        </div>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <div>
+          <FieldLabel>City</FieldLabel>
+          <TextInput placeholder="Bangalore"
+            value={value.city} onChange={(v) => set("city", v)} />
+        </div>
+        <div>
+          <FieldLabel>Postal</FieldLabel>
+          <TextInput placeholder="560001"
+            value={value.postal_code} onChange={(v) => set("postal_code", v)} />
+        </div>
+      </div>
+      <div>
+        <FieldLabel>Building codes (comma-separated)</FieldLabel>
+        <TextInput placeholder="NBC-2016, IS-875, ECBC"
+          value={value.building_codes}
+          onChange={(v) => set("building_codes", v)} />
+      </div>
+      <div>
+        <FieldLabel>Climatic zone</FieldLabel>
+        <SelectInput
+          value={value.climatic_zone}
+          onChange={(v) => set("climatic_zone", v)}
+          options={CLIMATE_ZONES}
+          placeholder="— Select zone —"
+        />
+      </div>
+      <div>
+        <FieldLabel>Compliance notes</FieldLabel>
+        <TextArea rows={2}
+          placeholder="Fire NOC, ramp slope ≤ 1:12, EV charging required"
+          value={value.compliance_notes}
+          onChange={(v) => set("compliance_notes", v)} />
+      </div>
+    </div>
+  );
+}
+
 function LeftControls({
   projectType,
   setProjectType,
@@ -851,11 +1227,25 @@ function LeftControls({
   setRatio: (r: ImageRatio) => void;
 }) {
   // Multi-open accordion — architects often want to see Brief + Space
-  // simultaneously when tuning a design. Set tracks which sections are
-  // currently expanded. Brief is open by default.
-  const [openSections, setOpenSections] = useState<Set<string>>(
-    () => new Set(["brief"]),
-  );
+  // simultaneously when tuning a design. State persists to localStorage
+  // so the next session re-opens the same sections (small but high-
+  // value for architects who tune Brief + Regulatory together every
+  // time). Brief is open by default on first visit.
+  const ACCORDION_KEY = "katha.design.accordion.openSections";
+  const [openSections, setOpenSections] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set(["brief"]);
+    try {
+      const raw = localStorage.getItem(ACCORDION_KEY);
+      if (raw) return new Set(JSON.parse(raw) as string[]);
+    } catch {}
+    return new Set(["brief"]);
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try {
+      localStorage.setItem(ACCORDION_KEY, JSON.stringify([...openSections]));
+    } catch {}
+  }, [openSections]);
   const toggle = (id: string) => {
     setOpenSections((prev) => {
       const next = new Set(prev);
@@ -863,6 +1253,46 @@ function LeftControls({
       else next.add(id);
       return next;
     });
+  };
+
+  // Brief section state — three controlled forms backed by their own
+  // schema (BRD §1A.3/4/5). Save button packages all three into a
+  // single /brief/intake POST. State lives here for v1; if other
+  // surfaces (Generate, Notes) need to read the brief we can lift it
+  // up to the workspace store later.
+  const [space, setSpace] = useState<BriefSpace>(emptySpace);
+  const [requirements, setRequirements] = useState<BriefRequirements>(emptyRequirements);
+  const [regulatory, setRegulatory] = useState<BriefRegulatory>(emptyRegulatory);
+  const [saving, setSaving] = useState(false);
+  const [briefSaved, setBriefSaved] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const notify = useToastStore((s) => s.notify);
+
+  const saveBrief = async () => {
+    setSaving(true);
+    setSaveError(null);
+    try {
+      const payload: import("@/lib/api-client").BriefIntakePayload = {
+        project_type: { type: projectType, scale: "" },
+        space: serialiseSpace(space),
+        requirements: serialiseRequirements(requirements),
+        regulatory: serialiseRegulatory(regulatory),
+      };
+      await briefApi.intake(payload);
+      setBriefSaved(true);
+      notify({
+        type: "success",
+        title: "Brief saved",
+        message: "All five sections validated and stored.",
+        durationMs: 2500,
+      });
+      setTimeout(() => setBriefSaved(false), 2500);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : "Could not save brief";
+      setSaveError(msg);
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -934,49 +1364,45 @@ function LeftControls({
 
       <AccordionSection
         title="Space & Site"
-        badge="Day 2"
         open={openSections.has("space")}
         onToggle={() => toggle("space")}
       >
-        <p className="text-[13px] text-ink-soft leading-relaxed">
-          Dimensions (W × D × H mm), site constraints, climate zone.
-          Wires to <span className="font-mono text-[12px]">/brief/intake</span> §1A.3.
-        </p>
-        <p className="mt-2 font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
-          Coming Day 2
-        </p>
+        <SpaceSiteForm value={space} onChange={setSpace} />
       </AccordionSection>
 
       <AccordionSection
         title="Requirements"
-        badge="Day 2"
         open={openSections.has("requirements")}
         onToggle={() => toggle("requirements")}
       >
-        <p className="text-[13px] text-ink-soft leading-relaxed">
-          Functional needs, aesthetic preference, budget band, timeline.
-          Wires to <span className="font-mono text-[12px]">/brief/intake</span> §1A.4.
-        </p>
-        <p className="mt-2 font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
-          Coming Day 2
-        </p>
+        <RequirementsForm value={requirements} onChange={setRequirements} />
       </AccordionSection>
 
       <AccordionSection
         title="Regulatory"
-        badge="Day 2"
         open={openSections.has("regulatory")}
         onToggle={() => toggle("regulatory")}
       >
-        <p className="text-[13px] text-ink-soft leading-relaxed">
-          Country / state / city, applicable codes (NBC · IBC · ECBC),
-          compliance notes. Wires to{" "}
-          <span className="font-mono text-[12px]">/brief/intake</span> §1A.5.
-        </p>
-        <p className="mt-2 font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
-          Coming Day 2
-        </p>
+        <RegulatoryForm value={regulatory} onChange={setRegulatory} />
       </AccordionSection>
+
+      {/* Sticky Save brief footer — packages the three section forms
+          (BRD §1A.3/4/5) plus the Brief chiclets into a /brief/intake
+          payload. Currency hard-defaulted to INR for v1 since the
+          cost engine is INR-only today. */}
+      <div className="sticky bottom-0 bg-paper-soft border-t border-hairline px-5 py-3">
+        <button
+          type="button"
+          onClick={saveBrief}
+          disabled={saving}
+          className="w-full text-[13px] font-medium px-3 py-2 bg-ink-deep text-paper hover:bg-ink rounded-md transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+        >
+          {saving ? "Saving…" : briefSaved ? "Saved ✓" : "Save brief"}
+        </button>
+        {saveError ? (
+          <p className="mt-1.5 text-[11px] font-mono text-brick">{saveError}</p>
+        ) : null}
+      </div>
     </aside>
   );
 }
@@ -1000,6 +1426,7 @@ function CanvasPromptBar({
   onGenerate: () => void;
 }) {
   const ref = useRef<HTMLTextAreaElement | null>(null);
+  const [elapsedSec, setElapsedSec] = useState(0);
 
   useEffect(() => {
     const el = ref.current;
@@ -1007,6 +1434,21 @@ function CanvasPromptBar({
     el.style.height = "auto";
     el.style.height = Math.min(el.scrollHeight, 180) + "px";
   }, [prompt]);
+
+  // Elapsed counter while generating — gives the architect a sense of
+  // forward progress during the 5-15s provider round-trip. Resets on
+  // each new generation. Reads as "Generating… 7s" on the button.
+  useEffect(() => {
+    if (!isGenerating) {
+      setElapsedSec(0);
+      return;
+    }
+    const startedAt = Date.now();
+    const id = setInterval(() => {
+      setElapsedSec(Math.floor((Date.now() - startedAt) / 1000));
+    }, 250);
+    return () => clearInterval(id);
+  }, [isGenerating]);
 
   return (
     <div className="border-t border-hairline bg-paper px-6 py-4">
@@ -1031,9 +1473,11 @@ function CanvasPromptBar({
             type="button"
             onClick={onGenerate}
             disabled={!prompt.trim() || isGenerating}
-            className="shrink-0 text-[13px] font-medium px-4 py-1.5 bg-ink-deep text-paper hover:bg-ink rounded-md transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+            className="shrink-0 text-[13px] font-medium px-4 py-1.5 bg-ink-deep text-paper hover:bg-ink rounded-md transition-colors disabled:opacity-30 disabled:cursor-not-allowed tabular-nums"
           >
-            {isGenerating ? "Generating…" : "Generate"}
+            {isGenerating
+              ? `Generating… ${elapsedSec}s`
+              : "Generate"}
           </button>
         </div>
         <div className="mt-2 px-1 text-[11px] text-ink-mute">
@@ -1664,7 +2108,20 @@ function RightSummary({
   token: string;
 }) {
   const hasGraph = objects.length > 0;
-  const [tab, setTab] = useState<RightTab>("summary");
+  const TAB_KEY = "katha.design.rightRail.activeTab";
+  const [tab, setTab] = useState<RightTab>(() => {
+    if (typeof window === "undefined") return "summary";
+    try {
+      const saved = localStorage.getItem(TAB_KEY) as RightTab | null;
+      const allowed: RightTab[] = ["summary", "views", "specs", "cost", "compliance", "recs"];
+      if (saved && allowed.includes(saved)) return saved;
+    } catch {}
+    return "summary";
+  });
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    try { localStorage.setItem(TAB_KEY, tab); } catch {}
+  }, [tab]);
 
   // Tab definitions — all six surfaces visible at full width. Specs
   // is the placeholder tab; its body carries the "Post-sprint" note,
@@ -1759,6 +2216,13 @@ function RightSummary({
           />
         ) : tab === "cost" ? (
           <CostTab hasDesign={hasDesign} mepCost={mepCost} />
+        ) : tab === "specs" ? (
+          <SpecsTab
+            hasActiveProject={!!activeProjectId && hasDesign}
+            activeProjectId={activeProjectId}
+            latestVersion={latestVersion}
+            token={token}
+          />
         ) : (
           <TabPlaceholder tab={tab} />
         )}
@@ -2373,6 +2837,261 @@ function ExportButton({
       </svg>
       Export
     </button>
+  );
+}
+
+/* SpecsTab — BRD §3B/C/D consolidated spec sheet in the right rail.
+ *
+ * One fetch (design.getSpecs) pulls the entire bundle:
+ *   • material      — primary structure + secondary + hardware +
+ *                     upholstery + finishing (each a row list)
+ *   • manufacturing — free-form dict (woodworking notes, metal fab,
+ *                     upholstery assembly, etc — depends on theme)
+ *   • mep           — hvac · electrical · plumbing summaries
+ *
+ * Inside the tab we present three collapsible sub-sections so the
+ * architect scans down without scroll-overload. Each subsection
+ * stays consistent with the rail's hairline / paper / mono register. */
+function SpecsTab({
+  hasActiveProject,
+  activeProjectId,
+  latestVersion,
+  token,
+}: {
+  hasActiveProject: boolean;
+  activeProjectId: string | null;
+  latestVersion: number | null;
+  token: string;
+}) {
+  const [bundle, setBundle] = useState<
+    import("@/lib/types").SpecBundle | null
+  >(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [open, setOpen] = useState<Set<string>>(() => new Set(["material"]));
+  const toggle = (id: string) =>
+    setOpen((p) => {
+      const n = new Set(p);
+      if (n.has(id)) n.delete(id); else n.add(id);
+      return n;
+    });
+
+  useEffect(() => {
+    if (!hasActiveProject || !activeProjectId) {
+      setBundle(null);
+      return;
+    }
+    setLoading(true);
+    setErr(null);
+    designApi
+      .getSpecs(token, activeProjectId, latestVersion ?? undefined)
+      .then((res) => setBundle(res.spec_bundle))
+      .catch((e) => setErr(e instanceof Error ? e.message : "Could not load specs"))
+      .finally(() => setLoading(false));
+  }, [hasActiveProject, activeProjectId, latestVersion, token]);
+
+  if (!hasActiveProject) {
+    return (
+      <div className="space-y-3">
+        <SectionTag>Specs</SectionTag>
+        <p className="text-[13px] text-ink-soft leading-relaxed">
+          Material / Manufacturing / MEP specs — five material categories,
+          per-trade manufacturing notes, and HVAC + electrical + plumbing
+          targets. Populates after the first generation.
+        </p>
+        <p className="font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
+          ← /projects/{"{id}"}/specs · BRD §3B/C/D
+        </p>
+      </div>
+    );
+  }
+  if (loading) {
+    return (
+      <div className="space-y-3">
+        <SectionTag>Specs</SectionTag>
+        <p className="text-[13px] text-ink-soft italic">Loading spec bundle…</p>
+      </div>
+    );
+  }
+  if (err) {
+    return (
+      <div className="space-y-3">
+        <SectionTag>Specs</SectionTag>
+        <p className="text-[13px] text-brick">{err}</p>
+      </div>
+    );
+  }
+  if (!bundle) return null;
+
+  const matGroups: { key: string; label: string; rows: import("@/lib/types").MaterialSpecRow[] }[] = [
+    { key: "primary",   label: "Primary structure",   rows: bundle.material.primary_structure   ?? [] },
+    { key: "secondary", label: "Secondary materials", rows: bundle.material.secondary_materials ?? [] },
+    { key: "hardware",  label: "Hardware",            rows: bundle.material.hardware            ?? [] },
+    { key: "uphol",     label: "Upholstery",          rows: bundle.material.upholstery          ?? [] },
+    { key: "finish",    label: "Finishing",           rows: bundle.material.finishing           ?? [] },
+  ];
+  const matTotal = matGroups.reduce((n, g) => n + g.rows.length, 0);
+
+  return (
+    <div className="space-y-4">
+      {/* Meta strip — one-line context for the bundle */}
+      <div className="text-[11.5px] text-ink-mute">
+        <span className="font-mono">v{bundle.objects_count ?? 0} objects</span>
+        <span className="mx-1.5">·</span>
+        <span>{bundle.meta?.theme ?? "—"}</span>
+        <span className="mx-1.5">·</span>
+        <span>{bundle.meta?.room_type ?? "—"}</span>
+      </div>
+
+      <SpecSubsection
+        title="Material"
+        badge={`${matTotal} row${matTotal === 1 ? "" : "s"}`}
+        open={open.has("material")}
+        onToggle={() => toggle("material")}
+      >
+        {matTotal === 0 ? (
+          <p className="text-[11.5px] text-ink-mute italic">No material rows on this version.</p>
+        ) : (
+          matGroups.map((g) =>
+            g.rows.length === 0 ? null : (
+              <MaterialGroup key={g.key} label={g.label} rows={g.rows} />
+            ),
+          )
+        )}
+      </SpecSubsection>
+
+      <SpecSubsection
+        title="Manufacturing"
+        badge={`${Object.keys(bundle.manufacturing ?? {}).length} trade${Object.keys(bundle.manufacturing ?? {}).length === 1 ? "" : "s"}`}
+        open={open.has("manufacturing")}
+        onToggle={() => toggle("manufacturing")}
+      >
+        <DictDump dict={bundle.manufacturing} />
+      </SpecSubsection>
+
+      <SpecSubsection
+        title="MEP"
+        badge="3 systems"
+        open={open.has("mep")}
+        onToggle={() => toggle("mep")}
+      >
+        <div className="space-y-3">
+          {(["hvac", "electrical", "plumbing"] as const).map((sys) => (
+            <div key={sys}>
+              <h5 className="font-mono text-[10px] uppercase tracking-tagged text-ink-mute mb-1">
+                {sys}
+              </h5>
+              <DictDump dict={bundle.mep?.[sys] as Record<string, unknown> | undefined} />
+            </div>
+          ))}
+        </div>
+      </SpecSubsection>
+    </div>
+  );
+}
+
+function SpecSubsection({
+  title, badge, open, onToggle, children,
+}: {
+  title: string;
+  badge?: string;
+  open: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <section className="border border-hairline rounded-md overflow-hidden">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="w-full px-3 py-2 flex items-center justify-between gap-2 hover:bg-paper transition-colors"
+      >
+        <span className="font-mono text-[10.5px] uppercase tracking-tagged text-ink-deep">
+          {title}
+        </span>
+        <span className="flex items-center gap-2">
+          {badge ? (
+            <span className="font-mono text-[10px] text-ink-mute">{badge}</span>
+          ) : null}
+          <svg width="9" height="9" viewBox="0 0 9 9"
+            className={`text-ink-mute transition-transform ${open ? "rotate-90" : ""}`}
+            aria-hidden="true"
+          >
+            <path d="M3 1.5l3 3-3 3" stroke="currentColor" strokeWidth="1.3"
+              strokeLinecap="round" fill="none" />
+          </svg>
+        </span>
+      </button>
+      {open ? (
+        <div className="px-3 pb-3 pt-1 bg-paper">{children}</div>
+      ) : null}
+    </section>
+  );
+}
+
+function MaterialGroup({
+  label, rows,
+}: {
+  label: string;
+  rows: import("@/lib/types").MaterialSpecRow[];
+}) {
+  const fmtRange = (r: [number, number] | null, suffix = "") =>
+    !r ? "—" : `${Math.round(r[0]).toLocaleString("en-IN")}–${Math.round(r[1]).toLocaleString("en-IN")}${suffix}`;
+  return (
+    <div className="mb-3 last:mb-0">
+      <h5 className="font-mono text-[10px] uppercase tracking-tagged text-ink-mute mb-1.5">
+        {label}
+      </h5>
+      <div className="border-t border-hairline">
+        {rows.map((r, i) => (
+          <div key={`${r.name}-${i}`} className="py-2 border-b border-hairline last:border-b-0">
+            <div className="flex items-baseline justify-between gap-2">
+              <span className="text-[12.5px] text-ink-deep font-medium">{r.name}</span>
+              {r.cost_inr ? (
+                <span className="font-mono text-[11px] text-pencil tnum shrink-0">
+                  ₹{fmtRange(r.cost_inr)}/{r.unit || "u"}
+                </span>
+              ) : null}
+            </div>
+            <div className="mt-0.5 text-[11px] text-ink-soft leading-snug">
+              {[r.grade, r.finish, r.color].filter(Boolean).join(" · ") || <span className="italic">—</span>}
+            </div>
+            <div className="mt-0.5 flex items-baseline justify-between gap-2 font-mono text-[10px] text-ink-mute">
+              <span>{r.supplier || "—"}</span>
+              {r.lead_time_weeks ? (
+                <span className="tnum">{fmtRange(r.lead_time_weeks)} wk</span>
+              ) : null}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/* DictDump — renders a Record<string, unknown> as flat key/value rows.
+ * Nested objects collapse to JSON for now — manufacturing + MEP dicts
+ * are usually flat scalars from the backend, so this looks clean. */
+function DictDump({ dict }: { dict?: Record<string, unknown> }) {
+  const entries = Object.entries(dict ?? {});
+  if (entries.length === 0) {
+    return <p className="text-[11.5px] text-ink-mute italic">No data on this version.</p>;
+  }
+  return (
+    <div className="border-t border-hairline">
+      {entries.map(([k, v]) => (
+        <div key={k} className="py-1.5 border-b border-hairline last:border-b-0 flex items-baseline justify-between gap-2">
+          <span className="font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
+            {k.replace(/_/g, " ")}
+          </span>
+          <span className="text-[11.5px] text-ink text-right font-mono break-all max-w-[60%]">
+            {typeof v === "string" || typeof v === "number" || typeof v === "boolean"
+              ? String(v)
+              : JSON.stringify(v)}
+          </span>
+        </div>
+      ))}
+    </div>
   );
 }
 

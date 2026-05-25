@@ -18,6 +18,7 @@ import { processChildren } from "@/lib/chat-callouts";
 import { toastError, useToastStore } from "@/lib/toast-store";
 import type { ChatMode, Message } from "@/lib/types";
 import { SectionTag } from "@/components/primitives";
+import BackendHealthBanner from "@/components/primitives/backend-health-banner";
 import NotesSidebar from "@/components/notes/notes-sidebar";
 
 // Unicode circled numerals for ref markers. Goes up to ①–⑳. Beyond
@@ -105,6 +106,23 @@ export default function ChatWorkspaceMvp1() {
   useEffect(() => {
     if (chatMode === "deep") setNotesPanelOpen(true);
   }, [chatMode, setNotesPanelOpen]);
+
+  // First-mount mobile guard — collapse the conversation sidebar on
+  // small viewports so the chat reads as a full-width column. Above
+  // md the sidebar's default state is preserved. The 200ms delay
+  // gives the zustand-persist rehydration time to settle before we
+  // override; otherwise our setSidebarOpen(false) can be clobbered
+  // by the rehydrated value. Runs once per mount.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const id = setTimeout(() => {
+      if (window.matchMedia("(max-width: 767px)").matches) {
+        useChatStore.getState().setSidebarOpen(false);
+      }
+    }, 200);
+    return () => clearTimeout(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const submit = useCallback(
     async (text: string) => {
@@ -284,9 +302,19 @@ export default function ChatWorkspaceMvp1() {
 
   return (
     <div className="min-h-screen w-full flex flex-col bg-paper">
+      <BackendHealthBanner />
       <TopBar onToggleSidebar={toggleSidebar} />
 
-      <div className="flex-1 flex min-h-0">
+      <div className="flex-1 flex min-h-0 relative">
+        {/* Mobile backdrop — dismisses the slide-over sidebar on tap.
+            Only renders below md when the sidebar is open. */}
+        {sidebarOpen ? (
+          <div
+            className="fixed inset-0 bg-ink-deep/30 z-30 md:hidden"
+            onClick={toggleSidebar}
+            aria-hidden="true"
+          />
+        ) : null}
         {sidebarOpen ? (
           <ConversationSidebar
             conversations={conversations as ConversationLite[]}
@@ -468,7 +496,7 @@ function ConversationSidebar({
   const groups = useMemo(() => groupConversationsByDate(sorted), [sorted]);
 
   return (
-    <aside className="w-64 shrink-0 bg-paper-soft flex flex-col">
+    <aside className="w-64 shrink-0 bg-paper-soft flex flex-col fixed inset-y-0 left-0 z-40 shadow-lg md:static md:z-auto md:shadow-none">
       <div className="px-4 py-4">
         <button
           type="button"
