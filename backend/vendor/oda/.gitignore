@@ -1,0 +1,5 @@
+# ODA File Converter binaries — not redistributable per ODA EULA.
+# Fetch manually per backend/vendor/oda/README.md before building.
+*.deb
+*.tar.gz
+*.zip

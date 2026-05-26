@@ -95,6 +95,32 @@ sequence:
    indexing, profile extraction) silently degrade if the broker
    is unhealthy. Monitor the broker queue depth.
 
+## ODA File Converter (optional, enables native DWG import)
+
+The `dwg_importer` shells out to ODA File Converter to turn `.dwg`
+into `.dxf` server-side, then routes through the existing `dxf_importer`.
+The binary is **non-redistributable** per ODA's EULA, so the Dockerfile
+cannot pull it from a public URL — we install it from
+`backend/vendor/oda/*.deb` when present, otherwise the importer falls
+back to its actionable redirect ("re-export as DXF / IFC and re-upload").
+
+1. **Fetch** the **x86_64 .deb** from
+   <https://www.opendesign.com/guestfiles/oda_file_converter>, accept
+   the EULA, and stage it in your CI artefact store (S3 / GCS /
+   Artifact Registry — same place you stage other 3rd-party binaries).
+2. **Drop into the build context** at `backend/vendor/oda/` before
+   `docker build`. The Dockerfile detects the `.deb`, installs it,
+   pulls the Qt/X dependency chain + xvfb, and the importer picks
+   it up automatically.
+3. **Verify after deploy** — POST any `.dwg` to `/api/v1/imports/parse`
+   and confirm the response's `extracted.converter` is `"oda"` (not
+   `"none"`). Or shell in and run `ODAFileConverter --version`.
+
+When ODA fails to convert a specific file (corrupt header, exotic
+release), the importer returns `extracted.converter = "oda_failed"`
+plus a diagnostic warning — useful for telling users-with-broken-files
+apart from servers-without-the-binary.
+
 ## Migrations
 
 ```bash
