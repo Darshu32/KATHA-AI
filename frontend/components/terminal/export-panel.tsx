@@ -19,6 +19,7 @@ const FORMATS: FormatMeta[] = [
   { id: "pdf", label: "PDF Dossier", description: "Print-ready multi-section dossier", group: "document", icon: FileText },
   { id: "docx", label: "Word Spec", description: "Editable spec document for client review", group: "document", icon: FileText },
   { id: "xlsx", label: "Excel Schedule", description: "4 sheets: summary, materials, cost, MEP", group: "document", icon: FileSpreadsheet },
+  { id: "psd", label: "Photoshop PSD", description: "2D plan, layer per object grouped by space", group: "document", icon: Layers },
   { id: "dxf", label: "DXF Floor Plan", description: "AutoCAD R2010, layered plan", group: "cad", icon: Layers },
   { id: "obj", label: "Wavefront OBJ", description: "Zip with .obj + .mtl, for Blender / Rhino", group: "cad", icon: Boxes },
   { id: "gltf", label: "glTF 2.0", description: "Web 3D, opens in three.js / Blender", group: "cad", icon: Boxes },
@@ -86,7 +87,7 @@ export default function ExportPanel() {
         style={{ borderBottom: "1px solid var(--rule)" }}
       >
         <span className="text-[11px]" style={{ color: "var(--ink-3)" }}>
-          10 export formats · project <span style={{ color: "var(--ink)" }}>{activeProjectId}</span>
+          11 export formats · project <span style={{ color: "var(--ink)" }}>{activeProjectId}</span>
         </span>
         {lastDownloaded && (
           <span className="text-[10px]" style={{ color: "#3a6a7a" }}>

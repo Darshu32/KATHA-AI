@@ -461,7 +461,7 @@ export interface SpecBundle {
 }
 
 export type ExportFormat =
-  | "pdf" | "docx" | "xlsx"
+  | "pdf" | "docx" | "xlsx" | "psd"
   | "dxf" | "obj" | "gltf" | "3dm"
   | "ifc" | "step" | "gcode";
 

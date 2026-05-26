@@ -20,6 +20,7 @@ from app.services.exporters import (
     obj_exporter,
     pdf_exporter,
     pptx_exporter,
+    psd_exporter,
     rhino_exporter,
     step_exporter,
     xlsx_exporter,
@@ -32,6 +33,7 @@ _REGISTRY = {
     "xlsx": xlsx_exporter,
     "pptx": pptx_exporter,           # client-facing slide deck
     "html": html_exporter,           # interactive single-file viewer
+    "psd": psd_exporter,             # Photoshop 2D plan (layer per object)
     # Pass B — CAD / 3D
     "dxf": dxf_exporter,             # AutoCAD-compatible 2D plans
     "obj": obj_exporter,             # SketchUp / Rhino / Blender mesh
