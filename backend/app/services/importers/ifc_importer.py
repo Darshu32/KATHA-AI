@@ -31,10 +31,64 @@ from typing import Any
 
 try:
     import ifcopenshell
+    import ifcopenshell.util.element as _ifc_element
+    import ifcopenshell.util.unit as _ifc_unit
 except Exception:  # noqa: BLE001
     ifcopenshell = None
+    _ifc_element = None
+    _ifc_unit = None
 
 logger = logging.getLogger(__name__)
+
+
+# Canonical IFC quantity / property names we look for on IfcSpace. Keys
+# are normalised (lower-cased, stripped of underscores + whitespace) so
+# the lookup tolerates "NetFloorArea" / "Net Floor Area" / "net_area"
+# / "NETAREA" without per-author guesswork.
+#
+# Order within each tuple is preference: the first match wins. Net
+# values are preferred over gross because they reflect usable interior
+# area — the number an architect actually thinks in.
+_AREA_NET_KEYS: tuple[str, ...] = (
+    "netfloorarea", "netplannedarea", "netarea",
+)
+_AREA_GROSS_KEYS: tuple[str, ...] = (
+    "grossfloorarea", "grossplannedarea", "grossarea",
+)
+_AREA_GENERIC_KEYS: tuple[str, ...] = (
+    "area",
+)
+_VOLUME_NET_KEYS: tuple[str, ...] = ("netvolume",)
+_VOLUME_GROSS_KEYS: tuple[str, ...] = ("grossvolume",)
+_VOLUME_GENERIC_KEYS: tuple[str, ...] = ("volume",)
+_PERIMETER_NET_KEYS: tuple[str, ...] = ("netperimeter",)
+_PERIMETER_GROSS_KEYS: tuple[str, ...] = ("grossperimeter",)
+_PERIMETER_GENERIC_KEYS: tuple[str, ...] = ("perimeter",)
+_HEIGHT_KEYS: tuple[str, ...] = (
+    "height", "finishfloortofinishceilingheight", "ceilingheight",
+)
+
+
+def _norm_key(s: str) -> str:
+    return s.replace(" ", "").replace("_", "").lower()
+
+
+def _find_quantity(psets: dict[str, dict[str, Any]], candidates: tuple[str, ...]) -> float | None:
+    """Walk every pset/qset property looking for the first key whose
+    normalised form matches one of the candidates. Returns the value as
+    a float, or None if no candidate appears."""
+    candidate_set = set(candidates)
+    for _pset_name, props in psets.items():
+        if not isinstance(props, dict):
+            continue
+        for raw_key, raw_val in props.items():
+            if _norm_key(str(raw_key)) not in candidate_set:
+                continue
+            try:
+                return float(raw_val)
+            except (TypeError, ValueError):
+                continue
+    return None
 
 # Element types we count in the summary. Order matters for stable output.
 _INTERESTING_TYPES: tuple[str, ...] = (
@@ -106,33 +160,98 @@ def _bbox(model) -> dict[str, Any] | None:
     return out
 
 
-def _space_summary(space) -> dict[str, Any]:
+def _space_summary(space, length_scale: float) -> dict[str, Any]:
+    """Build a quantity-rich summary for an IfcSpace.
+
+    Uses ifcopenshell.util.element.get_psets() so we cover both
+    BaseQuantities (IfcElementQuantity → IfcQuantityArea/Volume/Length)
+    AND property sets like Pset_SpaceCommon (NetPlannedArea,
+    GrossPlannedArea). Authors disagree on which place to put the same
+    number; we look in both.
+
+    `length_scale` is the file's length unit expressed in metres
+    (computed once via ifcopenshell.util.unit.calculate_unit_scale).
+    We apply scale^2 to areas and scale^3 to volumes so a model
+    authored in millimetres still produces m² / m³ values.
+    """
     name = _safe(space, "Name") or _safe(space, "LongName") or "Space"
-    area: float | None = None
-    try:
-        for rel in _safe(space, "IsDefinedBy") or []:
-            if not rel.is_a("IfcRelDefinesByProperties"):
-                continue
-            pset = _safe(rel, "RelatingPropertyDefinition")
-            if pset is None or not pset.is_a("IfcElementQuantity"):
-                continue
-            for q in _safe(pset, "Quantities") or []:
-                if q.is_a("IfcQuantityArea"):
-                    qname = (_safe(q, "Name") or "").lower()
-                    if "area" in qname or qname in {"netfloorarea", "grossfloorarea"}:
-                        try:
-                            area = float(_safe(q, "AreaValue") or 0.0)
-                            break
-                        except (TypeError, ValueError):
-                            continue
-            if area is not None:
-                break
-    except Exception:  # noqa: BLE001
-        pass
+    long_name = _safe(space, "LongName") or None
+
+    psets: dict[str, dict[str, Any]] = {}
+    if _ifc_element is not None:
+        try:
+            psets = _ifc_element.get_psets(space) or {}
+        except Exception:  # noqa: BLE001
+            psets = {}
+
+    area_scale = length_scale * length_scale
+    volume_scale = length_scale * length_scale * length_scale
+
+    def _area(keys: tuple[str, ...]) -> float | None:
+        v = _find_quantity(psets, keys)
+        return v * area_scale if v is not None else None
+
+    def _volume(keys: tuple[str, ...]) -> float | None:
+        v = _find_quantity(psets, keys)
+        return v * volume_scale if v is not None else None
+
+    def _length(keys: tuple[str, ...]) -> float | None:
+        v = _find_quantity(psets, keys)
+        return v * length_scale if v is not None else None
+
+    net_area = _area(_AREA_NET_KEYS)
+    gross_area = _area(_AREA_GROSS_KEYS)
+    if net_area is None and gross_area is None:
+        # Last-ditch — accept any property literally named "Area".
+        generic = _area(_AREA_GENERIC_KEYS)
+    else:
+        generic = None
+
+    net_volume = _volume(_VOLUME_NET_KEYS)
+    gross_volume = _volume(_VOLUME_GROSS_KEYS)
+    if net_volume is None and gross_volume is None:
+        generic_volume = _volume(_VOLUME_GENERIC_KEYS)
+    else:
+        generic_volume = None
+
+    net_perimeter = _length(_PERIMETER_NET_KEYS)
+    gross_perimeter = _length(_PERIMETER_GROSS_KEYS)
+    if net_perimeter is None and gross_perimeter is None:
+        generic_perimeter = _length(_PERIMETER_GENERIC_KEYS)
+    else:
+        generic_perimeter = None
+
+    height = _length(_HEIGHT_KEYS)
+
+    # Preferred single-value "area_m2" for backward compat — prefer net,
+    # then gross, then anything-area-named.
+    area_m2 = net_area if net_area is not None else gross_area if gross_area is not None else generic
+    volume_m3 = (
+        net_volume if net_volume is not None
+        else gross_volume if gross_volume is not None
+        else generic_volume
+    )
+    perimeter_m = (
+        net_perimeter if net_perimeter is not None
+        else gross_perimeter if gross_perimeter is not None
+        else generic_perimeter
+    )
+
+    def _r2(v: float | None) -> float | None:
+        return round(v, 2) if v is not None else None
+
+    def _r3(v: float | None) -> float | None:
+        return round(v, 3) if v is not None else None
+
     return {
         "name": str(name),
-        "long_name": str(_safe(space, "LongName") or "") or None,
-        "area_m2": round(area, 2) if area is not None else None,
+        "long_name": str(long_name) if long_name else None,
+        "area_m2": _r2(area_m2),
+        "net_floor_area_m2": _r2(net_area),
+        "gross_floor_area_m2": _r2(gross_area),
+        "volume_m3": _r2(volume_m3),
+        "perimeter_m": _r3(perimeter_m),
+        "height_m": _r3(height),
     }
 
 
@@ -185,7 +304,16 @@ def parse(filename: str, payload: bytes) -> dict[str, Any]:
         sites = model.by_type("IfcSite")
         buildings = model.by_type("IfcBuilding")
         storeys = model.by_type("IfcBuildingStorey")
-        spaces = [_space_summary(s) for s in model.by_type("IfcSpace")]
+        # Length unit scale: 1.0 for files in metres, 0.001 for mm,
+        # 0.3048 for feet, etc. Areas use scale^2, volumes scale^3.
+        # Falls back to 1.0 if the helper isn't available.
+        length_scale = 1.0
+        if _ifc_unit is not None:
+            try:
+                length_scale = float(_ifc_unit.calculate_unit_scale(model) or 1.0)
+            except Exception:  # noqa: BLE001
+                length_scale = 1.0
+        spaces = [_space_summary(s, length_scale) for s in model.by_type("IfcSpace")]
 
         type_counts: dict[str, int] = {}
         for t in _INTERESTING_TYPES:
@@ -212,6 +340,7 @@ def parse(filename: str, payload: bytes) -> dict[str, Any]:
             "material_count": len(materials),
             "materials": materials[:50],
             "bbox": bbox,
+            "length_scale_to_m": round(length_scale, 6),
         }
 
         extent_str = ""

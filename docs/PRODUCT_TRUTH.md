@@ -346,7 +346,7 @@ codebase is wired):
 | Design language | Pending |
 | Hosting / deployment | Pending |
 | Pricing model (free / paid / enterprise) | Pending |
-| Target market (India / global / specific city) | Pending |
+| Target market | **Universal OS for architects worldwide** (Indian company). 8 regions in scope — India, North America, Europe, Middle East (GCC), Asia-Pacific, Latin America, Africa, Oceania. TAM ≈ 1.44M architects. v1 engineering reality: EU-hosted backend + EU-routed AI calls (satisfies both GDPR and DPDPA); India / US / APAC regions follow as latency justifies. Per-region software adoption drives import/export interop priorities — see Global Software Integration deck (2026-05-25). |
 
 ---
 
