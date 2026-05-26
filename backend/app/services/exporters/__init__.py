@@ -20,6 +20,7 @@ from app.services.exporters import (
     obj_exporter,
     pdf_exporter,
     pptx_exporter,
+    rhino_exporter,
     step_exporter,
     xlsx_exporter,
 )
@@ -36,6 +37,7 @@ _REGISTRY = {
     "obj": obj_exporter,             # SketchUp / Rhino / Blender mesh
     "gltf": gltf_exporter,           # web-friendly 3D
     "fbx": fbx_exporter,             # 3DS Max / Maya / Unreal / Unity
+    "3dm": rhino_exporter,           # Rhino native (round-trips with importer)
     # Pass C — BIM / CAD exchange / specialist
     "ifc": ifc_exporter,             # BIM (IFC4 — Revit/ArchiCAD/Vectorworks ingest)
     "step": step_exporter,           # parametric solid CAD exchange (CATIA/NX/SW)

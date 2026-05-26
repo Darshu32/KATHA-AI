@@ -462,7 +462,7 @@ export interface SpecBundle {
 
 export type ExportFormat =
   | "pdf" | "docx" | "xlsx"
-  | "dxf" | "obj" | "gltf"
+  | "dxf" | "obj" | "gltf" | "3dm"
   | "ifc" | "step" | "gcode";
 
 export interface LayoutPreset {
