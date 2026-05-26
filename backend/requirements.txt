@@ -53,9 +53,14 @@ ifcopenshell==0.8.4.post1
 # rhino3dm = McNeel's official openNURBS Python binding (MIT).
 # Powers app/services/importers/rhino_importer.py — reads .3dm files
 # with the same kernel Rhinoceros itself uses.
-# PSD + DWG + CDR importers are stdlib-only (header parsers with
-# actionable redirects to formats we can fully parse).
 rhino3dm==8.17.0
+# psd-tools = reads Photoshop layer trees + composites Pillow images.
+# psd_importer falls back to a stdlib header-only parser when psd-tools
+# is missing or the file is too damaged to open via the library.
+# Pulls Pillow + numpy transitively (both already image-pipeline deps).
+psd-tools==1.17.0
+# DWG + CDR + SKP importers remain stdlib-only (header parsers with
+# actionable redirects to formats we can fully parse).
 
 # ── Dev / Testing ───────────────────────────────────
 httpx==0.28.1
