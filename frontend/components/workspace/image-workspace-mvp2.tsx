@@ -2136,15 +2136,21 @@ function RightSummary({
   ];
 
   return (
-    <aside className="w-80 shrink-0 bg-paper-soft border-l border-hairline overflow-y-auto draft-scroll flex flex-col">
+    <aside className="w-80 shrink-0 bg-paper-soft border-l border-hairline overflow-y-auto draft-scroll">
       {/* Sticky tab bar — sits at the top of the rail; pencil-red
           underline marks the active tab (same register as the bottom
           terminal tabs for visual continuity). ARIA roles let screen
-          readers and keyboard users navigate with arrow keys + Tab. */}
+          readers and keyboard users navigate with arrow keys + Tab.
+
+          NOTE: the aside is intentionally NOT `flex flex-col`. Position
+          sticky inside an overflow-y-auto flex column container is
+          unreliable — the flex layout can compress the sticky child
+          and break the anchor. Block flow + overflow-y-auto on the
+          aside gives sticky a stable scroll context. */}
       <div
         role="tablist"
         aria-label="Design review surfaces"
-        className="sticky top-0 z-10 bg-paper-soft border-b border-hairline px-2 flex items-center overflow-x-auto draft-scroll"
+        className="sticky top-0 z-20 bg-paper-soft border-b border-hairline shadow-[0_1px_0_rgba(0,0,0,0.02),0_4px_8px_-6px_rgba(0,0,0,0.08)] px-2 flex items-center overflow-x-auto draft-scroll"
       >
         {tabs.map((t) => {
           const active = t.id === tab;
@@ -2161,7 +2167,7 @@ function RightSummary({
               className={`font-mono text-[10.5px] uppercase tracking-[0.10em] px-2 py-2.5 transition-colors border-b-2 whitespace-nowrap focus:outline-none focus-visible:ring-2 focus-visible:ring-pencil/40 focus-visible:rounded-sm ${
                 active
                   ? "text-ink-deep border-pencil"
-                  : "text-ink-mute hover:text-ink-soft border-transparent"
+                  : "text-ink-soft hover:text-ink-deep border-transparent"
               }`}
             >
               {t.label}
@@ -2177,7 +2183,7 @@ function RightSummary({
         role="tabpanel"
         id={`tabpanel-${tab}`}
         aria-labelledby={`tab-${tab}`}
-        className="px-5 py-5 flex-1"
+        className="px-5 py-5"
       >
         {tab === "summary" ? (
           <SummaryTab
