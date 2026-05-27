@@ -3887,13 +3887,13 @@ function TerminalCollapsed({ onOpen }: { onOpen: () => void }) {
   return (
     <button
       type="button"
-      className="w-full text-left border-t border-hairline bg-ink-deep px-6 py-2 flex items-center justify-between cursor-pointer hover:bg-ink transition-colors"
+      className="w-full text-left border-t border-hairline bg-paper-deep px-6 py-2 flex items-center justify-between cursor-pointer hover:bg-paper-edge transition-colors"
       onClick={onOpen}
     >
-      <span className="font-mono text-[11px] tracking-[0.12em] uppercase text-white/55">
+      <span className="font-mono text-[11px] tracking-[0.12em] uppercase text-ink-soft">
         Terminal · cost · problems
       </span>
-      <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-white/55">
+      <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-ink-soft">
         Expand ↑
       </span>
     </button>
@@ -3927,8 +3927,8 @@ function TerminalPanel({
   ];
 
   return (
-    <div className="border-t border-hairline bg-ink-deep h-72 flex flex-col">
-      <div className="border-b border-white/10 pl-2 pr-1 flex items-center justify-between">
+    <div className="border-t border-hairline bg-paper-soft h-72 flex flex-col">
+      <div className="border-b border-hairline pl-2 pr-1 flex items-center justify-between">
         <div className="flex items-center">
           {tabs.map((t) => {
             const active = t.id === tab;
@@ -3939,13 +3939,13 @@ function TerminalPanel({
                 onClick={() => setTab(t.id)}
                 className={`font-mono text-[11px] uppercase tracking-[0.08em] px-3 py-2.5 transition-colors border-b-2 ${
                   active
-                    ? "text-paper border-pencil"
-                    : "text-white/55 hover:text-white/85 border-transparent"
+                    ? "text-ink-deep border-pencil"
+                    : "text-ink-soft hover:text-ink border-transparent"
                 }`}
               >
                 {t.label}
                 {t.count !== undefined ? (
-                  <span className="ml-1.5 text-white/40 normal-case tracking-normal">
+                  <span className="ml-1.5 text-ink-mute normal-case tracking-normal">
                     ({t.count})
                   </span>
                 ) : null}
@@ -3954,7 +3954,7 @@ function TerminalPanel({
           })}
         </div>
         <div className="flex items-center gap-1">
-          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-white/40 px-2">
+          <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute px-2">
             live · streaming
           </span>
           <button
@@ -3962,7 +3962,7 @@ function TerminalPanel({
             onClick={onClose}
             aria-label="Close terminal"
             title="Close terminal"
-            className="text-white/45 hover:text-paper hover:bg-white/5 rounded p-1.5 transition-colors"
+            className="text-ink-mute hover:text-ink-deep hover:bg-paper-edge rounded p-1.5 transition-colors"
           >
             <svg
               width="14"
@@ -4003,7 +4003,7 @@ function CostStream({
 }) {
   if (!hasDesign) {
     return (
-      <div className="font-mono text-[12px] text-white/50 leading-relaxed">
+      <div className="font-mono text-[12px] text-ink-mute leading-relaxed">
         Cost stream idle.
         <br />
         Generate a design to see ₹ low / base / high tick live.
@@ -4023,11 +4023,11 @@ function CostStream({
           generated room area. Hidden until the validator emits one
           (no usable room area → no block). */}
       {mepCost ? <MepCostBlock mepCost={mepCost} /> : null}
-      <div className="border-t border-white/10 pt-3">
-        <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-white/45 mb-2">
+      <div className="border-t border-hairline pt-3">
+        <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute mb-2">
           Line items
         </div>
-        <div className="space-y-1 font-mono text-[12px] text-white/85">
+        <div className="space-y-1 font-mono text-[12px] text-ink">
           <CostLine
             k="Walnut top · 2.4 m²"
             v="₹ 38,400"
@@ -4072,7 +4072,7 @@ function CostStream({
           />
         </div>
       </div>
-      <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-white/40">
+      <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute">
         Updated 0 ms ago · MCX live
       </div>
     </div>
@@ -4104,17 +4104,17 @@ function MepCostBlock({
   const totalHigh = mepCost.total_inr.high;
 
   return (
-    <div className="border-t border-white/10 pt-3">
+    <div className="border-t border-hairline pt-3">
       <div className="flex items-baseline justify-between mb-2">
-        <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-white/45">
+        <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute">
           MEP systems · per ₹/m² band
         </div>
-        <div className="font-mono text-[10px] tracking-tight text-white/55">
+        <div className="font-mono text-[10px] tracking-tight text-ink-soft">
           area {mepCost.area_m2.toFixed(1)} m² · {mepCost.jurisdiction}
         </div>
       </div>
 
-      <div className="space-y-1 font-mono text-[12px] text-white/85">
+      <div className="space-y-1 font-mono text-[12px] text-ink">
         {mepCost.systems.map((s) => {
           const lo = s.rate_inr_m2.low;
           const hi = s.rate_inr_m2.high;
@@ -4133,12 +4133,12 @@ function MepCostBlock({
         })}
       </div>
 
-      <div className="border-t border-white/10 mt-2 pt-2 flex items-baseline justify-between">
-        <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-white/55">
+      <div className="border-t border-hairline mt-2 pt-2 flex items-baseline justify-between">
+        <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-soft">
           MEP total
         </div>
-        <div className="font-mono text-[13px] text-paper tnum">
-          {fmt(totalLow)} <span className="text-white/45 px-1">–</span>{" "}
+        <div className="font-mono text-[13px] text-ink-deep tnum">
+          {fmt(totalLow)} <span className="text-ink-mute px-1">–</span>{" "}
           {fmt(totalHigh)}
         </div>
       </div>
@@ -4157,14 +4157,14 @@ function CostFigure({
 }) {
   return (
     <div>
-      <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-white/45">
+      <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute">
         {label}
       </div>
       <div
         className={`mt-1 font-mono tnum tracking-[-0.01em] ${
           highlight
-            ? "text-paper text-[1.625rem] font-medium"
-            : "text-white/75 text-[1.375rem] font-normal"
+            ? "text-ink-deep text-[1.625rem] font-medium"
+            : "text-ink text-[1.375rem] font-normal"
         }`}
       >
         {value}
@@ -4185,10 +4185,10 @@ function CostLine({
   srcWhen?: string;
 }) {
   return (
-    <div className="group/line relative flex items-baseline justify-between border-b border-dashed border-white/10 py-1">
-      <span className="text-white/65">{k}</span>
+    <div className="group/line relative flex items-baseline justify-between border-b border-dashed border-hairline py-1">
+      <span className="text-ink-soft">{k}</span>
       <div className="flex items-baseline gap-2">
-        <span className="text-paper tnum">{v}</span>
+        <span className="text-ink-deep tnum">{v}</span>
         {src ? <SourceMark src={src} srcWhen={srcWhen} /> : null}
       </div>
     </div>
@@ -4211,12 +4211,12 @@ function SourceMark({ src, srcWhen }: { src: string; srcWhen?: string }) {
       </span>
       <span
         role="tooltip"
-        className="pointer-events-none invisible opacity-0 group-hover/line:visible group-hover/line:opacity-100 absolute right-0 bottom-full mb-2 z-20 whitespace-nowrap bg-[#1A1A1A] border border-white/15 px-2.5 py-1.5 rounded-sm text-[10px] uppercase tracking-[0.1em] text-white/85 transition-opacity duration-150 font-mono"
+        className="pointer-events-none invisible opacity-0 group-hover/line:visible group-hover/line:opacity-100 absolute right-0 bottom-full mb-2 z-20 whitespace-nowrap bg-paper-deep border border-hairline px-2.5 py-1.5 rounded-sm text-[10px] uppercase tracking-[0.1em] text-ink transition-opacity duration-150 font-mono"
       >
         <span className="text-pencil-soft">src</span>
         <span className="ml-2">{src}</span>
         {srcWhen ? (
-          <span className="ml-2 text-white/50">· {srcWhen}</span>
+          <span className="ml-2 text-ink-mute">· {srcWhen}</span>
         ) : null}
       </span>
     </span>
@@ -4233,9 +4233,9 @@ function ProblemsList({
   // No design yet — explain what will populate here.
   if (!hasDesign) {
     return (
-      <div className="font-mono text-[12px] text-white/65 space-y-1.5">
-        <div className="text-white/45">No problems detected.</div>
-        <div className="text-white/45">
+      <div className="font-mono text-[12px] text-ink space-y-1.5">
+        <div className="text-ink-mute">No problems detected.</div>
+        <div className="text-ink-mute">
           Validation warnings, hard errors, and suggestions will appear here
           once you generate a design. Every entry cites its source.
         </div>
@@ -4247,10 +4247,10 @@ function ProblemsList({
   // saved before the validator was wired in. Treat as silent OK.
   if (!validation) {
     return (
-      <div className="font-mono text-[12px] text-white/65 space-y-1.5">
+      <div className="font-mono text-[12px] text-ink space-y-1.5">
         <div className="pl-3 border-l-2 border-olive">
           <span className="text-olive">[OK]</span>
-          <span className="ml-2 text-white/85">
+          <span className="ml-2 text-ink">
             no validation report attached to this version
           </span>
         </div>
@@ -4265,12 +4265,12 @@ function ProblemsList({
 
   if (total === 0) {
     return (
-      <div className="font-mono text-[12px] text-white/65 space-y-1.5">
+      <div className="font-mono text-[12px] text-ink space-y-1.5">
         <div className="pl-3 border-l-2 border-olive">
           <span className="text-olive">[OK]</span>
-          <span className="ml-2 text-white/85">{validation.summary}</span>
+          <span className="ml-2 text-ink">{validation.summary}</span>
         </div>
-        <div className="text-white/45 pl-3">
+        <div className="text-ink-mute pl-3">
           All rooms, ergonomics, and clearances within standard.
         </div>
       </div>
@@ -4278,8 +4278,8 @@ function ProblemsList({
   }
 
   return (
-    <div className="font-mono text-[12px] text-white/85 space-y-3">
-      <div className="text-white/55">{validation.summary}</div>
+    <div className="font-mono text-[12px] text-ink space-y-3">
+      <div className="text-ink-soft">{validation.summary}</div>
 
       {errors.length > 0 && (
         <IssueSection
@@ -4333,7 +4333,7 @@ function IssueSection({
 
   return (
     <div>
-      <div className="text-white/55 uppercase tracking-wider text-[10px] mb-1">
+      <div className="text-ink-soft uppercase tracking-wider text-[10px] mb-1">
         {label} · {items.length}
       </div>
       <div className="space-y-1.5">
@@ -4344,17 +4344,17 @@ function IssueSection({
           >
             <div>
               <span className={colorClasses.tag}>{tag}</span>{" "}
-              <span className="text-white/55">{issue.code}</span>{" "}
-              <span className="text-white/85">{issue.message}</span>
+              <span className="text-ink-soft">{issue.code}</span>{" "}
+              <span className="text-ink">{issue.message}</span>
             </div>
-            <div className="text-white/40 text-[10.5px] pl-1">
+            <div className="text-ink-mute text-[10.5px] pl-1">
               {issue.path}
               {issue.source_section && (
                 <span>
                   {" · cite: "}
                   <span className="text-pencil">{issue.source_section}</span>
                   {issue.jurisdiction && (
-                    <span className="text-white/35"> ({issue.jurisdiction})</span>
+                    <span className="text-ink-mute"> ({issue.jurisdiction})</span>
                   )}
                 </span>
               )}

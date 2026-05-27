@@ -329,10 +329,14 @@ h1, h2, h3, h4, h5, h6 {
   margin-bottom: 0.4em;
   line-height: 1.25;
 }
-.message-prose h1 { font-size: 1.625rem; }
-.message-prose h2 { font-size: 1.375rem; }
-.message-prose h3 { font-size: 1.125rem; }
-.message-prose h4 { font-size: 1rem; }
+/* Heading scale tuned for chat-nested prose. The AI happily emits
+   `# Concept` and `## Key dimensions` — at full document scale those
+   feel like page titles inside a reply. Compress to chat range so
+   they read as section markers, not headlines. */
+.message-prose h1 { font-size: 1.125rem; margin-top: 1.2em; }
+.message-prose h2 { font-size: 1.0625rem; margin-top: 1.1em; }
+.message-prose h3 { font-size: 1rem; margin-top: 1em; }
+.message-prose h4 { font-size: 0.9375rem; margin-top: 1em; }
 .message-prose p { margin: 0.85em 0; }
 .message-prose ul,
 .message-prose ol { margin: 0.85em 0; padding-left: 1.4em; }

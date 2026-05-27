@@ -723,7 +723,7 @@ function MessageRow({
             onEdit={() => onEditUserMessage(message.content)}
           />
         </div>
-        <div className="text-ink-deep text-[1.0625rem] leading-relaxed whitespace-pre-wrap">
+        <div className="text-ink-deep text-[0.9375rem] leading-relaxed whitespace-pre-wrap">
           {message.content}
         </div>
       </div>
@@ -939,7 +939,10 @@ function AssistantMessage({
   };
 
   return (
-    <div id={`msg-${message.id}`} className="anim-fade-in group/msg scroll-mt-20">
+    <div
+      id={`msg-${message.id}`}
+      className="anim-fade-in group/msg scroll-mt-20 border-l-2 border-pencil-soft/40 pl-4"
+    >
       <div className="mb-2 flex items-center justify-between">
         <span className="font-mono text-[11px] tracking-tagged uppercase text-ink-mute">
           KATHA AI

@@ -112,16 +112,16 @@ export default function EstimationTerminalShell({
   }, [activeGraph, backendEstimate]);
 
   return (
-    <div className="border-t border-gray-200 flex-shrink-0">
+    <div className="border-t border-hairline flex-shrink-0">
       <button
         onClick={onToggle}
-        className="w-full flex items-center justify-between px-4 py-2 bg-gray-900 text-gray-300 hover:bg-gray-800 transition-colors"
+        className="w-full flex items-center justify-between px-4 py-2 bg-paper-deep text-ink-soft hover:bg-paper-edge transition-colors"
       >
         <div className="flex items-center gap-2">
           <Terminal size={14} />
           <span className="text-xs font-medium">Estimation Terminal</span>
           {estimate && (
-            <span className="text-[10px] text-green-400 ml-2">
+            <span className="text-[10px] text-pencil ml-2">
               Est. {formatINR(estimate.total)}
             </span>
           )}
@@ -137,30 +137,27 @@ export default function EstimationTerminalShell({
             exit={{ height: 0 }}
             transition={{ duration: 0.2, ease: "easeInOut" }}
             className="overflow-hidden"
-            style={{ backgroundColor: activeTab === "estimation" ? "#0a0a0a" : "var(--paper)" }}
+            style={{ backgroundColor: "var(--paper-soft)" }}
           >
             <div
               className="flex"
               style={{
-                borderBottom: activeTab === "estimation" ? "1px solid #1f1f1f" : "1px solid var(--rule)",
-                backgroundColor: activeTab === "estimation" ? "#0a0a0a" : "var(--paper-deep, #ece5d8)",
+                borderBottom: "1px solid var(--hairline)",
+                backgroundColor: "var(--paper-deep)",
               }}
             >
               {TABS.map((tab) => {
                 const Icon = tab.icon;
                 const isActive = tab.id === activeTab;
-                const onDark = activeTab === "estimation";
                 return (
                   <button
                     key={tab.id}
                     onClick={() => setActiveTab(tab.id)}
                     className="flex items-center gap-1.5 px-4 py-2 text-xs font-medium transition-colors"
                     style={{
-                      color: isActive
-                        ? (onDark ? "#e5e5e5" : "var(--ink)")
-                        : (onDark ? "#6b6b6b" : "var(--ink-3)"),
+                      color: isActive ? "var(--ink)" : "var(--ink-soft)",
                       borderBottom: isActive
-                        ? (onDark ? "1px solid #9ca3af" : "1px solid var(--ink)")
+                        ? "1px solid var(--ink)"
                         : "1px solid transparent",
                       fontWeight: isActive ? 600 : 500,
                     }}
@@ -182,61 +179,61 @@ export default function EstimationTerminalShell({
             )}
 
             {activeTab === "estimation" && (
-            <div className="p-4 font-mono text-xs text-gray-500 leading-relaxed overflow-y-auto" style={{ maxHeight: 170 }}>
+            <div className="p-4 font-mono text-xs text-ink-mute leading-relaxed overflow-y-auto" style={{ maxHeight: 170 }}>
               {!estimate ? (
                 <>
-                  <p className="text-gray-400">
-                    <span className="text-green-400">$</span> estimation terminal ready
+                  <p className="text-ink-soft">
+                    <span className="text-pencil">$</span> estimation terminal ready
                   </p>
-                  <p className="mt-1 text-gray-600">
+                  <p className="mt-1 text-ink-mute">
                     Generate a design to begin cost estimation.
                   </p>
                 </>
               ) : (
                 <>
-                  <p className="text-green-400">
+                  <p className="text-pencil">
                     $ estimate --format summary{" "}
-                    <span className="text-gray-500">
+                    <span className="text-ink-mute">
                       ({estimate.source === "backend" ? "live backend" : "local fallback"}
                       {estimate.source === "backend" && estimate.city ? ` · ${estimate.city}` : ""})
                     </span>
                   </p>
-                  <p className="mt-1 text-gray-300">
+                  <p className="mt-1 text-ink">
                     Room: {activeGraph!.room.type.replace(/_/g, " ")} | Area: {estimate.area} sqft | Objects: {estimate.objectCount}
                   </p>
-                  <p className="mt-2 text-gray-400">--- Cost Breakdown ---</p>
-                  <p className="text-gray-300">  Materials:  {formatINR(estimate.materialsCost)}</p>
-                  <p className="text-gray-300">  Furniture:  {formatINR(estimate.furnitureCost)}</p>
-                  <p className="text-gray-300">  Labor:      {formatINR(estimate.laborCost)}</p>
+                  <p className="mt-2 text-ink-soft">--- Cost Breakdown ---</p>
+                  <p className="text-ink">  Materials:  {formatINR(estimate.materialsCost)}</p>
+                  <p className="text-ink">  Furniture:  {formatINR(estimate.furnitureCost)}</p>
+                  <p className="text-ink">  Labor:      {formatINR(estimate.laborCost)}</p>
                   {estimate.servicesCost > 0 && (
-                    <p className="text-gray-300">  Services:   {formatINR(estimate.servicesCost)}</p>
+                    <p className="text-ink">  Services:   {formatINR(estimate.servicesCost)}</p>
                   )}
                   {estimate.miscCost > 0 && (
-                    <p className="text-gray-300">  Misc:       {formatINR(estimate.miscCost)}</p>
+                    <p className="text-ink">  Misc:       {formatINR(estimate.miscCost)}</p>
                   )}
-                  <p className="mt-1 text-green-400 font-semibold">  TOTAL:      {formatINR(estimate.total)}</p>
-                  <p className="mt-1 text-gray-500">  Cost/sqft:  {formatINR(Math.round(estimate.costPerSqft))}</p>
+                  <p className="mt-1 text-pencil font-semibold">  TOTAL:      {formatINR(estimate.total)}</p>
+                  <p className="mt-1 text-ink-soft">  Cost/sqft:  {formatINR(Math.round(estimate.costPerSqft))}</p>
                   {estimate.source === "backend" && estimate.confidence && (
-                    <p className="mt-1 text-gray-500">
+                    <p className="mt-1 text-ink-soft">
                       Confidence: {estimate.confidence.level} ({Math.round((estimate.confidence.score ?? 0) * 100)}%)
                     </p>
                   )}
                   {estimate.source === "backend" && estimate.scenarios && estimate.scenarios.length > 0 && (
                     <>
-                      <p className="mt-2 text-gray-400">--- Scenarios ---</p>
+                      <p className="mt-2 text-ink-soft">--- Scenarios ---</p>
                       {estimate.scenarios.slice(0, 3).map((sc) => (
-                        <p key={sc.name} className="text-gray-300">
+                        <p key={sc.name} className="text-ink">
                           {"  "}
                           {sc.name}: {formatINR(sc.total)}
                         </p>
                       ))}
                     </>
                   )}
-                  <p className="mt-2 text-gray-600">Drag objects or change materials to see updated estimates.</p>
+                  <p className="mt-2 text-ink-mute">Drag objects or change materials to see updated estimates.</p>
                 </>
               )}
-              <p className="mt-2 text-gray-700">
-                <span className="text-gray-500">{">"}</span>{" "}
+              <p className="mt-2 text-ink-mute">
+                <span className="text-ink-soft">{">"}</span>{" "}
                 <span className="animate-pulse">_</span>
               </p>
             </div>
