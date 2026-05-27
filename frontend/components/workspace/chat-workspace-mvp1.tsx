@@ -687,7 +687,7 @@ function Transcript({
   onEditUserMessage: (content: string) => void;
 }) {
   return (
-    <div className="px-6 md:px-10 py-7 max-w-chat space-y-5">
+    <div className="px-6 md:px-10 py-7 space-y-5">
       {messages.map((m) => (
         <MessageRow
           key={m.id}
@@ -1085,7 +1085,7 @@ function PromptInput({
 
   return (
     <div className="border-t border-hairline bg-paper px-6 md:px-10 py-4">
-      <div className="max-w-chat">
+      <div>
         <div className="border border-hairline rounded-xl bg-paper-soft/60 p-3 flex items-end gap-3 focus-within:border-graphite transition-colors">
           <textarea
             ref={ref}
