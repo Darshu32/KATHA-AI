@@ -2,7 +2,7 @@
 
 /* MVP 2 — Design generation workspace.
  * Engineering-workstation 4-zone layout: left controls, centered canvas,
- * right specs, bottom terminal. Inter on chrome, JetBrains Mono on
+ * right specs, bottom terminal. Avenir on chrome, JetBrains Mono on
  * technical surfaces (cost stream, generation log, citations, dimensions).
  * No serif. Gridpaper appears only on the canvas surface, never on chrome.
  * Pencil-red is the single accent (active terminal tab, live links). */

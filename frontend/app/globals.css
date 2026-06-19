@@ -1,7 +1,7 @@
 /* KATHA AI — Design tokens.
  *
  * Chat surface: pure-white canvas, neutral cool grays for surface
- * elevation, near-black ink, Inter throughout. Single pencil-red
+ * elevation, near-black ink, Avenir LT Pro throughout. Single pencil-red
  * accent (the red architects mark drawings with). Mono is scoped to
  * numeric data and callout numerals.
  *
@@ -130,7 +130,7 @@ textarea:focus-visible,
 .font-sans    { font-family: var(--sans-stack); }
 .font-mono    { font-family: var(--mono-stack); }
 
-/* Headings inherit Inter from body. Pages that want the editorial
+/* Headings inherit Avenir from body. Pages that want the editorial
    serif moment opt in explicitly via `.font-display`. Tracking and
    weight do the hierarchy on chat; the typeface stays consistent. */
 h1, h2, h3, h4, h5, h6 {
