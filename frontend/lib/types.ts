@@ -244,9 +244,13 @@ export interface MepCostSystemEntry {
 export interface MepCostEstimate {
   area_m2: number;
   currency: string;
+  currency_symbol?: string;
   jurisdiction: string;
+  region?: string;
   systems: MepCostSystemEntry[];
   total_inr: { low: number; high: number };
+  // Region-converted total (in `currency`) — prefer this for display.
+  total?: { low: number; high: number };
 }
 
 // BRD §1B Building Code Integration — one compliance entry per code

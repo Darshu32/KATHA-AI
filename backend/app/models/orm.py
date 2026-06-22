@@ -90,6 +90,14 @@ class Project(Base, UUIDMixin, TimestampMixin):
     project_scale: Mapped[str | None] = mapped_column(
         String(64), nullable=True
     )
+    # Multi-region — drives currency (cost output) + jurisdiction
+    # (building-code citations). Canonical keys live in
+    # app.services.regions.REGIONS (india | europe | middle_east |
+    # north_america | asia_pacific | latin_america | africa | oceania).
+    # Default "india" preserves the home-market behaviour.
+    region: Mapped[str] = mapped_column(
+        String(32), default="india", index=True
+    )
     status: Mapped[str] = mapped_column(
         String(32), default="draft"
     )  # draft | generating | ready | archived

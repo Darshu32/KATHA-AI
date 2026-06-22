@@ -15,7 +15,13 @@ from app.services.design_graph_service import (
     save_graph_version,
     save_render_asset,
 )
+from app.services.estimation.catalog import convert_from_inr, currency_symbol
 from app.services.estimation_engine import compute_estimate
+from app.services.regions import (
+    currency_for_region,
+    get_region,
+    jurisdiction_for_region,
+)
 from app.services.graph_describer import describe_graph_for_render
 from app.services.image_service import generate_image, resolve_theme_visual_hint
 from app.services.knowledge_validator import validate_design_graph_async
@@ -213,21 +219,42 @@ def _mep_system_keys(project_type: str | None) -> dict[str, str]:
     }
 
 
+async def _mep_dimensions(graph_data: dict) -> dict:
+    """Extract room dimensions from a design graph, tolerant of both the
+    legacy top-level ``room`` shape and the serialised ``DesignGraph``
+    shape (which carries dims under ``spaces[0]``).
+
+    The pipeline feeds ``DesignGraph.model_dump()`` here, which has NO
+    top-level ``room`` key — only ``spaces[]``. Reading ``room`` alone
+    silently returned no area, leaving the Cost tab empty. Fall back to
+    the first space so the MEP roll-up actually fires.
+    """
+    room = graph_data.get("room") or {}
+    dims = room.get("dimensions") or {}
+    if dims:
+        return dims
+    spaces = graph_data.get("spaces") or []
+    if spaces and isinstance(spaces[0], dict):
+        return spaces[0].get("dimensions") or {}
+    return {}
+
+
 async def _run_mep_cost(
     db: AsyncSession,
     *,
     graph_data: dict,
     project_type: str | None,
+    region: str = "india",
 ) -> dict | None:
     """Aggregate MEP system cost (HVAC + electrical + plumbing +
     fire-fighting) at the project_type-appropriate ₹/m² band, based on
-    the room area in the design graph.
+    the room area in the design graph, then convert to the project's
+    regional currency for output.
 
     Returns ``None`` when there's no usable area — the cost terminal
     falls through to its no-MEP-cost-yet placeholder.
     """
-    room = graph_data.get("room") or {}
-    dims = room.get("dimensions") or {}
+    dims = await _mep_dimensions(graph_data)
     length = dims.get("length")
     width = dims.get("width")
     if not (length and width):
@@ -273,34 +300,87 @@ async def _run_mep_cost(
     if not systems:
         return None
 
+    reg = get_region(region)
+    currency = reg.currency
+    # Rate-cards are authored in INR; convert the roll-up into the
+    # project's regional currency for display. INR projects pass through
+    # unchanged (rate == 1.0).
+    total_low_ccy = round(float(convert_from_inr(total_low, currency)), 0)
+    total_high_ccy = round(float(convert_from_inr(total_high, currency)), 0)
+
     return {
         "area_m2": round(area_m2, 2),
-        "currency": "INR",
-        "jurisdiction": "india_nbc",
+        "currency": currency,
+        "currency_symbol": currency_symbol(currency),
+        "jurisdiction": reg.jurisdiction,
+        "region": reg.key,
         "systems": systems,
+        # Native INR roll-up retained for back-compat + auditability.
         "total_inr": {
             "low": round(total_low, 0),
             "high": round(total_high, 0),
         },
+        # Region-converted total — what the cost tab should display.
+        "total": {
+            "low": total_low_ccy,
+            "high": total_high_ccy,
+        },
     }
 
 
-def _jurisdiction_for_project(project_type: str | None) -> str:
+def _stamp_display_currency(estimate: dict, region: str) -> dict:
+    """Stamp a ``display`` block on the estimate carrying the project's
+    regional currency + the already-computed converted total.
+
+    The estimation engine authors everything in INR (base currency) but
+    also emits ``converted_totals[<code>]`` for every supported currency.
+    Rather than re-architect the engine, we pick the region's currency
+    here so the frontend renders €/AED/$ instead of ₹ for non-Indian
+    markets — the difference between a credible Germany/Dubai demo and a
+    rupee-denominated one.
+    """
+    if not isinstance(estimate, dict):
+        return estimate
+    reg = get_region(region)
+    currency = reg.currency
+    converted = (estimate.get("converted_totals") or {}).get(currency) or {}
+    final_total = converted.get("final_total")
+    # Fall back to a direct INR→currency conversion if the engine didn't
+    # emit this currency (e.g. failed-estimate envelope).
+    if final_total is None:
+        base_total = (
+            (estimate.get("pricing_adjustments") or {}).get("final_total")
+            or 0
+        )
+        final_total = float(convert_from_inr(base_total, currency))
+    area = (estimate.get("area") or {}).get("total_sqft") or 0
+    estimate["display"] = {
+        "currency": currency,
+        "currency_symbol": currency_symbol(currency),
+        "region": reg.key,
+        "locale": reg.locale,
+        "final_total": round(float(final_total), 0),
+        "cost_per_sqft": round(float(final_total) / area, 0) if area else 0,
+    }
+    return estimate
+
+
+def _jurisdiction_for_project(
+    project_type: str | None, region: str | None = None
+) -> str:
     """Pick the right standards jurisdiction for a project.
 
-    Today only ``india_nbc`` is seeded — the IBC / IECC rows are
-    placeholders for when we expand outside India. Returning the
-    defended default ensures the validator never fails to find a
-    matching code row.
+    Region is the primary driver: each of the 8 markets maps to a
+    building-code jurisdiction (see ``app.services.regions``). The
+    standards resolver falls back to the international baseline
+    (``international_ibc``) when a region's native rows aren't seeded,
+    so this never fails to find a matching code row.
 
-    When the project model carries a ``regulatory.country`` (set via
-    the design brief intake / BRD §1A section 5) the route can pass
-    a more specific jurisdiction in; this helper is the fallback.
+    ``project_type`` is retained for signature back-compat but no longer
+    selects the jurisdiction — that's a function of *where* the project
+    is, not *what* it is.
     """
-    # Per memory: India primary, EU secondary. EU has no native code
-    # rows yet, so even EU projects route to ``india_nbc`` until the
-    # IBC / Eurocode seeds are written.
-    return "india_nbc"
+    return jurisdiction_for_region(region)
 
 
 _COMPLIANCE_CODES = {
@@ -564,6 +644,7 @@ async def run_initial_generation(
     quality: str | None = None,
     drawing_type: str | None = None,
     project_type: str | None = None,
+    region: str = "india",
 ) -> dict:
     """
     Full pipeline for initial design:
@@ -602,11 +683,12 @@ async def run_initial_generation(
 
     # Step 3 — Estimate
     estimate = compute_estimate(graph_data)
+    _stamp_display_currency(estimate, region)
 
     # Step 3b — BRD §1B / §9.1: validate against authoritative standards
     # (room areas, ergonomics, NBC clauses, theme alignment). Results
     # flow to the Problems terminal tab via the response.
-    jurisdiction = _jurisdiction_for_project(project_type)
+    jurisdiction = _jurisdiction_for_project(project_type, region)
     validation = await _run_validation(
         db, graph_data=graph_data, project_type=project_type, jurisdiction=jurisdiction,
     )
@@ -614,7 +696,9 @@ async def run_initial_generation(
     # Step 3c — BRD §1B MEP: roll up HVAC + electrical + plumbing +
     # fire-fighting system cost at ₹/m² bands. Surfaces in the cost
     # terminal as a real, cited number alongside the existing estimate.
-    mep_cost = await _run_mep_cost(db, graph_data=graph_data, project_type=project_type)
+    mep_cost = await _run_mep_cost(
+        db, graph_data=graph_data, project_type=project_type, region=region
+    )
 
     # Step 3d — BRD §1B Building Code Integration: condense validation
     # report + DB-advisory targets into a sidebar-ready compliance
@@ -667,6 +751,7 @@ async def run_local_edit(
     object_id: str,
     edit_prompt: str,
     project_type: str | None = None,
+    region: str = "india",
 ) -> dict:
     """
     Edit a single object:
@@ -712,14 +797,17 @@ async def run_local_edit(
     )
 
     estimate = compute_estimate(updated_graph)
+    _stamp_display_currency(estimate, region)
 
     # BRD §1B / §9.1 — re-validate against authoritative standards
     # after the edit. Picks up any new violations the edit introduced.
-    jurisdiction = _jurisdiction_for_project(project_type)
+    jurisdiction = _jurisdiction_for_project(project_type, region)
     validation = await _run_validation(
         db, graph_data=updated_graph, project_type=project_type, jurisdiction=jurisdiction,
     )
-    mep_cost = await _run_mep_cost(db, graph_data=updated_graph, project_type=project_type)
+    mep_cost = await _run_mep_cost(
+        db, graph_data=updated_graph, project_type=project_type, region=region
+    )
     compliance = await _run_compliance_summary(
         db, validation=validation, jurisdiction=jurisdiction,
     )
@@ -757,6 +845,7 @@ async def run_theme_switch(
     new_style: str,
     preserve_layout: bool = True,
     project_type: str | None = None,
+    region: str = "india",
 ) -> dict:
     """
     Switch the entire design theme:
@@ -793,17 +882,18 @@ async def run_theme_switch(
     )
 
     estimate = compute_estimate(updated_graph_data)
+    _stamp_display_currency(estimate, region)
 
     # BRD §1B / §9.1 — theme swaps shouldn't change geometry, but if
     # the LLM inadvertently shrank a room while re-tagging materials,
     # this catches it.
-    jurisdiction = _jurisdiction_for_project(project_type)
+    jurisdiction = _jurisdiction_for_project(project_type, region)
     validation = await _run_validation(
         db, graph_data=updated_graph_data, project_type=project_type,
         jurisdiction=jurisdiction,
     )
     mep_cost = await _run_mep_cost(
-        db, graph_data=updated_graph_data, project_type=project_type
+        db, graph_data=updated_graph_data, project_type=project_type, region=region
     )
     compliance = await _run_compliance_summary(
         db, validation=validation, jurisdiction=jurisdiction,

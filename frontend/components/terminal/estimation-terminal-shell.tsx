@@ -33,8 +33,31 @@ const TABS: { id: TabId; label: string; icon: typeof Calculator }[] = [
   { id: "export", label: "Export", icon: Download },
 ];
 
-function formatINR(n: number) {
-  return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 0 }).format(n);
+// Currency-aware money formatter. Defaults to INR (home market) but
+// renders €/AED/$/A$ for the project's region so non-Indian client demos
+// never show rupees. Locale tracks the currency for correct grouping.
+const LOCALE_BY_CURRENCY: Record<string, string> = {
+  INR: "en-IN",
+  EUR: "de-DE",
+  AED: "en-AE",
+  USD: "en-US",
+  AUD: "en-AU",
+  GBP: "en-GB",
+};
+
+function formatMoney(n: number, currency = "INR") {
+  const code = (currency || "INR").toUpperCase();
+  const locale = LOCALE_BY_CURRENCY[code] ?? "en-US";
+  try {
+    return new Intl.NumberFormat(locale, {
+      style: "currency",
+      currency: code,
+      maximumFractionDigits: 0,
+    }).format(n);
+  } catch {
+    // Unknown ISO code — fall back to a plain number + code suffix.
+    return `${new Intl.NumberFormat(locale, { maximumFractionDigits: 0 }).format(n)} ${code}`;
+  }
 }
 
 export default function EstimationTerminalShell({
@@ -51,14 +74,25 @@ export default function EstimationTerminalShell({
     if (backendEstimate) {
       const area = backendEstimate.area?.total_sqft ?? (activeGraph.room.dimensions.length * activeGraph.room.dimensions.width);
       const sections = backendEstimate.estimate ?? {};
-      const materialsCost = sections.materials?.total_cost ?? 0;
-      const furnitureCost = sections.furniture?.total_cost ?? 0;
-      const laborCost = sections.labor?.total_cost ?? 0;
-      const servicesCost = sections.services?.total_cost ?? 0;
-      const miscCost = sections.misc?.total_cost ?? 0;
-      const total = backendEstimate.pricing_adjustments?.final_total
+      // Region display block (preferred): carries the project's currency
+      // + the converted total. Falls back to the INR base when absent.
+      const display = backendEstimate.display;
+      const baseTotal = backendEstimate.pricing_adjustments?.final_total ?? 0;
+      // Sub-sections are authored in INR base; convert them by the same
+      // ratio the pipeline used for the headline total so the breakdown
+      // stays internally consistent with the (converted) TOTAL line.
+      const fxRatio = display && baseTotal > 0 ? display.final_total / baseTotal : 1;
+      const materialsCost = (sections.materials?.total_cost ?? 0) * fxRatio;
+      const furnitureCost = (sections.furniture?.total_cost ?? 0) * fxRatio;
+      const laborCost = (sections.labor?.total_cost ?? 0) * fxRatio;
+      const servicesCost = (sections.services?.total_cost ?? 0) * fxRatio;
+      const miscCost = (sections.misc?.total_cost ?? 0) * fxRatio;
+      const total = display?.final_total
+        ?? baseTotal
         ?? (materialsCost + furnitureCost + laborCost + servicesCost + miscCost);
-      const costPerSqft = backendEstimate.area?.cost_per_sqft ?? (area > 0 ? total / area : 0);
+      const costPerSqft = display?.cost_per_sqft
+        ?? backendEstimate.area?.cost_per_sqft
+        ?? (area > 0 ? total / area : 0);
       return {
         area,
         costPerSqft,
@@ -74,7 +108,8 @@ export default function EstimationTerminalShell({
         confidence: backendEstimate.confidence,
         breakdown: backendEstimate.breakdown,
         scenarios: backendEstimate.scenarios,
-        currency: backendEstimate.currency ?? "INR",
+        currency: display?.currency ?? backendEstimate.currency ?? "INR",
+        fxRatio,
       };
     }
 
@@ -108,6 +143,7 @@ export default function EstimationTerminalShell({
       objectCount,
       source: "local" as const,
       currency: "INR",
+      fxRatio: 1,
     };
   }, [activeGraph, backendEstimate]);
 
@@ -122,7 +158,7 @@ export default function EstimationTerminalShell({
           <span className="text-xs font-medium">Estimation Terminal</span>
           {estimate && (
             <span className="text-[10px] text-pencil ml-2">
-              Est. {formatINR(estimate.total)}
+              Est. {formatMoney(estimate.total, estimate.currency)}
             </span>
           )}
         </div>
@@ -202,17 +238,17 @@ export default function EstimationTerminalShell({
                     Room: {activeGraph!.room.type.replace(/_/g, " ")} | Area: {estimate.area} sqft | Objects: {estimate.objectCount}
                   </p>
                   <p className="mt-2 text-ink-soft">--- Cost Breakdown ---</p>
-                  <p className="text-ink">  Materials:  {formatINR(estimate.materialsCost)}</p>
-                  <p className="text-ink">  Furniture:  {formatINR(estimate.furnitureCost)}</p>
-                  <p className="text-ink">  Labor:      {formatINR(estimate.laborCost)}</p>
+                  <p className="text-ink">  Materials:  {formatMoney(estimate.materialsCost, estimate.currency)}</p>
+                  <p className="text-ink">  Furniture:  {formatMoney(estimate.furnitureCost, estimate.currency)}</p>
+                  <p className="text-ink">  Labor:      {formatMoney(estimate.laborCost, estimate.currency)}</p>
                   {estimate.servicesCost > 0 && (
-                    <p className="text-ink">  Services:   {formatINR(estimate.servicesCost)}</p>
+                    <p className="text-ink">  Services:   {formatMoney(estimate.servicesCost, estimate.currency)}</p>
                   )}
                   {estimate.miscCost > 0 && (
-                    <p className="text-ink">  Misc:       {formatINR(estimate.miscCost)}</p>
+                    <p className="text-ink">  Misc:       {formatMoney(estimate.miscCost, estimate.currency)}</p>
                   )}
-                  <p className="mt-1 text-pencil font-semibold">  TOTAL:      {formatINR(estimate.total)}</p>
-                  <p className="mt-1 text-ink-soft">  Cost/sqft:  {formatINR(Math.round(estimate.costPerSqft))}</p>
+                  <p className="mt-1 text-pencil font-semibold">  TOTAL:      {formatMoney(estimate.total, estimate.currency)}</p>
+                  <p className="mt-1 text-ink-soft">  Cost/sqft:  {formatMoney(Math.round(estimate.costPerSqft), estimate.currency)}</p>
                   {estimate.source === "backend" && estimate.confidence && (
                     <p className="mt-1 text-ink-soft">
                       Confidence: {estimate.confidence.level} ({Math.round((estimate.confidence.score ?? 0) * 100)}%)
@@ -224,7 +260,7 @@ export default function EstimationTerminalShell({
                       {estimate.scenarios.slice(0, 3).map((sc) => (
                         <p key={sc.name} className="text-ink">
                           {"  "}
-                          {sc.name}: {formatINR(sc.total)}
+                          {sc.name}: {formatMoney(sc.total * estimate.fxRatio, estimate.currency)}
                         </p>
                       ))}
                     </>

@@ -83,6 +83,9 @@ class ProjectCreate(BaseModel):
     project_type: ProjectType = Field(default=ProjectType.RESIDENTIAL)
     project_sub_type: str = Field(default="", max_length=120)
     project_scale: str = Field(default="", max_length=64)
+    # Market — drives currency + building-code jurisdiction. Canonical
+    # keys in app.services.regions (india | europe | middle_east | ...).
+    region: str = Field(default="india", max_length=32)
 
 
 class ProjectUpdate(BaseModel):
@@ -92,6 +95,7 @@ class ProjectUpdate(BaseModel):
     project_type: ProjectType | None = None
     project_sub_type: str | None = None
     project_scale: str | None = None
+    region: str | None = Field(default=None, max_length=32)
 
 
 class ProjectOut(BaseModel):
@@ -102,6 +106,7 @@ class ProjectOut(BaseModel):
     project_type: str
     project_sub_type: str | None = None
     project_scale: str | None = None
+    region: str = "india"
     latest_version: int
     created_at: datetime
     updated_at: datetime

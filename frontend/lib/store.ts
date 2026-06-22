@@ -365,6 +365,8 @@ interface ImageGenState {
   projectType: ProjectType;
   projectSubType: string;
   projectScale: string;
+  // Market — drives currency + building-code jurisdiction on the project.
+  region: string;
   theme: ArchTheme;
   drawingType: DrawingType;
   ratio: ImageRatio;
@@ -405,6 +407,7 @@ interface ImageGenState {
   setProjectType: (v: ProjectType) => void;
   setProjectSubType: (v: string) => void;
   setProjectScale: (v: string) => void;
+  setRegion: (v: string) => void;
   setTheme: (v: ArchTheme) => void;
   setDrawingType: (v: DrawingType) => void;
   setRatio: (v: ImageRatio) => void;
@@ -448,6 +451,7 @@ export const useImageGenStore = create<ImageGenState>()(
       projectType: "residential",
       projectSubType: "",
       projectScale: "",
+      region: "india",
       theme: "modern",
       drawingType: "3d-render",
       ratio: "16:9",
@@ -470,6 +474,7 @@ export const useImageGenStore = create<ImageGenState>()(
       setProjectType: (v) => set({ projectType: v }),
       setProjectSubType: (v) => set({ projectSubType: v }),
       setProjectScale: (v) => set({ projectScale: v }),
+      setRegion: (v) => set({ region: v }),
       setTheme: (v) => set({ theme: v }),
       setDrawingType: (v) => set({ drawingType: v }),
       setRatio: (v) => set({ ratio: v }),
@@ -588,6 +593,7 @@ export const useImageGenStore = create<ImageGenState>()(
         projectType: state.projectType,
         projectSubType: state.projectSubType,
         projectScale: state.projectScale,
+        region: state.region,
         theme: state.theme,
         drawingType: state.drawingType,
         ratio: state.ratio,
@@ -706,6 +712,17 @@ export interface BackendEstimate {
   area?: { total_sqft: number; cost_per_sqft: number };
   region?: { city: string; price_index: number };
   pricing_adjustments?: { tax: number; tax_amount: number; discount: number; discount_amount: number; final_total: number };
+  // Region-aware display block stamped by the generation pipeline.
+  // Carries the project's currency + the converted total so non-Indian
+  // markets render €/AED/$ instead of ₹.
+  display?: {
+    currency: string;
+    currency_symbol: string;
+    region: string;
+    locale: string;
+    final_total: number;
+    cost_per_sqft: number;
+  };
   confidence?: { score: number; level: string; factors?: string[] };
   line_items?: Array<{ item: string; total: number; total_low?: number; total_high?: number; category?: string }>;
   total_low?: number;

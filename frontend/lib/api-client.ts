@@ -491,9 +491,29 @@ export interface ProjectOut {
   project_type: string;
   project_sub_type: string | null;
   project_scale: string | null;
+  region: string;
   created_at: string;
   updated_at: string;
 }
+
+export interface RegionDef {
+  key: string;
+  label: string;
+  currency: string;
+  currency_symbol: string;
+  jurisdiction: string;
+  code_basis: string;
+  codes_seeded: boolean;
+  locale: string;
+}
+
+export const regions = {
+  /* The 8 supported markets with currency + jurisdiction metadata.
+     Static + unauthenticated — drives the project region selector and
+     currency formatting. */
+  list: () =>
+    request<{ regions: RegionDef[] }>("/regions", "GET"),
+};
 
 export const projects = {
   /* All project endpoints accept an optional token. The backend
@@ -504,10 +524,22 @@ export const projects = {
     token: string | undefined,
     body: {
       name: string;
+      /* Required by the backend ProjectCreate schema (min 10 chars).
+         The create route itself discards it — the prompt that drives
+         generation is sent separately to /generate — but the schema
+         still validates its presence, so the brief text is threaded
+         through here to keep the contract satisfied. */
+      prompt: string;
       description?: string | null;
+      room_type?: string;
+      style?: string;
       project_type: string;
       project_sub_type?: string | null;
       project_scale?: string | null;
+      /* Market — drives currency + building-code jurisdiction.
+         Canonical keys: india | europe | middle_east | north_america |
+         asia_pacific | latin_america | africa | oceania. */
+      region?: string;
     },
   ) => request<ProjectOut>("/projects", "POST", body, token),
 
@@ -535,6 +567,7 @@ export const projects = {
       project_type?: string;
       project_sub_type?: string | null;
       project_scale?: string | null;
+      region?: string;
     },
   ) => request<ProjectOut>(`/projects/${projectId}`, "PATCH", body, token),
 };

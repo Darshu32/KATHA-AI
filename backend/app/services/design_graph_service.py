@@ -19,7 +19,10 @@ async def create_project(
     project_type: str = "residential",
     project_sub_type: str = "",
     project_scale: str = "",
+    region: str = "india",
 ) -> Project:
+    from app.services.regions import normalize_region
+
     project = Project(
         owner_id=owner_id,
         name=name,
@@ -27,6 +30,7 @@ async def create_project(
         project_type=project_type,
         project_sub_type=project_sub_type or None,
         project_scale=project_scale or None,
+        region=normalize_region(region),
         status="draft",
         latest_version=0,
     )

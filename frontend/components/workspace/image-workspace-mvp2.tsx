@@ -15,7 +15,9 @@ import {
   brief as briefApi,
   design as designApi,
   projects as projectsApi,
+  regions as regionsApi,
   resolveAssetUrl,
+  type RegionDef,
 } from "@/lib/api-client";
 import { toastError, useToastStore } from "@/lib/toast-store";
 import type {
@@ -102,6 +104,8 @@ export default function ImageWorkspaceMvp2() {
     setPrompt,
     projectType,
     setProjectType,
+    region,
+    setRegion,
     theme,
     setTheme,
     ratio,
@@ -130,6 +134,14 @@ export default function ImageWorkspaceMvp2() {
   const [terminalTab, setTerminalTab] = useState<TerminalTab>("cost");
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [generateNotice, setGenerateNotice] = useState<string | null>(null);
+
+  // ── Canvas focus — which generation the hero shows ──────────────────
+  // The canvas is a focused-hero + history filmstrip (not a tall feed):
+  // one render large, the rest a glance away in the strip. Focus is a
+  // *view* concern — the right rail + edit/theme/export still target the
+  // latest (working) version, since the backend /edit always operates on
+  // get_latest_version. Focusing an older render is for visual compare.
+  const [focusedGenId, setFocusedGenId] = useState<string | null>(null);
 
   // ── Pass 2: edit-loop UX state ──────────────────────────────────────
   // Which object the architect has selected for editing, plus the
@@ -241,6 +253,15 @@ export default function ImageWorkspaceMvp2() {
      read-only history; only the latest version can be edited (the
      /edit endpoint always operates on get_latest_version). */
   const latestGeneration = generations[0] ?? null;
+
+  // When a new generation lands (or the gallery is replaced/cleared),
+  // snap the hero to the newest result. Clicking a filmstrip thumb sets
+  // focusedGenId directly and persists until the next generation, since
+  // those clicks don't change the `generations` reference.
+  useEffect(() => {
+    setFocusedGenId(generations[0]?.id ?? null);
+  }, [generations]);
+
   const editableObjects = useMemo(() => {
     const data = latestGeneration?.graphData as
       | { objects?: Array<{ id: string; type: string; name?: string; material?: string; dimensions?: { length: number; width: number; height: number } | null }> }
@@ -403,7 +424,13 @@ export default function ImageWorkspaceMvp2() {
       if (!projectId) {
         const project = await projectsApi.create(token, {
           name: prompt.trim().slice(0, 60) || "Untitled design",
+          // Backend ProjectCreate requires a prompt (min 10 chars). It's
+          // unused by the create route — generation gets its own prompt
+          // below — but must be present for schema validation. Pad short
+          // briefs so a terse prompt can't trip the 10-char minimum.
+          prompt: prompt.trim().padEnd(10, " "),
           project_type: projectType,
+          region,
         });
         projectId = project.id;
         setActiveProject(projectId, null, project.name);
@@ -526,6 +553,8 @@ export default function ImageWorkspaceMvp2() {
           projectType={projectType}
           setProjectType={setProjectType}
           projectTypeDefs={projectTypeDefs}
+          region={region}
+          setRegion={setRegion}
           scope={scope}
           setScope={setScope}
           dim={dim}
@@ -556,6 +585,8 @@ export default function ImageWorkspaceMvp2() {
             isSwitchingTheme={isSwitchingTheme}
             themeSwitchError={themeSwitchError}
             generations={generations}
+            focusedId={focusedGenId}
+            onFocus={setFocusedGenId}
             hasActiveProject={!!activeProjectId && !!latestGeneration}
             onOpenExport={() => setExportOpen(true)}
           />
@@ -572,6 +603,8 @@ export default function ImageWorkspaceMvp2() {
               <CanvasGallery
                 generations={generations}
                 dim={dim}
+                focusedId={focusedGenId}
+                onFocus={setFocusedGenId}
                 selectedObjectId={selectedObjectId}
                 onSelectObject={setSelectedObjectId}
                 isGenerating={isGenerating}
@@ -1209,6 +1242,8 @@ function LeftControls({
   projectType,
   setProjectType,
   projectTypeDefs,
+  region,
+  setRegion,
   scope,
   setScope,
   dim,
@@ -1219,6 +1254,8 @@ function LeftControls({
   projectType: ProjectType;
   setProjectType: (t: ProjectType) => void;
   projectTypeDefs: import("@/lib/api-client").ProjectTypeDef[];
+  region: string;
+  setRegion: (r: string) => void;
   scope: Scope;
   setScope: (s: Scope) => void;
   dim: Dim;
@@ -1308,6 +1345,7 @@ function LeftControls({
             defs={projectTypeDefs}
             onChange={setProjectType}
           />
+          <RegionSelector value={region} onChange={setRegion} />
           <section>
             <SectionTag>Scope</SectionTag>
             <div className="mt-2.5 grid grid-cols-2 gap-1.5">
@@ -1501,6 +1539,8 @@ function CanvasHeader({
   isSwitchingTheme,
   themeSwitchError,
   generations,
+  focusedId,
+  onFocus,
   hasActiveProject,
   onOpenExport,
 }: {
@@ -1514,6 +1554,8 @@ function CanvasHeader({
   isSwitchingTheme: boolean;
   themeSwitchError: string | null;
   generations: import("@/lib/types").ImageGeneration[];
+  focusedId: string | null;
+  onFocus: (id: string) => void;
   hasActiveProject: boolean;
   onOpenExport: () => void;
 }) {
@@ -1546,7 +1588,11 @@ function CanvasHeader({
         disabled={!hasActiveProject}
       />
       {projectGenerations.length > 0 ? (
-        <VersionTimeline generations={projectGenerations} />
+        <VersionTimeline
+          generations={projectGenerations}
+          focusedId={focusedId}
+          onFocus={onFocus}
+        />
       ) : null}
     </div>
   );
@@ -1666,8 +1712,12 @@ function ThemeSwitchChip({
    get_latest_version, so older versions are read-only history). */
 function VersionTimeline({
   generations,
+  focusedId,
+  onFocus,
 }: {
   generations: import("@/lib/types").ImageGeneration[];
+  focusedId: string | null;
+  onFocus: (id: string) => void;
 }) {
   // Generations are stored newest-first; the timeline reads
   // oldest-first so the eye scans left-to-right as a project grows.
@@ -1684,23 +1734,23 @@ function VersionTimeline({
       <div className="flex items-baseline gap-0.5 max-w-[20rem] overflow-x-auto draft-scroll">
         {ordered.map((g) => {
           const isLatest = g.version === latestVersion;
+          const isFocused = g.id === focusedId;
+          // Clicking a version chip focuses that render in the hero
+          // (the canvas is a focused-hero + filmstrip, so there's no
+          // per-card anchor to scroll to anymore). Pencil marks the
+          // focused chip; the latest stays pencil-weighted as the
+          // working version even when another is being viewed.
           return (
             <button
               key={g.id}
               type="button"
-              onClick={() => {
-                const el = document.getElementById(`gen-${g.id}`);
-                if (!el) return;
-                el.scrollIntoView({ behavior: "smooth", block: "start" });
-                // Quick pencil-bg flash so the user sees what loaded.
-                el.classList.add("ring-2", "ring-pencil-bg");
-                setTimeout(() => {
-                  el.classList.remove("ring-2", "ring-pencil-bg");
-                }, 1400);
-              }}
+              aria-pressed={isFocused}
+              onClick={() => onFocus(g.id)}
               className={`px-1.5 py-0.5 rounded-sm transition-colors ${
-                isLatest
-                  ? "text-pencil font-medium"
+                isFocused
+                  ? "text-pencil font-medium bg-pencil-bg"
+                  : isLatest
+                  ? "text-pencil font-medium hover:bg-paper-soft"
                   : "text-ink-soft hover:text-ink hover:bg-paper-soft"
               }`}
               title={`v${String(g.version).padStart(2, "0")} · ${new Date(g.timestamp).toLocaleString()}`}
@@ -1799,9 +1849,20 @@ function CanvasInfoCard({
   );
 }
 
+/* CanvasGallery — focused-hero + history filmstrip.
+ *
+ * The architect iterates by comparing attempts, so the canvas reads like
+ * the render tools they already use (Midjourney / Vizcom / Veras): ONE
+ * render large (the hero) with every prior attempt a glance away in a
+ * horizontal filmstrip. Clicking a thumb focuses it in the hero for
+ * visual compare; the working (latest) version still drives the right
+ * rail + edit loop, so focusing an older render is explicitly read-only.
+ */
 function CanvasGallery({
   generations,
   dim,
+  focusedId,
+  onFocus,
   selectedObjectId,
   onSelectObject,
   isGenerating,
@@ -1811,6 +1872,8 @@ function CanvasGallery({
 }: {
   generations: import("@/lib/types").ImageGeneration[];
   dim: Dim;
+  focusedId: string | null;
+  onFocus: (id: string) => void;
   selectedObjectId: string | null;
   onSelectObject: (id: string | null) => void;
   isGenerating: boolean;
@@ -1826,8 +1889,21 @@ function CanvasGallery({
     : isEditing
     ? "Applying edit"
     : "Switching theme";
+
+  // Resolve the hero: the focused render, falling back to the latest.
+  const focusedIndex = Math.max(
+    0,
+    generations.findIndex((g) => g.id === focusedId),
+  );
+  const hero = generations[focusedIndex] ?? generations[0] ?? null;
+  const isHeroLatest = focusedIndex === 0;
+  // Filmstrip earns its space once there's more than one render, or while
+  // a new one is in flight (so the pending thumb has a home).
+  const showStrip = generations.length > 1 || pending;
+
   return (
-    <div className="px-6 md:px-10 py-8 max-w-5xl mx-auto space-y-5">
+    <div className="px-6 md:px-10 py-6 max-w-5xl mx-auto space-y-4">
+      {/* HERO — the render under evaluation, large. */}
       {pending ? (
         <GenerationSkeletonCard
           label={pendingLabel}
@@ -1835,32 +1911,37 @@ function CanvasGallery({
           prompt={pendingPrompt}
           dim={dim}
         />
-      ) : null}
-      {generations.map((g, i) => {
-        const isLatest = i === 0;
-        return (
+      ) : hero ? (
         <PaperCard
-          key={g.id}
-          id={`gen-${g.id}`}
-          className="p-5 anim-fade-in scroll-mt-4 transition-shadow"
+          key={hero.id}
+          className="p-5 anim-fade-in transition-shadow"
         >
           <div className="flex items-baseline justify-between mb-3">
             <div className="flex items-baseline gap-3">
               <SectionTag>
-                Render · {String(generations.length - i).padStart(2, "0")}
+                Render · {String(generations.length - focusedIndex).padStart(2, "0")}
               </SectionTag>
-              {g.version != null ? (
-                <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-pencil tnum">
-                  v{String(g.version).padStart(2, "0")}
+              {hero.version != null ? (
+                <span
+                  className={`font-mono text-[10px] uppercase tracking-[0.12em] tnum ${
+                    isHeroLatest ? "text-pencil" : "text-ink-mute"
+                  }`}
+                >
+                  v{String(hero.version).padStart(2, "0")}
                 </span>
               ) : (
                 <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute">
                   unversioned
                 </span>
               )}
+              {!isHeroLatest ? (
+                <span className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute">
+                  history · read-only
+                </span>
+              ) : null}
             </div>
             <Annotation>
-              {new Date(g.timestamp).toLocaleString([], {
+              {new Date(hero.timestamp).toLocaleString([], {
                 hour: "2-digit",
                 minute: "2-digit",
                 day: "2-digit",
@@ -1868,23 +1949,23 @@ function CanvasGallery({
               })}
             </Annotation>
           </div>
-          {g.url ? (
+          {hero.url ? (
             // Real render — rounded inset on white card. The image carries
             // its own pixels; no grid-paper background underneath. URL
             // resolver normalises legacy data:/http: URLs and prefixes
             // backend-relative paths with the API origin. ObjectOverlay
-            // sits on top with click-to-edit hotspots when the
-            // generation carries graph-derived bbox data.
+            // sits on top with click-to-edit hotspots, but only on the
+            // latest (editable) version — history renders stay read-only.
             <div className="relative aspect-video bg-paper-deep border border-hairline rounded-md overflow-hidden">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
-                src={resolveAssetUrl(g.url)}
-                alt={g.prompt}
+                src={resolveAssetUrl(hero.url)}
+                alt={hero.prompt}
                 className="absolute inset-0 w-full h-full object-cover"
               />
-              {isLatest && g.objectsBbox && g.objectsBbox.length > 0 ? (
+              {isHeroLatest && hero.objectsBbox && hero.objectsBbox.length > 0 ? (
                 <ObjectOverlay
-                  bboxes={g.objectsBbox}
+                  bboxes={hero.objectsBbox}
                   selectedObjectId={selectedObjectId}
                   onSelect={onSelectObject}
                 />
@@ -1898,8 +1979,8 @@ function CanvasGallery({
               <div className="text-center">
                 <SectionTag>Render unavailable</SectionTag>
                 <div className="mt-2 text-[12px] text-ink-soft">
-                  {dim.toUpperCase()} · {g.prompt.slice(0, 60)}
-                  {g.prompt.length > 60 ? "…" : ""}
+                  {dim.toUpperCase()} · {hero.prompt.slice(0, 60)}
+                  {hero.prompt.length > 60 ? "…" : ""}
                 </div>
                 <div className="mt-3 text-[11px] font-mono text-ink-mute">
                   GEMINI_API_KEY not set — graph saved, image skipped.
@@ -1908,11 +1989,72 @@ function CanvasGallery({
             </div>
           )}
           <div className="mt-3 text-[12px] text-ink-soft leading-relaxed">
-            {g.prompt}
+            {hero.prompt}
           </div>
         </PaperCard>
-        );
-      })}
+      ) : null}
+
+      {/* HISTORY FILMSTRIP — every attempt, newest first, click to focus. */}
+      {showStrip ? (
+        <div className="rounded-lg border border-hairline bg-paper-soft p-2">
+          <div className="flex items-baseline justify-between px-1 pb-2">
+            <SectionTag>History · {String(generations.length).padStart(2, "0")}</SectionTag>
+            <Annotation>click to compare</Annotation>
+          </div>
+          <div className="flex gap-2 overflow-x-auto draft-scroll pb-1">
+            {pending ? (
+              <div className="shrink-0 w-[132px] aspect-video rounded-md border border-hairline bg-paper-deep skeleton-shimmer flex items-center justify-center">
+                <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-ink-mute">
+                  {pendingLabel}
+                </span>
+              </div>
+            ) : null}
+            {generations.map((g, i) => {
+              const isFocused = g.id === hero?.id;
+              const isLatest = i === 0;
+              return (
+                <button
+                  key={g.id}
+                  type="button"
+                  aria-pressed={isFocused}
+                  aria-label={`Focus render ${generations.length - i}${g.version != null ? `, version ${g.version}` : ""}`}
+                  onClick={() => onFocus(g.id)}
+                  className={`group relative shrink-0 w-[132px] aspect-video rounded-md overflow-hidden border transition-all ${
+                    isFocused
+                      ? "border-pencil ring-1 ring-pencil"
+                      : "border-hairline hover:border-graphite"
+                  }`}
+                >
+                  {g.url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={resolveAssetUrl(g.url)}
+                      alt={g.prompt}
+                      className="absolute inset-0 w-full h-full object-cover"
+                    />
+                  ) : (
+                    <div className="absolute inset-0 bg-paper-deep grid-paper flex items-center justify-center">
+                      <span className="font-mono text-[10px] text-ink-mute">no render</span>
+                    </div>
+                  )}
+                  {/* Bottom label strip — version + latest marker. Kept
+                      legible over any image with a soft ink gradient. */}
+                  <div className="absolute inset-x-0 bottom-0 flex items-center justify-between px-1.5 py-1 bg-gradient-to-t from-ink-deep/70 to-transparent">
+                    <span className="font-mono text-[9px] uppercase tracking-[0.1em] tnum text-paper">
+                      {g.version != null ? `v${String(g.version).padStart(2, "0")}` : "—"}
+                    </span>
+                    {isLatest ? (
+                      <span className="font-mono text-[8px] uppercase tracking-[0.12em] text-pencil-soft">
+                        latest
+                      </span>
+                    ) : null}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
@@ -3507,8 +3649,11 @@ function SummaryTab({
         </div>
       ) : (
         // Anonymous / image-only fallback — no graph_data was returned.
-        // Static spec surfaces so the page stays informative. Code
-        // compliance has moved out to the Checks tab.
+        // The render came back as a flat image with no structured design
+        // graph, so there are no real objects, materials, or BOQ rows to
+        // cite. We surface only what we actually know (Dim + Theme) and an
+        // honest note — never fabricated material prices. Real, sourced
+        // figures live in the Specs + Cost tabs once a graph exists.
         <div className="mt-4 space-y-5">
           <div>
             <h4 className="font-mono text-[10px] tracking-[0.14em] uppercase text-ink-mute mb-2">
@@ -3517,32 +3662,20 @@ function SummaryTab({
             <div className="border-t border-hairline">
               <CitedKV k="Dim" v={dim.toUpperCase()} />
               <CitedKV k="Theme" v={theme} />
-              <CitedKV k="Version" v="01" />
             </div>
           </div>
           <div>
             <h4 className="font-mono text-[10px] tracking-[0.14em] uppercase text-ink-mute mb-2">
-              Primary materials
+              Materials &amp; BOQ
             </h4>
-            <div className="border-t border-hairline">
-              <CitedKV
-                k="Walnut (top)"
-                v="₹560/kg"
-                src="MCX live · timber composite"
-                srcWhen="3 hrs ago"
-              />
-              <CitedKV
-                k="Brass (handles)"
-                v="₹820/kg"
-                src="MCX live · brass scrap"
-                srcWhen="3 hrs ago"
-              />
-              <CitedKV
-                k="Leather A"
-                v="₹1,950/m²"
-                src="Vendor · TanCo grade-A"
-                srcWhen="catalog · 4 days ago"
-              />
+            <div className="border-t border-hairline pt-3">
+              <p className="text-[12px] text-ink-soft leading-relaxed italic">
+                This render came back image-only — no structured design
+                graph, so there are no objects or sourced material prices
+                to show yet. Re-prompt or regenerate to engage the spec and
+                cost engines; figures will populate the Specs and Cost tabs
+                with their sources inline.
+              </p>
             </div>
           </div>
         </div>
@@ -4380,6 +4513,79 @@ function IssueSection({
 // live under a "More" affordance. The selector renders a tiny "Loading…"
 // state on cold start; in practice the fetch completes well before the
 // user clicks anything because we kick it off on workspace mount.
+
+// Static fallback for the region catalogue so the selector renders
+// instantly (and offline) before GET /regions resolves. Mirrors the
+// backend registry in app/services/regions/__init__.py — the live fetch
+// overrides this with authoritative currency/code-basis metadata.
+const REGION_FALLBACK: RegionDef[] = [
+  { key: "india", label: "India", currency: "INR", currency_symbol: "₹", jurisdiction: "india_nbc", code_basis: "NBC 2016 + ECBC", codes_seeded: true, locale: "en-IN" },
+  { key: "europe", label: "Europe", currency: "EUR", currency_symbol: "€", jurisdiction: "eu_eurocode", code_basis: "Eurocodes + DIN + EPBD", codes_seeded: true, locale: "de-DE" },
+  { key: "middle_east", label: "Middle East", currency: "AED", currency_symbol: "AED", jurisdiction: "uae_dubai", code_basis: "Dubai Building Code + Estidama", codes_seeded: true, locale: "en-AE" },
+  { key: "north_america", label: "North America", currency: "USD", currency_symbol: "$", jurisdiction: "international_ibc", code_basis: "IBC (international baseline)", codes_seeded: false, locale: "en-US" },
+  { key: "asia_pacific", label: "Asia-Pacific", currency: "USD", currency_symbol: "$", jurisdiction: "international_ibc", code_basis: "IBC (international baseline)", codes_seeded: false, locale: "en-US" },
+  { key: "latin_america", label: "Latin America", currency: "USD", currency_symbol: "$", jurisdiction: "international_ibc", code_basis: "IBC (international baseline)", codes_seeded: false, locale: "en-US" },
+  { key: "africa", label: "Africa", currency: "USD", currency_symbol: "$", jurisdiction: "international_ibc", code_basis: "IBC (international baseline)", codes_seeded: false, locale: "en-US" },
+  { key: "oceania", label: "Oceania", currency: "AUD", currency_symbol: "A$", jurisdiction: "international_ibc", code_basis: "IBC (international baseline)", codes_seeded: false, locale: "en-AU" },
+];
+
+function RegionSelector({
+  value,
+  onChange,
+}: {
+  value: string;
+  onChange: (r: string) => void;
+}) {
+  // Fetch the authoritative catalogue once; the static fallback keeps
+  // the control populated instantly and if the endpoint is unreachable.
+  const [defs, setDefs] = useState<RegionDef[]>(REGION_FALLBACK);
+  useEffect(() => {
+    let cancelled = false;
+    regionsApi
+      .list()
+      .then((res) => {
+        if (!cancelled && res.regions?.length) setDefs(res.regions);
+      })
+      .catch(() => {
+        /* keep fallback — selector stays usable */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const active = defs.find((d) => d.key === value) ?? defs[0];
+
+  return (
+    <section>
+      <SectionTag>Region</SectionTag>
+      <div className="mt-2.5 grid grid-cols-2 gap-1.5">
+        {defs.map((d) => (
+          <button
+            key={d.key}
+            type="button"
+            className="slide-pill text-center"
+            data-active={d.key === value}
+            onClick={() => onChange(d.key)}
+            title={`${d.currency} · ${d.code_basis}`}
+          >
+            {d.label}
+          </button>
+        ))}
+      </div>
+      {active ? (
+        <p className="mt-2 text-[12px] text-ink-mute leading-snug">
+          Estimates in{" "}
+          <span className="text-ink-soft font-medium">
+            {active.currency_symbol} {active.currency}
+          </span>{" "}
+          · codes: {active.code_basis}
+          {active.codes_seeded ? "" : " (baseline)"}
+        </p>
+      ) : null}
+    </section>
+  );
+}
 
 function ProjectTypeSelector({
   value,

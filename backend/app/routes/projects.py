@@ -35,6 +35,7 @@ async def create_project_route(
         project_type=payload.project_type.value,
         project_sub_type=payload.project_sub_type,
         project_scale=payload.project_scale,
+        region=payload.region,
     )
     return project
 
@@ -85,6 +86,10 @@ async def update_project_route(
         project.project_sub_type = payload.project_sub_type or None
     if payload.project_scale is not None:
         project.project_scale = payload.project_scale or None
+    if payload.region is not None:
+        from app.services.regions import normalize_region
+
+        project.region = normalize_region(payload.region)
 
     await db.flush()
     return project

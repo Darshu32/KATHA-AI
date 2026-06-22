@@ -28,6 +28,7 @@ from app.routes.parametric import router as parametric_router
 from app.routes.project_types import router as project_types_router
 from app.routes.prompts import router as prompts_router
 from app.routes.projects import router as projects_router
+from app.routes.regions import router as regions_router
 from app.routes.specs import router as specs_router
 from app.routes.standards import router as standards_router
 from app.routes.themes import router as themes_router
@@ -44,6 +45,7 @@ all_routers = [
     diagrams_router,
     drawings_router,
     projects_router,
+    regions_router,
     project_types_router,
     themes_router,
     images_router,

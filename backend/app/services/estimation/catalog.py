@@ -115,12 +115,52 @@ DEFAULT_TAX_RATE = Decimal("0.18")
 DEFAULT_DISCOUNT_RATE = Decimal("0.00")
 DEFAULT_CONFIDENCE_SCORE = Decimal("0.85")
 DEFAULT_COST_PER_SQFT_FALLBACK = Decimal("1500")
-SUPPORTED_CURRENCIES = ("INR", "USD", "EUR")
+# Rates are expressed with INR as the base unit: ``1 INR = rate <code>``.
+# Used as the offline fallback when the live FX provider is unavailable.
+# Demo-critical additions: AED (UAE/Dubai) + AUD (Oceania). Values are
+# indicative mid-market rates as of 2026-Q2 — the FX service overrides
+# these with live rates when configured.
+SUPPORTED_CURRENCIES = ("INR", "USD", "EUR", "AED", "AUD", "GBP")
 DEFAULT_CONVERSION_RATES: dict[str, Decimal] = {
     "INR": Decimal("1.00"),
     "USD": Decimal("0.012"),
     "EUR": Decimal("0.011"),
+    "AED": Decimal("0.044"),
+    "AUD": Decimal("0.018"),
+    "GBP": Decimal("0.0095"),
 }
+# Display symbols, keyed by ISO-4217. Falls back to the code itself.
+CURRENCY_SYMBOLS: dict[str, str] = {
+    "INR": "₹",
+    "USD": "$",
+    "EUR": "€",
+    "AED": "AED",
+    "AUD": "A$",
+    "GBP": "£",
+}
+
+
+def currency_symbol(code: str | None) -> str:
+    """Display symbol for an ISO-4217 code, defaulting to the code."""
+    norm = str(code or CURRENCY).upper()
+    return CURRENCY_SYMBOLS.get(norm, norm)
+
+
+def convert_from_inr(amount_inr: float | Decimal, currency: str | None) -> Decimal:
+    """Convert an INR-denominated amount into ``currency`` using the
+    offline fallback rate-card. Used to render the INR-based cost
+    rate-cards in the project's regional currency.
+
+    The estimation engine is authored in INR (Indian rate-cards). For
+    non-INR regions we convert at the fallback rate so the demo shows a
+    plausible local-currency figure rather than rupees. Live FX, when
+    wired, supersedes these constants.
+    """
+    norm = str(currency or CURRENCY).upper()
+    if norm == CURRENCY:
+        return Decimal(str(amount_inr))
+    rate = DEFAULT_CONVERSION_RATES.get(norm, Decimal("1.00"))
+    return (Decimal(str(amount_inr)) * rate)
 DEFAULT_PRICING_CONFIG = {
     "material_multipliers": {key: "1.00" for key in MATERIAL_RATES},
     "style_multipliers": {key: str(value) for key, value in STYLE_MULTIPLIERS.items()},
