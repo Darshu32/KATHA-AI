@@ -655,6 +655,17 @@ export const design = {
       `/projects/${projectId}/drawings/floor-plan${version ? `?version=${version}` : ""}`, "GET", undefined, token,
     ),
 
+  // ── Phase 1 Layer 3A — Working drawings (project-scoped, LLM-backed) ─────
+  getDrawingView: (
+    token: string | undefined,
+    projectId: string,
+    drawing: "elevation-view" | "section-view" | "isometric-view" | "detail-sheet",
+    version?: number,
+  ) =>
+    request<{ project_id: string; version: number; preview_svg: string; svg?: string; name?: string }>(
+      `/projects/${projectId}/drawings/${drawing}${version ? `?version=${version}` : ""}`, "GET", undefined, token,
+    ),
+
   getLatest: (token: string | undefined, projectId: string) =>
     request<{
       id: string;

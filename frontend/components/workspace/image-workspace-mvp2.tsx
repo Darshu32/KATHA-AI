@@ -73,29 +73,31 @@ const DRAWINGS_CATALOGUE: {
   wired: boolean;
 }[] = [
   { id: "plan_view",       name: "Plan View",       stage: "BRD 3A §1", summary: "Top-down — overall dims, key measurements, section refs, hatches.",                 wired: true },
-  { id: "elevation_view",  name: "Elevation View",  stage: "BRD 3A §2", summary: "Front/side — heights, leg-base proportions, hardware + detail callouts.",          wired: false },
-  { id: "section_view",    name: "Section View",    stage: "BRD 3A §3", summary: "Cut-through — internal layers, joints, seat depth, leg taper details.",            wired: false },
-  { id: "isometric_view",  name: "Isometric View",  stage: "BRD 3A §4", summary: "3D iso — overall form, material finishes, superimposed dimensions.",               wired: false },
-  { id: "detail_sheet",    name: "Detail Sheet",    stage: "BRD 3A §5", summary: "Zoomed details — joints, hardware, edge profiles, seams, transitions.",            wired: false },
+  { id: "elevation_view",  name: "Elevation View",  stage: "BRD 3A §2", summary: "Front/side — heights, leg-base proportions, hardware + detail callouts.",          wired: true },
+  { id: "section_view",    name: "Section View",    stage: "BRD 3A §3", summary: "Cut-through — internal layers, joints, seat depth, leg taper details.",            wired: true },
+  { id: "isometric_view",  name: "Isometric View",  stage: "BRD 3A §4", summary: "3D iso — overall form, material finishes, superimposed dimensions.",               wired: true },
+  { id: "detail_sheet",    name: "Detail Sheet",    stage: "BRD 3A §5", summary: "Zoomed details — joints, hardware, edge profiles, seams, transitions.",            wired: true },
 ];
 
-/* BRD §2B diagram catalogue. Mirrors /diagrams/types. All 9 are wired
- * via design.generateDiagrams(projectId, version, diagramId). */
+/* BRD §2B diagram catalogue. Each id MUST match a generator in the
+ * backend deterministic registry (app/services/diagrams/__init__.py),
+ * which is what /projects/:id/diagrams (design.generateDiagrams) serves.
+ * These renderers are deterministic SVG — no LLM key required. Keep this
+ * list in sync with design.listDiagramsAvailable() / the registry. */
 const DIAGRAMS_CATALOGUE: {
   id: string;
   name: string;
   stage: string;
   summary: string;
 }[] = [
-  { id: "concept_transparency", name: "Concept Transparency", stage: "BRD 2B §1",  summary: "Core design intent — material/form relationship, functional zones." },
-  { id: "form_development",     name: "Form Development",     stage: "BRD 2B §2",  summary: "Four-stage evolution — volume → grid → subtract → articulate." },
-  { id: "massing",              name: "Massing",              stage: "BRD 2B §3",  summary: "Horizontal + vertical massing — silhouette, weight, height bands." },
-  { id: "volumetric_hierarchy", name: "Volumetric Hierarchy", stage: "BRD 2B §3+", summary: "Vertical × horizontal reading — stacking + allocation logic." },
-  { id: "volumetric_block",     name: "Volumetric (Block)",   stage: "BRD 2B §4",  summary: "3D block read — masses, voids, slicing strategy." },
-  { id: "design_process",       name: "Design Process",       stage: "BRD 2B §5",  summary: "Step-by-step narrative — decision points, rule drivers." },
-  { id: "solid_void",           name: "Solid vs Void",        stage: "BRD 2B §6",  summary: "Solid % / void % — weight pattern, breathing room." },
-  { id: "spatial_organism",     name: "Spatial Organism",     stage: "BRD 2B §7",  summary: "How a body inhabits the space — touchpoints, movement." },
-  { id: "hierarchy",            name: "Hierarchy",            stage: "BRD 2B §8",  summary: "Three rankings — visual, material, functional." },
+  { id: "concept_transparency", name: "Concept Transparency", stage: "BRD 2B §1", summary: "Core design intent — material/form relationship, functional zones." },
+  { id: "form_development",     name: "Form Development",     stage: "BRD 2B §2", summary: "Four-stage evolution — volume → grid → subtract → articulate." },
+  { id: "massing",              name: "Massing",              stage: "BRD 2B §3", summary: "Horizontal + vertical massing — silhouette, weight, height bands." },
+  { id: "volumetric",           name: "Volumetric",           stage: "BRD 2B §4", summary: "Axonometric 3D block read — masses, voids, spatial volume." },
+  { id: "design_process",       name: "Design Process",       stage: "BRD 2B §5", summary: "Step-by-step narrative — decision points, rule drivers." },
+  { id: "solid_void",           name: "Solid vs Void",        stage: "BRD 2B §6", summary: "Solid % / void % — weight pattern, breathing room." },
+  { id: "spatial_organism",     name: "Spatial Organism",     stage: "BRD 2B §7", summary: "How a body inhabits the space — touchpoints, movement." },
+  { id: "hierarchy",            name: "Hierarchy",            stage: "BRD 2B §8", summary: "Three rankings — visual, material, functional." },
 ];
 
 export default function ImageWorkspaceMvp2() {
@@ -2403,11 +2405,19 @@ function ViewsTab({
   } | null>(null);
   const notify = useToastStore((s) => s.notify);
 
-  // Fires the right project-scoped backend call. Drawings only have
-  // plan_view wired today (via design.getFloorPlan); other drawings
-  // need a project-pipeline endpoint that the design.* namespace will
-  // gain later in the sprint. Diagrams are all wired via
-  // design.generateDiagrams, which targets a single diagram_id.
+  // Maps a working-drawing id to its project-scoped GET slug. plan_view
+  // uses the deterministic floor-plan package; the other four are
+  // LLM-backed furniture-scale generators (elevation/section/iso/detail).
+  const DRAWING_SLUG: Record<string, "elevation-view" | "section-view" | "isometric-view" | "detail-sheet"> = {
+    elevation_view: "elevation-view",
+    section_view: "section-view",
+    isometric_view: "isometric-view",
+    detail_sheet: "detail-sheet",
+  };
+
+  // Fires the right project-scoped backend call. plan_view → floor-plan
+  // package; the other working drawings → their LLM-backed view route;
+  // diagrams → design.generateDiagrams, which targets a single diagram_id.
   const open = async (kind: "drawing" | "diagram", id: string, name: string) => {
     if (!hasActiveProject || !activeProjectId) {
       notify({
@@ -2447,11 +2457,23 @@ function ViewsTab({
         } else {
           setView({ title: name, svg: res.preview_svg });
         }
+      } else if (DRAWING_SLUG[id]) {
+        const res = await designApi.getDrawingView(
+          token,
+          activeProjectId,
+          DRAWING_SLUG[id],
+          latestVersion ?? undefined,
+        );
+        if (!res.preview_svg) {
+          notify({ type: "warning", title: name, message: "Generator returned no SVG." });
+        } else {
+          setView({ title: name, svg: res.preview_svg });
+        }
       } else {
         notify({
-          type: "info",
-          title: `${name} — Day 3`,
-          message: "Project-pipeline route for this drawing lands in Day 3.",
+          type: "warning",
+          title: name,
+          message: "This drawing type isn't available yet.",
         });
       }
     } catch (e) {
