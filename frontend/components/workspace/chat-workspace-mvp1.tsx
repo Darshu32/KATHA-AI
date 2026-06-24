@@ -651,27 +651,41 @@ function EmptyHero({ onPick }: { onPick: (prompt: string) => void }) {
     "Explain ECBC envelope U-value targets for warm-humid climates.",
   ];
   return (
-    <div className="px-6 md:px-10 py-12 max-w-chat">
-      <h1 className="text-[1.875rem] md:text-[2.125rem] text-ink-deep leading-[1.15] tracking-[-0.02em] font-semibold">
+    <div className="mx-auto w-full max-w-[40rem] px-6 md:px-8 py-16 md:py-20">
+      <p className="section-tag">Architectural intelligence</p>
+      <h1 className="mt-3 text-[1.875rem] md:text-[2.125rem] text-ink-deep leading-[1.15] tracking-[-0.02em] font-semibold">
         Good to see you, architect.
       </h1>
-      <p className="mt-4 text-ink-soft text-[15px] leading-relaxed max-w-xl">
+      <p className="mt-4 text-ink-soft text-[15px] leading-relaxed">
         Ask anything about codes, materials, ergonomics, structural logic,
         manufacturing, or cost. Switch to Deep for a long-form
         conversation with a notes pane that writes itself.
       </p>
 
-      <div className="mt-7 space-y-2">
-        {suggestions.map((s) => (
-          <button
-            key={s}
-            type="button"
-            onClick={() => onPick(s)}
-            className="w-full text-left px-4 py-2.5 border border-hairline bg-paper hover:bg-paper-soft hover:border-graphite rounded-md transition-colors text-[14.5px] text-ink leading-snug"
-          >
-            {s}
-          </button>
-        ))}
+      {/* Suggestions as a drafting index — hairline-ruled rows with mono
+          callout numerals, the way a drawing sheet lists its references.
+          Reads as part of the architectural register, not a generic
+          button stack. */}
+      <div className="mt-10">
+        <p className="section-tag">Start here</p>
+        <ul className="mt-2 border-t border-hairline">
+          {suggestions.map((s, i) => (
+            <li key={s} className="border-b border-hairline">
+              <button
+                type="button"
+                onClick={() => onPick(s)}
+                className="group w-full text-left flex items-baseline gap-3.5 py-3 transition-colors"
+              >
+                <span className="font-mono text-[11px] tabular-nums text-ink-mute group-hover:text-pencil transition-colors shrink-0 pt-0.5">
+                  {String(i + 1).padStart(2, "0")}
+                </span>
+                <span className="text-[14.5px] text-ink-soft group-hover:text-ink-deep leading-snug transition-colors">
+                  {s}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
       </div>
     </div>
   );
@@ -687,7 +701,7 @@ function Transcript({
   onEditUserMessage: (content: string) => void;
 }) {
   return (
-    <div className="px-6 md:px-10 py-7 space-y-5">
+    <div className="mx-auto w-full max-w-[52rem] px-6 md:px-8 py-9 space-y-8">
       {messages.map((m) => (
         <MessageRow
           key={m.id}
@@ -1084,8 +1098,8 @@ function PromptInput({
   }, [value]);
 
   return (
-    <div className="border-t border-hairline bg-paper px-6 md:px-10 py-4">
-      <div>
+    <div className="border-t border-hairline bg-paper px-6 md:px-8 py-4">
+      <div className="mx-auto w-full max-w-[52rem]">
         <div className="border border-hairline rounded-xl bg-paper-soft/60 p-3 flex items-end gap-3 focus-within:border-graphite transition-colors">
           <textarea
             ref={ref}
