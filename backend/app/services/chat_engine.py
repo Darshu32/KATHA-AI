@@ -182,6 +182,29 @@ def _detect_mode(message: str) -> str:
     return "quick"
 
 
+def _fallback_image_prompt(user_message: str, clean_content: str) -> str:
+    """Synthesize an architectural image prompt when Deep mode lacks one.
+
+    Deep responses are contractually required to carry a diagram. When the
+    LLM omits ``image_prompt`` we derive a deterministic one from the user's
+    topic so the frontend always has something to render.
+    """
+    topic = (user_message or "").strip()
+    if not topic:
+        # Fall back to the first heading / sentence of the answer.
+        for line in (clean_content or "").splitlines():
+            stripped = line.lstrip("# ").strip()
+            if stripped:
+                topic = stripped
+                break
+    topic = (topic or "architectural concept")[:160]
+    return (
+        f"A clean, professional architectural concept diagram illustrating: {topic}. "
+        "Studio-quality presentation drawing — labelled, dimensioned where relevant, "
+        "neutral palette, white background, technical line work with subtle shading."
+    )
+
+
 def _build_messages(
     conversation_history: list[dict],
     user_message: str,
@@ -244,6 +267,13 @@ async def stream_chat_response(
         # If the LLM ignored the prompt rules and emitted an image_prompt in
         # Quick Mode, drop it here so the frontend never tries to render one.
         image_prompt = metadata.image_prompt if mode == "deep" else None
+
+        # Deep mode guarantees a diagram (PRODUCT_TRUTH §1.2). If the LLM
+        # omitted image_prompt despite the system-prompt rules, synthesize a
+        # fallback from the user message + answer so every Deep response is
+        # hard-gated to carry a visual.
+        if mode == "deep" and not (image_prompt and image_prompt.strip()):
+            image_prompt = _fallback_image_prompt(user_message, clean_content)
 
         # Brief capture is Deep-mode only (BRD §1A). Drop any Quick-mode leak.
         brief = metadata.brief if mode == "deep" else None

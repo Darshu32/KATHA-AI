@@ -64,6 +64,12 @@ const RESPONSE_BANK = {
   }),
   deep: (prompt) => ({
     body: deepAnswerFor(prompt),
+    // Deep mode is hard-gated to carry a diagram (PRODUCT_TRUTH §1.2). The
+    // real backend synthesizes a fallback prompt when the LLM omits one;
+    // mirror that here so the mock never returns a diagram-less Deep reply.
+    image_prompt: `A clean, professional architectural concept diagram illustrating: ${(
+      prompt || "architectural concept"
+    ).slice(0, 120)}. Studio-quality presentation drawing, neutral palette, white background, technical line work.`,
     suggestions: [
       "Generate a render of this concept",
       "Pull the cost estimate",
@@ -206,7 +212,7 @@ async function handleChatStream(req, res) {
   const message = (body.message || "").trim();
   const mode = (body.mode || "auto").toLowerCase();
   const responder = RESPONSE_BANK[mode] ?? RESPONSE_BANK.auto;
-  const { body: text, suggestions, reference_links } = responder(message);
+  const { body: text, suggestions, reference_links, image_prompt } = responder(message);
 
   res.writeHead(200, {
     "Content-Type": "text/event-stream",
@@ -234,7 +240,7 @@ async function handleChatStream(req, res) {
     type: "done",
     content: text,
     suggestions: suggestions ?? [],
-    image_prompt: null,
+    image_prompt: image_prompt ?? null,
     video_query: null,
     youtube_query: null,
     research_query: null,

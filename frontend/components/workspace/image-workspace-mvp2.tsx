@@ -39,7 +39,7 @@ import {
 
 type Scope = "architecture" | "interior" | "furniture" | "product";
 type Dim = "2d" | "3d" | "4d";
-type TerminalTab = "cost" | "problems";
+type TerminalTab = "cost" | "problems" | "genlog" | "citations";
 
 const SCOPES: { id: Scope; label: string }[] = [
   { id: "architecture", label: "Architecture" },
@@ -665,6 +665,8 @@ export default function ImageWorkspaceMvp2() {
           hasDesign={generations.length > 0}
           validation={latestGeneration?.validation}
           mepCost={latestGeneration?.mepCostEstimate}
+          codeCompliance={latestGeneration?.codeCompliance}
+          generation={latestGeneration}
           onClose={() => toggleTerminal()}
         />
       ) : (
@@ -4052,7 +4054,7 @@ function TerminalCollapsed({ onOpen }: { onOpen: () => void }) {
       onClick={onOpen}
     >
       <span className="font-mono text-[11px] tracking-[0.12em] uppercase text-ink-soft">
-        Terminal · cost · problems
+        Terminal · cost · problems · log · citations
       </span>
       <span className="font-mono text-[11px] uppercase tracking-[0.08em] text-ink-soft">
         Expand ↑
@@ -4067,6 +4069,8 @@ function TerminalPanel({
   hasDesign,
   validation,
   mepCost,
+  codeCompliance,
+  generation,
   onClose,
 }: {
   tab: TerminalTab;
@@ -4074,6 +4078,8 @@ function TerminalPanel({
   hasDesign: boolean;
   validation?: import("@/lib/types").ValidationReport;
   mepCost?: import("@/lib/types").MepCostEstimate;
+  codeCompliance?: import("@/lib/types").CodeComplianceEntry[];
+  generation?: import("@/lib/types").ImageGeneration | null;
   onClose: () => void;
 }) {
   // BRD §11.3 — Problems tab count reflects errors + warnings (suggestions
@@ -4082,9 +4088,16 @@ function TerminalPanel({
   const problemCount =
     (validation?.errors?.length ?? 0) + (validation?.warnings?.length ?? 0);
 
+  // Citations badge — every datum the design draws on that carries a
+  // source: validation issues with a source_section/reference + code
+  // compliance rows + the MEP cost jurisdiction band.
+  const citationCount = countCitations(validation, codeCompliance, mepCost);
+
   const tabs: { id: TerminalTab; label: string; count?: number }[] = [
     { id: "cost", label: "Cost" },
     { id: "problems", label: "Problems", count: problemCount },
+    { id: "genlog", label: "Generation Log" },
+    { id: "citations", label: "Citations", count: citationCount },
   ];
 
   return (
@@ -4147,10 +4160,236 @@ function TerminalPanel({
       <div className="flex-1 overflow-y-auto draft-scroll px-6 py-4">
         {tab === "cost" ? (
           <CostStream hasDesign={hasDesign} mepCost={mepCost} />
-        ) : (
+        ) : tab === "problems" ? (
           <ProblemsList hasDesign={hasDesign} validation={validation} />
+        ) : tab === "genlog" ? (
+          <GenerationLog hasDesign={hasDesign} generation={generation} />
+        ) : (
+          <CitationsList
+            hasDesign={hasDesign}
+            validation={validation}
+            codeCompliance={codeCompliance}
+            mepCost={mepCost}
+          />
         )}
       </div>
+    </div>
+  );
+}
+
+// ── Citations + Generation Log helpers ────────────────────────────────
+
+type CitationRow = {
+  label: string;
+  detail: string;
+  source: string;
+  kind: "code" | "validation" | "cost";
+};
+
+/* Aggregate every cited datum the current design draws on. Pulls from
+   three already-wired sources: validation issues (NBC / code clauses),
+   the code-compliance summary, and the MEP cost jurisdiction band. No
+   new backend call — this is a read over data the generation response
+   already carries. */
+function collectCitations(
+  validation?: import("@/lib/types").ValidationReport,
+  codeCompliance?: import("@/lib/types").CodeComplianceEntry[],
+  mepCost?: import("@/lib/types").MepCostEstimate,
+): CitationRow[] {
+  const rows: CitationRow[] = [];
+
+  for (const entry of codeCompliance ?? []) {
+    const src = [entry.code, entry.source_section, entry.jurisdiction]
+      .filter(Boolean)
+      .join(" · ");
+    if (!src) continue;
+    rows.push({
+      label: entry.label,
+      detail: `${entry.value} (target ${entry.target})`,
+      source: src,
+      kind: "code",
+    });
+  }
+
+  const issues = [
+    ...(validation?.errors ?? []),
+    ...(validation?.warnings ?? []),
+    ...(validation?.suggestions ?? []),
+  ];
+  for (const issue of issues) {
+    const src = [issue.reference, issue.source_section, issue.jurisdiction]
+      .filter(Boolean)
+      .join(" · ");
+    if (!src) continue;
+    rows.push({
+      label: issue.code || issue.path || "Rule",
+      detail: issue.message,
+      source: src,
+      kind: "validation",
+    });
+  }
+
+  if (mepCost?.jurisdiction) {
+    rows.push({
+      label: "MEP cost bands",
+      detail: `${mepCost.systems?.length ?? 0} systems · ${mepCost.area_m2} m²`,
+      source: [mepCost.jurisdiction, mepCost.region].filter(Boolean).join(" · "),
+      kind: "cost",
+    });
+  }
+
+  return rows;
+}
+
+function countCitations(
+  validation?: import("@/lib/types").ValidationReport,
+  codeCompliance?: import("@/lib/types").CodeComplianceEntry[],
+  mepCost?: import("@/lib/types").MepCostEstimate,
+): number {
+  return collectCitations(validation, codeCompliance, mepCost).length;
+}
+
+function CitationsList({
+  hasDesign,
+  validation,
+  codeCompliance,
+  mepCost,
+}: {
+  hasDesign: boolean;
+  validation?: import("@/lib/types").ValidationReport;
+  codeCompliance?: import("@/lib/types").CodeComplianceEntry[];
+  mepCost?: import("@/lib/types").MepCostEstimate;
+}) {
+  if (!hasDesign) {
+    return (
+      <div className="font-mono text-[12px] text-ink-mute leading-relaxed">
+        No citations yet.
+        <br />
+        Generate a design — every code clause, cost band, and validated
+        datum it draws on lists here with its source.
+      </div>
+    );
+  }
+
+  const rows = collectCitations(validation, codeCompliance, mepCost);
+  if (rows.length === 0) {
+    return (
+      <div className="font-mono text-[12px] text-ink-mute leading-relaxed">
+        This generation carries no source-tagged data yet.
+        <br />
+        Code-backed validation runs on designs with resolvable dimensions.
+      </div>
+    );
+  }
+
+  const kindLabel: Record<CitationRow["kind"], string> = {
+    code: "CODE",
+    validation: "RULE",
+    cost: "COST",
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute mb-1">
+        {rows.length} cited {rows.length === 1 ? "source" : "sources"} · every datum is traceable
+      </div>
+      {rows.map((r, i) => (
+        <div
+          key={`${r.kind}-${i}`}
+          className="border-l-2 border-hairline pl-3 py-1"
+        >
+          <div className="flex items-baseline gap-2">
+            <span className="font-mono text-[9px] uppercase tracking-[0.1em] text-pencil shrink-0">
+              {kindLabel[r.kind]}
+            </span>
+            <span className="font-mono text-[12px] text-ink-deep">{r.label}</span>
+          </div>
+          <div className="font-mono text-[11px] text-ink leading-snug">{r.detail}</div>
+          <div className="font-mono text-[10px] text-ink-mute mt-0.5">↳ {r.source}</div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/* GenerationLog — a deterministic record of what the latest generation
+   produced. Generate is a single request (not a streaming agent feed),
+   so this honestly summarises the completed pipeline steps from the
+   response the design already carries, rather than faking live tokens. */
+function GenerationLog({
+  hasDesign,
+  generation,
+}: {
+  hasDesign: boolean;
+  generation?: import("@/lib/types").ImageGeneration | null;
+}) {
+  if (!hasDesign || !generation) {
+    return (
+      <div className="font-mono text-[12px] text-ink-mute leading-relaxed">
+        Generation log idle.
+        <br />
+        Each generate / edit / theme-switch records its pipeline steps here.
+      </div>
+    );
+  }
+
+  const graph = generation.graphData as
+    | {
+        objects?: unknown[];
+        room?: { type?: string; dimensions?: { length?: number; width?: number; height?: number } };
+        style?: { primary?: string };
+      }
+    | undefined;
+  const objectCount = graph?.objects?.length ?? 0;
+  const room = graph?.room;
+  const dims = room?.dimensions;
+  const dimLabel =
+    dims?.length && dims?.width
+      ? `${dims.length}×${dims.width}${dims.height ? `×${dims.height}` : ""} m`
+      : "—";
+  const validation = generation.validation;
+  const errs = validation?.errors?.length ?? 0;
+  const warns = validation?.warnings?.length ?? 0;
+  const mep = generation.mepCostEstimate;
+
+  const steps: { ok: boolean; label: string }[] = [
+    { ok: true, label: `Design graph resolved — ${objectCount} object${objectCount === 1 ? "" : "s"}, room ${room?.type ?? "—"} ${dimLabel}` },
+    { ok: true, label: `Theme applied — ${generation.theme ?? graph?.style?.primary ?? "—"}` },
+    { ok: !!generation.url, label: generation.url ? "Render produced" : "Render skipped (no image)" },
+    { ok: !!generation.estimate, label: generation.estimate ? "Cost estimate computed" : "Cost estimate unavailable" },
+    { ok: !!mep, label: mep ? `MEP cost rolled up — ${mep.systems?.length ?? 0} systems over ${mep.area_m2} m²` : "MEP cost skipped (no room area)" },
+    {
+      ok: !validation || validation.ok,
+      label: validation
+        ? `Validation pass — ${errs} error${errs === 1 ? "" : "s"}, ${warns} warning${warns === 1 ? "" : "s"}`
+        : "Validation not run",
+    },
+  ];
+
+  return (
+    <div className="space-y-2">
+      <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute mb-1">
+        Version {generation.version ?? "—"} ·{" "}
+        {new Date(generation.timestamp).toLocaleString()}
+      </div>
+      {steps.map((s, i) => (
+        <div key={i} className="flex items-baseline gap-2 font-mono text-[12px]">
+          <span className={s.ok ? "text-pencil" : "text-ink-mute"}>
+            {s.ok ? "✓" : "·"}
+          </span>
+          <span className={s.ok ? "text-ink" : "text-ink-mute"}>{s.label}</span>
+        </div>
+      ))}
+      {generation.prompt ? (
+        <div className="border-t border-hairline pt-2 mt-2">
+          <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute mb-1">
+            Prompt
+          </div>
+          <div className="font-mono text-[11px] text-ink leading-snug whitespace-pre-wrap">
+            {generation.prompt}
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

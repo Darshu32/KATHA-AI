@@ -1,13 +1,18 @@
 # KATHA AI — Product Truth
 
 > **Status:** Living document. Source of truth for what KATHA actually is.
-> Built collaboratively in conversation on 2026-05-04. Update in place as
-> decisions evolve. Every subsequent design / implementation conversation
-> references this doc to avoid drift.
+> Built collaboratively in conversation on 2026-05-04. Reconciled against
+> the shipped codebase on **2026-06-24**. Update in place as decisions
+> evolve. Every subsequent design / implementation conversation references
+> this doc to avoid drift.
 >
-> Sections marked **🟡 PENDING INPUT** are awaiting confirmation from the
-> founder. Sections marked **✅ CONFIRMED** are locked unless explicitly
-> revised here.
+> **Status legend (used throughout):**
+> - ✅ **DONE** — built, wired, verified in code
+> - 🟡 **PENDING** — decided in principle, not yet built / not yet wired end-to-end
+> - 🔴 **NOT STARTED** — needed, no code yet
+> - ⏭️ **DEFERRED** — intentionally parked (Phase 2 / post-MVP / trigger-based)
+>
+> For the consolidated "what's left" view, jump to **§8**.
 
 ---
 
@@ -16,15 +21,16 @@
 KATHA AI is a self-serve product (no admin role, no ops team) that
 delivers two distinct experiences inside one product:
 
-1. **Chat context window** — knowledge / discussion / planning
-2. **Image generation context window** — visual generation
+1. **Chat context window** (`/chat`) — knowledge / discussion / planning
+2. **Image generation context window** (`/design`) — visual generation
 
-The two windows are separate context surfaces (UX still being clarified —
-side-by-side panels vs. switchable workspaces vs. two apps in one shell).
+✅ **RESOLVED (was open):** The two windows are **separate routes**
+(`/chat` and `/design`), not side-by-side panels or a dual-app shell.
+Mobile ships `/chat` only; `/design` is desktop-only.
 
 ---
 
-## 1. MVP 1 — Chat context window ✅ CAPTURED FROM CONVERSATION
+## 1. MVP 1 — Chat context window
 
 ### 1.1 Purpose
 
@@ -33,13 +39,16 @@ diagrams, notes, YouTube links, "what to do next" suggestions. Same shape
 as a general AI agent (ChatGPT / Claude / Perplexity), but specialised
 for architectural / interior / product-design knowledge.
 
-### 1.2 Three chat modes
+### 1.2 Three chat modes — ✅ DONE (UI + mode-aware backend)
 
 | Mode | Response shape | Diagrams | Use case |
 |---|---|---|---|
-| **Quick** | Short, intense, dense-knowledge answer | Optional | Fast lookup ("what is the BRD door width for residential entry?") |
-| **Deep** | Continuous multi-turn discussion. Suggests **present + future** considerations. **Diagrams MANDATORY** in every Deep session | Required (every Deep response includes a diagram) | Real design conversations, planning sessions |
-| **Auto** | Default / adaptive. Behaves as the name suggests — picks Quick or Deep style based on context | Adaptive | When the user doesn't want to choose |
+| **Quick** | Short, intense, dense-knowledge answer | Optional | Fast lookup ("what is the door width for residential entry?") |
+| **Deep** | Continuous multi-turn discussion. Suggests **present + future** considerations. Diagrams expected in Deep | Required | Real design conversations, planning sessions |
+| **Auto** | Default / adaptive — picks Quick or Deep style based on context | Adaptive | When the user doesn't want to choose |
+
+✅ Mode selector is wired in the chat UI; backend is mode-aware and the
+mock backend honours `mode` in `RESPONSE_BANK`.
 
 ### 1.3 Response content
 
@@ -50,346 +59,333 @@ Every response (mode-dependent) can include:
 - YouTube links
 - Next-step suggestions ("you might want to consider …")
 
+✅ The `done` SSE event carries `suggestions`, `reference_links`,
+`image_prompt`, `video_query`, `youtube_query`, `research_query` — the UI
+renders suggestions + reference links today.
+
 ### 1.4 Dynamic-ness
 
 **No hardcoded knowledge** — responses are generated dynamically through
-the LLM + RAG + image-gen API keys. (This is the architectural decision
-already made: kill the Python-literal knowledge layer, replace with
-LLM + RAG + live sources.)
+the LLM + RAG + live sources.
 
-### 1.5 Notes feature
+✅ **RESOLVED:** Stage 15 externalised the Tier 2/3 Python-literal
+knowledge layer into versioned DB rows (`building_standards`, etc.) with a
+literal fallback. The "kill hardcoded knowledge" decision has landed.
+
+### 1.5 Notes feature — ✅ DONE (auto-author + persist)
 
 - **Right sidebar** in the chat window
-- Applicable **only in Deep mode** (not Quick, possibly auto)
+- Applicable in **Deep mode**
 - **Auto-generated** — the system writes notes as the conversation
-  progresses, summarising what's been discussed
-- **Format / styling: same shape as this `PRODUCT_TRUTH.md` document.**
-  The notes sidebar renders structured markdown with:
-  - Hierarchical sections / subsections (`##`, `###`)
-  - Status badges (✅ confirmed, 🟡 pending, ⚠️ caveat, 🔴 blocker, etc.)
-  - Tables for comparisons / decisions
-  - Bullet lists for points / next steps
-  - Code blocks for snippets / values when relevant
-  - Inline links (sources, references)
-  - A "Changelog" or "Updated" timestamp footer
-- Updated **live** as the conversation progresses — when a new topic
-  enters the chat, a new section appears; when a decision is reached,
-  its status flips from 🟡 to ✅; when something's flagged as TBD it
-  stays 🟡 until resolved.
-- (Open: user-editable in place? export to .md? scoped per session vs.
-  per project?)
+  progresses (`parseDeepModeToNotes`), summarising what's discussed
+- **Persisted** per session (`useNotesPersist`)
+- **Format:** structured markdown matching the shape of this doc
+  (sections, status badges, tables, bullets, code blocks, changelog),
+  rendered live as the conversation progresses
+
+✅ **RESOLVED (2026-06-25):** user-editable-in-place is fully wired —
+`note-block.tsx` (contentEditable blocks), `add-block-menu.tsx`,
+`note-section-header.tsx`, `note-section-tags.tsx`, backed by
+`useNotesStore` (`updateBlock`/`addBlock`/`deleteBlock`) with debounced
+sync (`use-notes-persist.ts`) to a real backend (`routes/notes.py`:
+GET/PUT/DELETE `/sections`, POST `/import`). Export is wired too —
+`notes-export.ts` (`notebookToMarkdown` → `.md` download; `notebookToHTML`
+→ jspdf `.pdf`), plus per-section copy-as-markdown.
 
 ---
 
-## 1.6 🟡 PENDING INPUT — clarifications needed before MVP 1 is fully locked
+## 1.6 Clarifications — status
 
-A few specifics I need confirmed so the build matches the vision:
-
-1. **Two context windows — UX layout.** Side-by-side panels in one
-   workspace? Switchable tabs? Two separate routes? The frontend
-   architecture depends on this.
-
-2. **Quick mode response length.** What's "short, intense"?
-   - One sentence?
-   - One paragraph (~3 sentences)?
-   - Token cap (e.g. ≤ 200 tokens)?
-   - User-editable cap?
-
-3. **Deep mode "mandatory diagram".** Every single response in a Deep
-   session generates a diagram? Or one diagram per session at a
-   meaningful moment? What kind of diagram —
-   architectural sketches, flowcharts, ergonomic diagrams, conceptual?
-
-4. **Auto mode trigger.** What does "adapt" mean — picks Quick or Deep
-   based on question complexity? User can override per-message?
-
-5. **Reference diagrams source.** Are these:
-   (a) **retrieved** from a RAG corpus of existing diagrams, or
-   (b) **generated** fresh by Nano Banana Pro / similar each time?
-
-6. **YouTube links source.** Real-time YouTube Search API call (need
-   YouTube Data API key)? Or curated set per topic? Or RAG over
-   pre-ingested transcript corpus?
-
-7. **Notes — when generated.** Now confirmed: **live**, updated as the
-   conversation progresses (matches the way this doc is being written).
-   Confirm: stored persistently per chat session? Per user account?
-   Both?
-
-8. **Notes — format.** Now confirmed: structured markdown matching
-   the shape of `PRODUCT_TRUTH.md` (sections, tables, status badges,
-   bullets, code blocks, changelog). Confirm: user-editable in place
-   (click a section to revise)? Export-to-`.md`/`.pdf` button?
+| # | Question | Status |
+|---|---|---|
+| 1 | Two-window UX layout | ✅ **RESOLVED** — separate routes `/chat` + `/design` |
+| 2 | Quick-mode length | ✅ Capped to a short answer (mock: 3–5 lines); real cap tuned in agent prompt |
+| 3 | Deep-mode mandatory diagram | ✅ **Hard-gated (2026-06-25)** — `chat_engine.stream_chat_response` synthesizes a fallback `image_prompt` when the LLM omits one in Deep mode, so every Deep response carries a diagram; mock backend mirrors this |
+| 4 | Auto-mode trigger | ✅ Adaptive on context (mock heuristic: prompt length; real = agent decides) |
+| 5 | Reference-diagram source | ✅ Generated (LLM-backed diagram services + deterministic registry) |
+| 6 | YouTube links source | ✅ **Fully built** — real `search_youtube()` → YouTube Data API, `/chat/search-youtube` route, `YouTubeReferences` cards. ⚠️ **Ops gap only:** `YOUTUBE_API_KEY` unset → gracefully returns `[]` |
+| 7 | Notes — when generated / persisted | ✅ Live + persisted per session |
+| 8 | Notes — editable / exportable | ✅ Auto-authored + persisted + inline-editable + `.md`/`.pdf` export (verified 2026-06-25) |
 
 ---
 
-## 2. MVP 2 — Image Generation Context Window ✅ CAPTURED FROM CONVERSATION
+## 2. MVP 2 — Image Generation Context Window (`/design`)
 
-> *"The massive thing in our project."* This is the centrepiece —
-> the design-generation surface where prompts become drawings,
-> models, specs, and live cost.
+> *"The massive thing in our project."* The design-generation surface where
+> prompts become drawings, models, specs, and live cost.
 
 ### 2.1 Purpose
 
 The agent generates complete design output across multiple disciplines
-and dimensionalities, all driven by the user prompt. Output is highly
-productive — meaning fast iteration cycles and rich, complete deliverables
-per generation.
+and dimensionalities, driven by the user prompt + design context.
 
 ### 2.2 What the agent generates
 
-Across **four design scopes**:
-
-- Architecture design
-- Interior design
-- Furniture design
-- Product design
+Across **four design scopes**: architecture · interior · furniture · product.
 
 In **three dimensionalities**:
+- **2D** sketches (plans, elevations, sections) — ✅ services exist
+- **3D** sketches / models / renders — 🟡 mesh provider not integrated
+- **4D** sketches (time-based) — ⏭️ deferred (Veo)
 
-- **2D** sketches (plans, elevations, sections)
-- **3D** sketches / models / renders
-- **4D** sketches (time-based — walkthroughs, animations, construction sequence)
+### 2.3 Theme system — ✅ DONE
 
-All generation is driven by the user prompt + design context.
+- User picks the theme; theme drives material palette, proportions, style.
+- Catalogue locked to **Pedestal / Mid-Century Modern / Contemporary /
+  Modern / Custom**. Theme resolves from `graph_data.style.primary`.
 
-### 2.3 Theme system
+### 2.4 Import (user → KATHA) — ✅ DONE (15 importers)
 
-- User picks the theme
-- Theme drives material palette, proportions, style, etc.
-- (Open: same theme catalogue as the chat MVP — Pedestal / MCM /
-  Contemporary / Modern / Custom — or different? See §2.8 q1)
+PDF · DOCX · XLSX · CSV · DXF · OBJ · STEP · image · text (+ others).
+Revit interop is via IFC import/export (native `.rvt` is a Phase 2 trigger
+candidate — see §8).
 
-### 2.4 Import (user → KATHA)
+### 2.5 Export / output (KATHA → user) — ✅ DONE
 
-The user can bring existing artefacts into the workspace:
+- **Working drawings (5):** plan · elevation · section · isometric · detail
+  — ✅ all five now wired in the Views tab (Option A, 2026-06-24).
+- **Conceptual diagrams (8):** concept transparency · form development ·
+  massing · volumetric · design process · solid/void · spatial organism ·
+  hierarchy — ✅ served by the deterministic registry
+  (`app/services/diagrams/`). Frontend catalogue corrected 2026-06-24 to
+  mirror the registry (collapsed the two volumetric cards to one).
+- **Spec sheets (4):** material · manufacturing · MEP · cost — ✅
+- **Export formats (17 exporters):** PDF · DOCX · XLSX · PPTX · HTML ·
+  DXF · OBJ · GLTF · FBX · IFC · STEP · IGES · gcode · cam_prep ·
+  GeoJSON (+ synthesis) — ✅ ExportModal wired to `/export/formats`.
 
-- **Revit** (heavily emphasised — first-class import)
-- CAD files (DWG / DXF / STEP / IGES)
-- 3D models (OBJ / FBX / GLTF)
-- Site plans
-- Design briefs
+### 2.6 Dynamic cost estimation — ✅ DONE
 
-These ground the generation — KATHA reads existing geometry, dims, and
-constraints rather than starting from scratch.
+- Cost engine runs against the current design state; pulls Stage 1 +
+  Stage 12 live feeds.
+- Displayed in the terminal **Cost** tab.
+- ✅ **RESOLVED (verified 2026-06-25):** recalc fires on **every** design
+  change — `generate`, `edit`, and `theme-switch` all recompute
+  `estimate` + `mep_cost_estimate` server-side and return them; CostTab
+  re-renders reactively. There is no manual "recalculate" button; cost is
+  bound to each design action. (Only the unused stub
+  `updatePosition`/`updateMaterial` endpoints don't recalc — they aren't
+  wired into the workspace.)
 
-### 2.5 Export / output (KATHA → user)
+### 2.7 UI layout — ✅ DONE (shipped shape differs from original sketch)
 
-Per the BRD, every generation produces:
+Shipped `/design`:
+- **Left sidebar:** accordion — Brief / Space / Requirements / Regulatory.
+- **Canvas:** renders, drawings, diagrams (click-to-swap).
+- **Right sidebar:** 6-tab shell — **Summary · Views · Specs · Cost ·
+  Checks · Recs**.
+- **Terminal (bottom):** **Cost · Problems · Generation Log · Citations**
+  tabs.
 
-- Working drawings (plan / elevation / section / detail / isometric)
-- 8 conceptual diagrams (concept transparency, form, massing,
-  volumetric, design process, solid/void, spatial organism, hierarchy)
-- Material specifications
-- Manufacturing specifications
-- MEP specifications (when architectural)
-- All export formats from BRD §5A — PDF, DOCX, XLSX, PPTX, HTML,
-  DWG/DXF, IFC (Revit interop), STEP/IGES, OBJ/FBX/GLTF, G-code,
-  CAM prep, GeoJSON
-
-### 2.6 Dynamic cost estimation
-
-- Cost engine runs **live** against the current design state
-- Every change (material swap, dim tweak, theme change) → cost recalculates
-- Pulls from current pricing layer (Stage 1 + Stage 12 live feeds)
-- Output displayed in the dedicated **terminal panel** (see §2.7)
-
-### 2.7 UI layout
-
-```
-┌──────────────┬─────────────────────────────────┬──────────────┐
-│              │                                 │              │
-│   LEFT       │   IMAGE CONTEXT WINDOW          │   RIGHT      │
-│   SIDEBAR    │   (the canvas — design renders, │   SIDEBAR    │
-│              │    drawings, 3D viewer)         │              │
-│              │                                 │              │
-│              │                                 │              │
-│              │                                 │              │
-├──────────────┴─────────────────────────────────┴──────────────┤
-│   TERMINAL  —  live cost estimation panel                     │
-│   (numbers update as the design changes; like a code-editor   │
-│    terminal but for the cost engine)                          │
-└───────────────────────────────────────────────────────────────┘
-```
-
-(Open: what specifically lives in left sidebar vs right sidebar — see
-§2.8 q4.)
+✅ **RESOLVED (2026-06-25):** the original §2.9 four-tab terminal is now
+complete. **Generation Log** renders a deterministic record of the latest
+generation's pipeline steps (graph resolved → theme → render → estimate →
+MEP → validation), derived from the response (generate is one request, not
+a streaming feed, so this is honest summary, not faked tokens).
+**Citations** aggregates every source-tagged datum the design draws on —
+code-compliance rows, validation issues with `source_section`/`reference`,
+and the MEP cost jurisdiction band — over data the response already
+carries (no new backend call).
 
 ### 2.8 Answered clarifications
 
-1. ✅ **Chat → Image-gen handoff.** When the user says *"let's design
-   this"* in the chat (or similar trigger), the system **switches to
-   the image-gen workspace and generates based on the discussion that
-   already happened in chat**. Context flows: chat brief, discussion,
-   auto-notes → image-gen seed.
+1. ✅ **Chat → Image-gen handoff.** On a "let's design this" trigger the
+   chat brief flows to `/design` via `seedFromBrief` / `seededFromBriefId`.
 
-2. ✅ **User editing.** Editing the design happens **only when
-   content is imported / exported** — i.e., the user touches the design
-   when they hand a file in (Revit / CAD / 3D model) or take one out.
-   In-canvas direct editing during normal generation is NOT in scope
-   for MVP 2; user iterates by re-prompting / re-generating.
+2. ⚠️ **User editing — DECISION CHANGED.** Original doc scoped editing to
+   import/export only. **Reality: object-level in-canvas editing is now
+   wired** via `ObjectsPanel` → `POST /projects/{id}/edit`. The user can
+   edit objects directly, not only on import/export.
 
-3. 🟡 **Real-time vs button-driven.** Not specified yet. To revisit.
+3. 🟡 **Real-time vs button-driven.** Button/generate-driven today.
 
-4. 🟡 **Left sidebar contents.** Founder will share shortly.
+4. ✅ **Left sidebar contents.** Brief / Space / Requirements / Regulatory.
 
-5. 🟡 **Right sidebar contents.** Founder will share shortly.
+5. ✅ **Right sidebar contents.** Summary / Views / Specs / Cost / Checks / Recs.
 
-6. ✅ **Theme catalogue.** Keep BRD §2A list for now —
-   **Pedestal / Mid-Century Modern / Contemporary / Modern / Custom**.
-   May expand later.
+6. ✅ **Theme catalogue.** BRD §2A list (Pedestal / MCM / Contemporary /
+   Modern / Custom).
 
-7. ✅ **Design scope picker.** Founder said "anything is fine" — so
-   default behaviour: **agent infers scope from the prompt**
-   (architecture / interior / furniture / product), with an optional
-   pill in the UI to override. Sensible default; revisit if real users
-   complain.
+7. ✅ **Design scope picker.** Agent infers scope from prompt, override pill.
 
-8. 🟡 **Error model — see §2.9 below.** Founder asked: *"how will
-   errors be created when the agent generates the design?"* — proposed
-   model captured in §2.9 for confirmation.
+8. 🟡 **Error model.** Terminal Problems tab shipped; full 4-class model
+   (§2.9) partially realised.
 
-### 2.9 Error / problems model — 🟡 PROPOSED
+### 2.9 Error / problems model — 🟡 PARTIAL
 
-> Founder asked how errors surface during agent generation. Proposed
-> answer below — confirm / revise.
+Terminal panel doubles as a Problems pane. Four issue classes proposed:
 
-The **terminal panel at the bottom** of MVP 2 doubles as a VS-Code-style
-"Problems" panel. It surfaces four classes of issue, each with its own
-visual treatment, so the user can scan severity at a glance.
+| Class | Trigger | Severity | Status |
+|---|---|---|---|
+| 🔴 **Hard error** | System / API failed | Blocking | 🟡 envelope exists (Stage 13) |
+| 🟡 **Validation warning** | Violates known rule (code / ergonomic / structural) | Non-blocking | ✅ Checks tab |
+| 🔵 **Suggestion / advisory** | Recommendations engine | Info | ✅ Recs tab |
+| 🟢 **Provenance / confidence** | Stage 11 transparency banner | Info | 🟡 partial |
 
-| Class | Trigger | Severity | Example | UX |
-|---|---|---|---|---|
-| 🔴 **Hard error** | System / API failed (Nano Banana down, tool crashed, malformed output) | Blocking | "Image generation failed — provider returned 500. Retry?" | Red row + retry button + technical details on click |
-| 🟡 **Validation warning** | Generation violates a known rule (BRD code, ergonomic range, structural limit) | Non-blocking | "Door width 720 mm < NBC minimum 800 mm" | Yellow row + cite the source rule + jump-to-element |
-| 🔵 **Suggestion / advisory** | Agent's recommendations engine flags a non-error opportunity | Info | "Consider walnut over oak for this theme — more authentic to mid-century" | Blue row + accept / dismiss / explain |
-| 🟢 **Provenance / confidence** | Stage 11 transparency banner attaches to every datum | Info | "Material price = MCX live, captured 2 hrs ago" / "Cost confidence: HIGH" | Green badge on element; click for full citation chain |
+Terminal tabs shipped: **Cost · Problems · Generation Log · Citations**
+(all four originally specced, completed 2026-06-25).
 
-The terminal panel itself is **multi-tab**, like a code-editor terminal:
-
-```
-┌──────────────────────────────────────────────────────────────┐
-│ Cost  │ Problems (3) │ Generation Log │ Citations            │
-├──────────────────────────────────────────────────────────────┤
-│ ₹ 1,42,500 (low)  ₹ 1,68,000 (base)  ₹ 1,95,000 (high)       │
-│ ↓ updated as design changes                                  │
-└──────────────────────────────────────────────────────────────┘
-```
-
-- **Cost tab** — live ₹ low / base / high; updates on every design change
-- **Problems tab** — counts + scrollable list of all 🔴 🟡 🔵 issues
-- **Generation Log** — what the agent is doing right now (streaming,
-  like a build log: *"Generating elevation view... Calling cost engine
-  for walnut top... Resolving live MCX price... Done."*)
-- **Citations tab** — every source the design draws on (RAG chunks,
-  NBC clauses, MCX timestamps, prior architect decisions)
-
-This gives the user **the same level of transparency as a code editor**:
-nothing happens silently, every error is actionable, every datum is
-traceable.
-
-(Built on infrastructure we already have:
-- Stage 11 confidence + provenance banner
-- Stage 13 canonical error envelope + error codes
-- Stage 12 freshness levels on prices
-- Stage 6 RAG citations
-- Stage 4 tool audit trail)
+Built on existing infra: Stage 11 confidence/provenance · Stage 13 error
+envelope · Stage 12 freshness · Stage 6 RAG citations · Stage 4 tool audit.
 
 ---
 
-## 3. Phase 2 — Haptic Interface ✅ CAPTURED
+## 3. Phase 2 — Haptic Interface ⏭️ DEFERRED (data layer ✅ DONE)
 
-Per BRD Layer 7. Phase 1 already ships the **haptic-ready data
-structure** (Stage 9 — `app/haptic/`, `app/agents/tools/haptic.py`).
+Per BRD Layer 7. **Phase 1 ships the haptic-ready data structure** —
+✅ DONE: `app/haptic/` (catalog + exporter + validator + 6 tables, alembic
+0020) and `app/agents/tools/haptic.py`. The JSON payload is end-to-end
+production (`build_haptic_payload()`).
 
-Phase 2 = hardware integration:
-- Order haptic arm hardware (UR3 or custom)
-- Build haptic driver / middleware
-- Material haptic library mapping
+**Phase 2 = hardware integration (⏭️ parked):**
+- Order haptic arm hardware (UR3 ~$23K or custom)
+- Build haptic driver / middleware (signature patterns → motion profiles)
+- Material haptic library validation against physical samples
 - Client haptic session workflow
 - First paid haptic session
 
-(Per BRD: Aug–Sep 2026 timeline.)
+(Per BRD: Aug–Sep 2026.) **Note (2026-06-24):** founder direction — only a
+*hint/teaser* of haptic for now; full haptic work is parked until after the
+landing page ships. See §8.
 
 ---
 
----
+## 4. Provider stack — 🟡 decision vs. code reality
 
+**Memory decision (region-routed via provider abstraction):**
+Azure OpenAI (chat) · Vertex AI Gemini (image) · Meshy v1 → self-host (3D)
+· Veo 3 (4D, deferred).
 
-## 4. Provider stack — 🟡 DEFERRED
+**Code reality today:**
 
-Founder parked this decision (2026-05-04) — to be revisited after MVPs
-are fully described. Captured options for when it comes back up:
-
-| Layer | Options on the table | Status |
-|---|---|---|
-| Chat / agent reasoning | GPT-5.4 (founder initial pick) / Claude Sonnet 4.6 (codebase, benchmark winner for architectural reasoning) / Gemini 3 Pro (pairs with Nano Banana) | Deferred |
-| Image generation | Nano Banana Pro (founder initial pick — solid choice, Veras-validated) | Deferred |
-| Video / 4D | Veo 3.1 / Kling 3.0 / Seedance / Runway Gen-4 | Deferred |
-| Embeddings | OpenAI `text-embedding-3-small` (current) / Voyage AI 3 (better retrieval) | Deferred |
-| RAG corpus | pgvector | Confirmed |
-| Web search (for YouTube link feature) | GPT-5.4 native / Brave / Tavily / YouTube Data API | Deferred |
-
-**Cost reference** (Claude Sonnet 4.6 — the lowest-friction option since
-codebase is wired):
-- $3 / 1M input tokens, $15 / 1M output tokens
-- 90% discount on cached input ($0.30 / 1M)
-- Realistic monthly chat cost at 1k DAU: ~$2k/month with caching
+| Layer | Decided (memory) | In code now | Status |
+|---|---|---|---|
+| Chat / agent | Azure OpenAI | Direct OpenAI (gpt-4o); Anthropic dormant | 🟡 not yet region-routed to Azure |
+| Image gen | Vertex Gemini | Direct Gemini + stub at `app/workers/tasks.py` | 🟡 provider abstraction in place, integration deferred |
+| 3D mesh | Meshy v1 → self-host | not integrated | 🔴 |
+| Video / 4D | Veo 3 | none | ⏭️ deferred |
+| Embeddings | — | OpenAI `text-embedding-3-small` | ✅ |
+| RAG corpus | pgvector | pgvector | ✅ |
+| YouTube link feed | — | `youtube_query` plumbed, no API call | 🔴 |
 
 ---
 
-## 5. Frontend / hosting — 🟡 PENDING INPUT
+## 5. Frontend / hosting
 
 | Item | Status |
 |---|---|
-| Frontend stack (Next.js shell exists, not wired) | Pending — keep / replace? |
-| Design language | Pending |
-| Hosting / deployment | Pending |
-| Pricing model (free / paid / enterprise) | Pending |
-| Target market | **Universal OS for architects worldwide** (Indian company). 8 regions in scope — India, North America, Europe, Middle East (GCC), Asia-Pacific, Latin America, Africa, Oceania. TAM ≈ 1.44M architects. v1 engineering reality: EU-hosted backend + EU-routed AI calls (satisfies both GDPR and DPDPA); India / US / APAC regions follow as latency justifies. Per-region software adoption drives import/export interop priorities — see Global Software Integration deck (2026-05-25). |
+| Frontend stack | ✅ Next.js 15 / React 19 / Tailwind / Zustand — wired to backend via `lib/api-client.ts` |
+| Design language | ✅ "architect's drafting" register (pencil-red `#C8362D`, ink/paper neutrals, mono numerics) |
+| Landing page | 🔴 **NOT STARTED** — next focus |
+| Hosting / deployment | 🟡 EU-hosted v1 planned (GDPR + DPDPA); not yet provisioned |
+| Pricing model | 🔴 undecided |
+| Target market | Universal OS for architects worldwide (Indian co.). 8 regions, TAM ≈ 1.44M. v1 = EU-hosted backend + EU-routed AI. |
 
 ---
 
-## 6. Codebase reality — current state
+## 6. Codebase reality — current state (2026-06-24)
 
-What's wired today (to be confirmed against the founder's vision):
-
-- ✅ FastAPI backend with 25 routers
-- ✅ Anthropic Claude as primary agent runtime (may be replaced per §4)
-- ✅ Stage 6 RAG corpus + pgvector
-- ✅ Stage 12 live data feeds (MCX/FX/GST/vendors)
-- ✅ Stages 1–14 backend (pricing, knowledge, tools, memory, vision, haptic, transparency, polish)
-- ⚠️ Frontend Next.js shell present but not wired to backend
-- ⚠️ Image generation stub at `app/workers/tasks.py:79` — no real provider integration yet
-- ⚠️ Layer 1B/1C architectural knowledge currently hardcoded in
-      `app/knowledge/*.py` Python literals (decision already made: replace
-      with RAG + LLM + live sources)
+- ✅ FastAPI backend — **28 routers**
+- ✅ **17 exporters**, **15 importers**
+- ✅ 8-id deterministic diagram registry + 9 LLM-backed diagram services
+- ✅ 5 working-drawing services (plan/elevation/section/isometric/detail) —
+  all wired into the Views tab
+- ✅ 4 spec services (material/manufacturing/MEP/cost)
+- ✅ Stage 6 RAG + pgvector; Stage 12 live feeds (MCX/FX/GST/vendors)
+- ✅ Stages 1–15 backend (pricing, knowledge, tools, memory, vision,
+  haptic data layer, transparency, polish, Tier 2/3 DB externalisation,
+  Massing diagram)
+- ✅ Frontend wired: `/chat` (3 modes + auto-notes) and `/design`
+  (left accordion + 6-tab right rail + terminal)
+- ✅ Object-level in-canvas editing via `ObjectsPanel` → `/projects/{id}/edit`
+- ✅ ExportModal → `/export/formats`; VersionTimeline chips
+- 🟡 Image generation provider integration still stubbed
+  (`app/workers/tasks.py`) — no real mesh/render provider
+- 🟡 Mock backend (`scripts/mock-backend.mjs`) only stubs `/chat/stream`
+  + `/projects/:id/generate`; everything else 404s. Real backend needs
+  Postgres + pgvector + Redis + API keys + alembic.
 
 ---
 
 ## 7. What I will stop doing
 
-(Founder explicitly asked to stop the miscommunication pattern.)
-
-- Will not propose new stages / features until each MVP is locked in this doc.
+- Will not propose new stages / features until each MVP is locked here.
 - Will not assume admin / ops users exist.
-- Will not assume the BRD is the source of truth where it conflicts with
-  founder's product vision shared in conversation.
+- Will not assume the BRD overrides founder's product vision in conversation.
 - Will not jump to architecture before requirements are written.
+
+---
+
+## 8. Remaining work — consolidated checklist
+
+**Near-term (founder's stated order):**
+1. 🔴 **Landing page** — next focus, not started.
+2. ⏭️ **Haptic teaser/badge** — a *hint* only on the product surface;
+   full haptic parked until after the landing page.
+
+**MVP polish / wiring:**
+3. 🟡 **API keys + real backend run** — wire OpenAI / (Azure) / Vertex /
+   MCX feed keys; run a real architectural project end-to-end; hand to a
+   beta architect (testing-only, not commercial).
+4. 🟡 **Engine-tool wiring audit** — verify every UI surface fires the
+   right backend agent tool; end-to-end test.
+5. 🟡 **Image-gen provider** — replace `app/workers/tasks.py` stub with
+   real render/mesh integration (Vertex Gemini image; Meshy for 3D).
+6. ✅ **Notes** — user-editable-in-place + `.md`/`.pdf` export — **DONE**
+   (verified 2026-06-25; was mis-flagged as pending).
+7. ✅ **Terminal tabs** — **Generation Log** + **Citations** added — **DONE**
+   (2026-06-25). Terminal now Cost · Problems · Generation Log · Citations.
+8. ✅ **Live cost refresh** — already continuous (recomputes on
+   generate/edit/theme-switch) — **DONE** (verified 2026-06-25; was
+   mis-flagged as pending).
+9. ✅ **YouTube link feature** — fully built end-to-end — **DONE** (verified
+   2026-06-25). ⚠️ Only remaining step is an **ops** task: set
+   `YOUTUBE_API_KEY` in `.env` (no code change).
+10. ✅ **Deep-mode mandatory-diagram enforcement** — hard-gated in
+    `chat_engine` (fallback `image_prompt`) + mock — **DONE** (2026-06-25).
+
+**Provider / infra:**
+11. 🟡 **Region-routed provider abstraction** — switch chat to Azure
+    OpenAI; confirm Vertex routing; EU hosting v1.
+12. ⏭️ **4D / video (Veo)** — deferred to post-MVP.
+
+**Deferred / trigger-based (do NOT build speculatively):**
+13. ⏭️ Native `.rvt` export — when a customer requires native Revit files.
+14. ⏭️ Machine-specific G-code post-processors — when a mfg partner signs.
+15. ⏭️ Strict-mode haptic export — when a hardware vendor requests it.
+16. ⏭️ Semantic recall over chat turns — on long-session UX pain.
+17. 🟡 **GDPR profile-delete agent tool** — before EU rollout closes.
+
+**EU launch (legal, not code):**
+18. 🟡 EU Representative appointment — parked; revisit before EU traffic.
 
 ---
 
 ## Changelog
 
-- **2026-05-04** — Doc created. Captured MVP 1 from conversation.
-- **2026-05-04** — Notes feature: confirmed structure mirrors this doc's
-  shape (hierarchical markdown + status badges + tables + bullets +
-  changelog). Updated live as conversation progresses.
-- **2026-05-04** — MVP 2 (Image Generation Context Window) captured.
-  Phase 2 (haptic) confirmed scoped per BRD Layer 7. Provider stack
-  decision deferred.
-- **2026-05-04** — MVP 2 clarifications: chat→image-gen handoff
-  confirmed (context flows on "let's design this" trigger). User
-  editing scoped to import/export only. Theme catalogue locked to
-  BRD §2A. Design scope inferred from prompt with override pill.
-  Error model proposed (terminal panel = multi-tab Problems pane).
+- **2026-05-04** — Doc created. MVP 1, MVP 2, Phase 2 (haptic), provider
+  stack deferred. Notes structure confirmed. MVP 2 clarifications captured.
+- **2026-06-24** — **Reconciled against shipped codebase.** Added status
+  legend. Flipped resolved items: two-window UX (separate routes), no-
+  hardcoded-knowledge (Stage 15), notes auto-author+persist, theme system,
+  importers/exporters, working drawings (all 5 wired), diagram registry,
+  cost engine, left/right sidebar contents. Corrected stale counts (28
+  routers, 17 exporters, 15 importers). **Flagged decision change:** object-
+  level in-canvas editing is now wired (was scoped to import/export only).
+  Updated provider-stack section to show memory decision vs. code reality
+  (direct OpenAI/Gemini today; Azure/Vertex/Meshy/Veo target). Added §8
+  consolidated remaining-work checklist; flagged landing page (next) +
+  haptic teaser (parked).
+- **2026-06-25** — Verified the "notes polish" gap against code: it was
+  already fully built (inline editing via `note-block.tsx` + store +
+  backend `routes/notes.py`; `.md`/`.pdf` export via `notes-export.ts`).
+  Corrected §1.5, §1.6 q8, and §8 item 6 from 🟡 to ✅.
+- **2026-06-25** — Swept the five "polish gaps." Verified two were already
+  done (live cost recalc on every action; YouTube fully wired bar the API
+  key — an ops gap). **Built** the other two: (1) Deep-mode mandatory
+  diagram now hard-gated via a fallback `image_prompt` in
+  `chat_engine.stream_chat_response` (+ mock mirror); (2) terminal
+  **Generation Log** + **Citations** tabs added to
+  `image-workspace-mvp2.tsx`, sourced from data the generation response
+  already carries. Updated §1.2, §1.6 q3/q6, §2.6, §2.7, §2.9, §8 (items
+  7–10 → ✅).
