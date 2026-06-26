@@ -127,7 +127,7 @@ async def run_architect_agent(
         When ``None``, persistence is disabled and ``history`` is used
         verbatim — useful for one-shot tests or stateless integrations.
     provider:
-        Override the default (Anthropic). Only useful for tests.
+        Override the default (OpenAI). Only useful for tests.
     system_prompt:
         Override the architect prompt. Useful for tests + future
         per-project / per-architect customisation.
@@ -141,7 +141,15 @@ async def run_architect_agent(
     settings = get_settings()
     provider = provider or get_provider()
 
-    if not settings.has_anthropic_key and provider.name == "anthropic":
+    if provider.name == "openai" and not settings.has_openai_key:
+        yield ErrorEvent(
+            message=(
+                "OPENAI_API_KEY is not configured. The agent loop "
+                "requires a live LLM call; set the env var to enable it."
+            )
+        )
+        return
+    if provider.name == "anthropic" and not settings.has_anthropic_key:
         yield ErrorEvent(
             message=(
                 "ANTHROPIC_API_KEY is not configured. The agent loop "
@@ -166,28 +174,43 @@ async def run_architect_agent(
 
     messages.append(AgentMessage(role="user", content=user_message))
 
-    config = ProviderConfig(
-        model=settings.anthropic_model,
-        api_key=settings.anthropic_api_key,
-        system_prompt=system_prompt or ARCHITECT_SYSTEM_PROMPT,
-        tools=REGISTRY.definitions_for_llm(),
-        max_tokens=max_tokens,
-        temperature=temperature,
-    )
+    # Provider-aware config. OpenAI is the primary agent runtime
+    # (Option B); Anthropic stays available as a fallback.
+    if provider.name == "anthropic":
+        config = ProviderConfig(
+            model=settings.anthropic_model,
+            api_key=settings.anthropic_api_key,
+            system_prompt=system_prompt or ARCHITECT_SYSTEM_PROMPT,
+            tools=REGISTRY.definitions_for_llm(),
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+    else:
+        config = ProviderConfig(
+            model=settings.openai_model,
+            api_key=settings.openai_api_key,
+            system_prompt=system_prompt or ARCHITECT_SYSTEM_PROMPT,
+            tools=REGISTRY.definitions_for_llm(),
+            max_tokens=max_tokens,
+            temperature=temperature,
+            base_url=settings.openai_base_url,
+        )
 
     iteration = 0
     tool_calls_made = 0
     total_input_tokens = 0
     total_output_tokens = 0
     final_stop_reason = "end_turn"
+    # Text *before* the first tool call (across the whole run) is the
+    # model "thinking"; text *after* any tool call is the final answer.
+    # This spans iterations — after tools run, the next turn's text is
+    # the answer, not thinking.
+    seen_tool_call = False
 
     while iteration < MAX_ITERATIONS:
         iteration += 1
         log.debug("agent.iteration %d", iteration)
 
-        # Per-iteration buffer — text *before* any tool call counts as
-        # "thinking", text *after* is the final assistant answer.
-        seen_tool_call_this_iteration = False
         assistant_message: Optional[AgentMessage] = None
         # Token usage for *this* iteration only (so we can persist it
         # against the specific assistant row).
@@ -196,13 +219,13 @@ async def run_architect_agent(
 
         async for prov_event in provider.stream(messages, config):
             if prov_event.type == "text_delta":
-                if seen_tool_call_this_iteration:
+                if seen_tool_call:
                     yield TextEvent(text=prov_event.text or "")
                 else:
                     yield ThinkingEvent(text=prov_event.text or "")
 
             elif prov_event.type == "tool_call":
-                seen_tool_call_this_iteration = True
+                seen_tool_call = True
                 tc = prov_event.tool_call
                 if tc is None:
                     continue

@@ -89,19 +89,29 @@ async def _echo_fn(ctx: ToolContext, input: _EchoIn) -> _EchoOut:
 
 @pytest.fixture
 def echo_tool_registered():
-    """Inject an `echo` tool into the GLOBAL registry for one test."""
+    """Inject an `echo` tool into the GLOBAL registry for one test.
+
+    Cleaned up on teardown so the throwaway tool doesn't leak into
+    the shared registry and pollute later tests that enumerate every
+    registered tool (e.g. the confidence-kind coverage check).
+    """
     name = "echo"
-    if name in REGISTRY.names():
-        # Avoid duplicates across test runs.
-        return
-    spec = ToolSpec(
-        name=name,
-        description="Echo a string back uppercased",
-        input_model=_EchoIn,
-        output_model=_EchoOut,
-        fn=_echo_fn,
-    )
-    REGISTRY.register(spec)
+    added = False
+    if name not in REGISTRY.names():
+        spec = ToolSpec(
+            name=name,
+            description="Echo a string back uppercased",
+            input_model=_EchoIn,
+            output_model=_EchoOut,
+            fn=_echo_fn,
+        )
+        REGISTRY.register(spec)
+        added = True
+    try:
+        yield
+    finally:
+        if added:
+            REGISTRY._tools.pop(name, None)
 
 
 @pytest.fixture

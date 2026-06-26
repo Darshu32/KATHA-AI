@@ -270,6 +270,12 @@ def tool(
             )
         ctx_param, input_param = params
 
+        # Async-ness is independent of annotations — check it first so a
+        # sync tool is rejected clearly even when its annotations can't
+        # be resolved (e.g. locally-defined input models in tests).
+        if not asyncio.iscoroutinefunction(fn):
+            raise TypeError(f"@tool {fn.__name__}: must be `async def`")
+
         # Resolve annotations — modules using `from __future__ import
         # annotations` give us strings, not classes. Use get_type_hints
         # to evaluate against the function's globals + locals.
@@ -297,8 +303,6 @@ def tool(
                 f"@tool {fn.__name__}: return annotation must be a Pydantic BaseModel; "
                 f"got {output_model!r}"
             )
-        if not asyncio.iscoroutinefunction(fn):
-            raise TypeError(f"@tool {fn.__name__}: must be `async def`")
 
         spec = ToolSpec(
             name=name or fn.__name__,

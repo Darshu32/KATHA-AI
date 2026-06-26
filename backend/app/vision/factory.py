@@ -1,8 +1,13 @@
 """Vision provider factory.
 
-Picks :class:`AnthropicVisionProvider` when ``ANTHROPIC_API_KEY`` is
-set, otherwise falls back to :class:`StubVisionProvider` and logs a
-warning. Memoised so the SDK client is constructed once.
+Selection order:
+1. :class:`OpenAIVisionProvider` when ``OPENAI_API_KEY`` is set — the
+   production path. Vision runs on the same key as the agent runtime.
+2. :class:`AnthropicVisionProvider` when only ``ANTHROPIC_API_KEY`` is
+   set — optional fallback for installs that still key Anthropic.
+3. :class:`StubVisionProvider` otherwise (canned fixtures; tests).
+
+Memoised so the SDK client is constructed once.
 """
 
 from __future__ import annotations
@@ -14,6 +19,7 @@ from typing import Optional
 from app.config import get_settings
 from app.vision.anthropic_vision import AnthropicVisionProvider
 from app.vision.base import VisionProvider
+from app.vision.openai_vision import OpenAIVisionProvider
 from app.vision.stub import StubVisionProvider
 
 log = logging.getLogger(__name__)
@@ -23,23 +29,29 @@ _cached: Optional[VisionProvider] = None
 
 
 def get_vision_provider() -> VisionProvider:
-    """Return the configured provider — Anthropic when keyed, stub otherwise."""
+    """Return the configured provider — OpenAI when keyed, else Anthropic, else stub."""
     global _cached
     with _lock:
         if _cached is not None:
             return _cached
 
         settings = get_settings()
-        if settings.has_anthropic_key:
+        if settings.has_openai_key:
+            _cached = OpenAIVisionProvider(
+                api_key=settings.openai_api_key,
+                model=settings.vision_model or settings.openai_model,
+                base_url=settings.openai_base_url or None,
+            )
+        elif settings.has_anthropic_key:
             _cached = AnthropicVisionProvider(
                 api_key=settings.anthropic_api_key,
-                model=settings.vision_model or settings.anthropic_model,
+                model=settings.anthropic_model,
             )
         else:
             log.warning(
-                "ANTHROPIC_API_KEY not configured — using StubVisionProvider. "
-                "Vision analyses will return canned fixtures, not real "
-                "image understanding."
+                "No OPENAI_API_KEY or ANTHROPIC_API_KEY configured — using "
+                "StubVisionProvider. Vision analyses will return canned "
+                "fixtures, not real image understanding."
             )
             _cached = StubVisionProvider()
         return _cached

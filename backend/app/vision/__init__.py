@@ -3,9 +3,10 @@
 The agent's vision tools live in :mod:`app.agents.tools.vision`.
 This package provides the underlying abstraction:
 
-- :class:`VisionProvider` — async ABC. Two implementations:
-  :class:`AnthropicVisionProvider` (Claude Vision; production) and
-  :class:`StubVisionProvider` (deterministic; tests).
+- :class:`VisionProvider` — async ABC. Implementations:
+  :class:`OpenAIVisionProvider` (GPT Vision; production),
+  :class:`AnthropicVisionProvider` (Claude Vision; optional fallback)
+  and :class:`StubVisionProvider` (deterministic; tests).
 - :func:`get_vision_provider` — factory keyed on settings.
 - :func:`prompt_for_purpose` — selects the system prompt + JSON
   output schema for one of the 5 supported purposes.
@@ -30,11 +31,13 @@ from app.vision.analyzer import VisionAnalyzer, VisionAnalyzeError
 from app.vision.anthropic_vision import AnthropicVisionProvider
 from app.vision.base import (
     VisionError,
+    VisionImage,
     VisionProvider,
     VisionRequest,
     VisionResult,
 )
 from app.vision.factory import get_vision_provider
+from app.vision.openai_vision import OpenAIVisionProvider
 from app.vision.prompts import (
     SUPPORTED_PURPOSES,
     PurposeSpec,
@@ -44,12 +47,14 @@ from app.vision.stub import StubVisionProvider
 
 __all__ = [
     "AnthropicVisionProvider",
+    "OpenAIVisionProvider",
     "PurposeSpec",
     "SUPPORTED_PURPOSES",
     "StubVisionProvider",
     "VisionAnalyzeError",
     "VisionAnalyzer",
     "VisionError",
+    "VisionImage",
     "VisionProvider",
     "VisionRequest",
     "VisionResult",

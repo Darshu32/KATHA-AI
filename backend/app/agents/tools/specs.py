@@ -139,6 +139,10 @@ class GenerateMaterialSpecInput(BaseModel):
     )
     sections: list[str] = Field(
         default_factory=lambda: list(_DEFAULT_MATERIAL_SECTIONS),
+        # Advertise the default in the JSON schema too — Pydantic omits
+        # `default` for default_factory fields, but the LLM should see
+        # the full section list when it omits `sections`.
+        json_schema_extra={"default": list(_DEFAULT_MATERIAL_SECTIONS)},
         description=(
             "Subset of sections to author. Default is all six: "
             "primary_structure, secondary_materials, hardware, "
@@ -236,6 +240,7 @@ class GenerateManufacturingSpecInput(BaseModel):
     )
     sections: list[str] = Field(
         default_factory=lambda: list(_DEFAULT_MANUFACTURING_SECTIONS),
+        json_schema_extra={"default": list(_DEFAULT_MANUFACTURING_SECTIONS)},
         description=(
             "Subset of sections to author. Default is all four: "
             "woodworking_notes, metal_fabrication_notes, "
@@ -349,6 +354,7 @@ class GenerateMEPSpecInput(BaseModel):
     )
     sections: list[str] = Field(
         default_factory=lambda: list(_DEFAULT_MEP_SECTIONS),
+        json_schema_extra={"default": list(_DEFAULT_MEP_SECTIONS)},
         description=(
             "Subset of sections. Default is all four: hvac, electrical, "
             "plumbing, cost."

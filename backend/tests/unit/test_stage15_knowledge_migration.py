@@ -19,7 +19,6 @@ module to simulate DB hits / misses.
 
 from __future__ import annotations
 
-import asyncio
 from unittest.mock import patch
 
 import pytest
@@ -33,7 +32,7 @@ from app.models.brief import (
     ProjectTypeSection,
     RegulatoryContext,
     SpaceParameters,
-    SpaceDimensions,
+    DimensionsIn,
     SiteConditions,
     ThemeSection,
 )
@@ -48,7 +47,7 @@ def _sample_brief() -> DesignBriefOut:
         ),
         theme=ThemeSection(theme=BriefThemeEnum.CONTEMPORARY),
         space=SpaceParameters(
-            dimensions=SpaceDimensions(length=10, width=6, height=3, unit="m"),
+            dimensions=DimensionsIn(length=10, width=6, height=3, unit="m"),
             site_conditions=SiteConditions(orientation="north"),
         ),
         requirements=ClientRequirements(
@@ -81,13 +80,13 @@ def test_inject_knowledge_is_async():
     assert inspect.iscoroutinefunction(inject_knowledge)
 
 
-def test_inject_knowledge_works_without_session():
+async def test_inject_knowledge_works_without_session():
     """Pre-Stage-15 callers (no session) still get a valid bundle from
     Python literals. The codes block ``_provenance.source`` reads
     ``python_literal``."""
     from app.services.knowledge_injector import inject_knowledge
 
-    bundle = asyncio.run(inject_knowledge(_sample_brief()))
+    bundle = await inject_knowledge(_sample_brief())
     assert bundle["brief_id"] == "bf_test123"
     assert bundle["segment"] == "residential"
     assert "building_codes" in bundle
@@ -101,7 +100,7 @@ def test_inject_knowledge_works_without_session():
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_inject_knowledge_uses_db_when_session_provided():
+async def test_inject_knowledge_uses_db_when_session_provided():
     """When a session is passed AND the DB lookup returns a row, the
     DB value flows through and ``_provenance.source = "db"``."""
     from app.services.knowledge_injector import inject_knowledge
@@ -140,6 +139,15 @@ def test_inject_knowledge_uses_db_when_session_provided():
             "notes": "DB ECBC",
         }
 
+    # The theme + tolerances DB pre-loads are incidental to this test
+    # (it asserts only on building_codes). Stub them so the fake session
+    # is never actually queried.
+    async def fake_theme_db(*args, **kwargs):
+        return None
+
+    async def fake_tolerances_db(*args, **kwargs):
+        return None
+
     sentinel_session = object()
     with patch(
         "app.services.knowledge_injector.codes_lookup.get_code_data",
@@ -150,10 +158,13 @@ def test_inject_knowledge_uses_db_when_session_provided():
     ), patch(
         "app.services.knowledge_injector.codes_lookup.get_ecbc_targets",
         new=fake_get_ecbc,
+    ), patch(
+        "app.services.knowledge_injector._get_theme_db", new=fake_theme_db,
+    ), patch(
+        "app.services.knowledge_injector._tolerances_mm_map_db",
+        new=fake_tolerances_db,
     ):
-        bundle = asyncio.run(
-            inject_knowledge(_sample_brief(), session=sentinel_session)
-        )
+        bundle = await inject_knowledge(_sample_brief(), session=sentinel_session)
 
     cd = bundle["building_codes"]
     assert cd["_provenance"]["source"] == "db"
@@ -170,7 +181,7 @@ def test_inject_knowledge_uses_db_when_session_provided():
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_inject_knowledge_falls_back_when_db_returns_none():
+async def test_inject_knowledge_falls_back_when_db_returns_none():
     """When the session is passed but the DB lookups all return None
     (fresh DB, no seed yet), we silently fall back to Python literals
     and still produce a valid bundle. Provenance still says ``db``
@@ -187,10 +198,12 @@ def test_inject_knowledge_falls_back_when_db_returns_none():
         "app.services.knowledge_injector.codes_lookup.get_accessibility", new=empty
     ), patch(
         "app.services.knowledge_injector.codes_lookup.get_ecbc_targets", new=empty
+    ), patch(
+        "app.services.knowledge_injector._get_theme_db", new=empty
+    ), patch(
+        "app.services.knowledge_injector._tolerances_mm_map_db", new=empty
     ):
-        bundle = asyncio.run(
-            inject_knowledge(_sample_brief(), session=sentinel_session)
-        )
+        bundle = await inject_knowledge(_sample_brief(), session=sentinel_session)
 
     cd = bundle["building_codes"]
     # DB was attempted (provenance says so) but values are Python-literal.
@@ -212,13 +225,13 @@ def test_build_prompt_preamble_requires_bundle():
         build_prompt_preamble(_sample_brief())  # type: ignore[call-arg]
 
 
-def test_build_prompt_preamble_runs_with_precomputed_bundle():
+async def test_build_prompt_preamble_runs_with_precomputed_bundle():
     from app.services.knowledge_injector import (
         build_prompt_preamble,
         inject_knowledge,
     )
 
-    bundle = asyncio.run(inject_knowledge(_sample_brief()))
+    bundle = await inject_knowledge(_sample_brief())
     text = build_prompt_preamble(_sample_brief(), bundle)
     assert isinstance(text, str)
     assert "Input-stage knowledge" in text
@@ -231,14 +244,14 @@ def test_build_prompt_preamble_runs_with_precomputed_bundle():
 # ─────────────────────────────────────────────────────────────────────
 
 
-def test_bundle_shape_unchanged():
+async def test_bundle_shape_unchanged():
     """The bundle's top-level keys must be unchanged so any downstream
     consumer (LLM prompt builder, tests, generation pipeline) keeps
     working. Stage 15 only added a ``_provenance`` sub-key INSIDE
     ``building_codes`` — non-breaking."""
     from app.services.knowledge_injector import inject_knowledge
 
-    bundle = asyncio.run(inject_knowledge(_sample_brief()))
+    bundle = await inject_knowledge(_sample_brief())
     expected_top_keys = {
         "brief_id",
         "segment",

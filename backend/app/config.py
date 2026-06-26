@@ -98,10 +98,10 @@ class Settings(BaseSettings):
         "image/heic",
         "image/heif",
     )
-    # Anthropic vision uses the same Claude model + key as the agent
-    # runtime. We expose the model slug separately so future stages
-    # can pin a different vision-tuned variant.
-    vision_model: str = "claude-sonnet-4-5"
+    # Vision runs on OpenAI (same OPENAI_API_KEY as the agent runtime).
+    # We expose the model slug separately so future stages can pin a
+    # different vision-tuned variant without moving the chat model.
+    vision_model: str = "gpt-4o"
 
     # ── Stage 12 — Live data feeds ───────────────────────
     # Master switch. When False every adapter resolves to its stub

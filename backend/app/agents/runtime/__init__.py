@@ -1,8 +1,9 @@
 """Provider abstraction for the agent runtime.
 
 KATHA's agent loop must run against either:
-  - **Anthropic Claude** (primary — best tool use + long context)
-  - **OpenAI GPT** (fallback — cheaper, also for embeddings + legacy)
+  - **OpenAI GPT** (primary — the main agent brain for chat + reasoning)
+  - **Anthropic Claude** (fallback/secondary; the Anthropic SDK's main
+    job on the platform is the vision provider)
 
 Rather than coding two agent loops, we collapse the differences in
 this layer. Both providers produce the same internal event stream

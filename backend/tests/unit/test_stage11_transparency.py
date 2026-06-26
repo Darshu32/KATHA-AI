@@ -118,8 +118,8 @@ def test_kind_for_tool_falls_back_to_unknown():
 
 def test_kind_for_tool_resolves_known():
     assert kind_for_tool("estimate_project_cost") == "llm_validated"
-    assert kind_for_tool("themes_lookup") == "static_catalog"
-    assert kind_for_tool("search_knowledge_corpus") == "rag"
+    assert kind_for_tool("lookup_theme") == "static_catalog"
+    assert kind_for_tool("search_knowledge") == "rag"
     assert kind_for_tool("export_haptic_payload") == "deterministic"
 
 

@@ -96,70 +96,84 @@ _DEFAULT_SCORE_BY_KIND: dict[str, Optional[float]] = {
 # this central avoids touching every tool module to retrofit.
 
 _DEFAULT_KIND_BY_TOOL: dict[str, str] = {
-    # ── Stage 2 — cost ──────────────────────────────────────────────
+    # ── Cost ────────────────────────────────────────────────────────
     "estimate_project_cost": "llm_validated",
-
-    # ── Stage 4A — themes / clearances / codes / mfg / ergonomics ───
-    "themes_lookup": "static_catalog",
-    "themes_compatibility": "heuristic",
-    "clearance_check": "heuristic",
-    "clearance_for": "static_catalog",
-    "clearance_lookup": "static_catalog",
-    "code_lookup": "static_catalog",
-    "code_search": "static_catalog",
-    "code_check": "heuristic",
-    "code_compliance_summary": "llm_validated",
-    "manufacturing_lookup": "static_catalog",
-    "manufacturing_check": "heuristic",
-    "manufacturing_alternatives": "static_catalog",
-    "manufacturing_options": "static_catalog",
-    "ergonomic_lookup": "static_catalog",
-    "ergonomic_check": "heuristic",
-
-    # ── Stage 4B — MEP ──────────────────────────────────────────────
-    "hvac_load_estimate": "deterministic",
-    "hvac_zone_layout": "heuristic",
-    "electrical_load_estimate": "deterministic",
-    "electrical_panel_sizing": "deterministic",
-    "plumbing_demand_estimate": "deterministic",
-    "plumbing_pipe_sizing": "deterministic",
-    "plumbing_fixture_count": "deterministic",
-    "mep_cost_breakdown": "llm_validated",
-
-    # ── Stage 4C — cost extensions ──────────────────────────────────
     "compare_cost_scenarios": "llm_validated",
     "cost_sensitivity": "llm_validated",
+    "analyze_cost_shock": "llm_validated",
 
-    # ── Stage 4D — specs (LLM-heavy) ────────────────────────────────
+    # ── Brief intake / recommendations ──────────────────────────────
+    "intake_design_brief": "deterministic",
+    "extract_brief_from_notes": "deterministic",
+    "brief_to_generation_context": "deterministic",
+    "quick_recommendations": "heuristic",
+    "full_recommendations": "llm_validated",
+
+    # ── Themes (catalog reads) ──────────────────────────────────────
+    "lookup_theme": "static_catalog",
+    "list_themes": "static_catalog",
+
+    # ── Clearances (rule-based NBC/BRD validations) ─────────────────
+    "check_door_width": "heuristic",
+    "check_corridor_width": "heuristic",
+    "check_room_area": "heuristic",
+
+    # ── Codes (NBC / IECC) ──────────────────────────────────────────
+    "check_room_against_nbc": "heuristic",
+    "check_structural_span": "heuristic",
+    "get_iecc_envelope": "static_catalog",
+    "lookup_climate_zone": "static_catalog",
+
+    # ── Manufacturing (catalog reads + QA gate list) ───────────────
+    "lookup_tolerance": "static_catalog",
+    "lookup_lead_time": "static_catalog",
+    "lookup_joinery": "static_catalog",
+    "list_qa_gates": "static_catalog",
+
+    # ── Ergonomics ──────────────────────────────────────────────────
+    "lookup_ergonomic_envelope": "static_catalog",
+    "check_ergonomic_range": "heuristic",
+
+    # ── MEP — deterministic sizing + ROM cost ───────────────────────
+    "size_lighting": "deterministic",
+    "estimate_outlets": "deterministic",
+    "size_hvac_room": "deterministic",
+    "size_duct": "deterministic",
+    "summarize_water_supply": "deterministic",
+    "size_drain_pipe": "deterministic",
+    "size_vent_stack": "deterministic",
+    "mep_system_cost_estimate": "deterministic",
+
+    # ── Specs (LLM-heavy, validated) ────────────────────────────────
     "generate_material_spec": "llm_validated",
     "generate_manufacturing_spec": "llm_validated",
     "generate_mep_spec": "llm_validated",
 
-    # ── Stage 4E — drawings (LLM authoring + deterministic render) ──
-    "plan_view": "llm_validated",
-    "elevation_view": "llm_validated",
-    "section_view": "llm_validated",
-    "detail_sheet": "llm_validated",
-    "isometric_view": "llm_validated",
+    # ── Drawings (LLM authoring + deterministic render) ─────────────
+    "generate_plan_view_drawing": "llm_validated",
+    "generate_elevation_view_drawing": "llm_validated",
+    "generate_section_view_drawing": "llm_validated",
+    "generate_detail_sheet_drawing": "llm_validated",
+    "generate_isometric_view_drawing": "llm_validated",
 
-    # ── Stage 4F — diagrams (LLM-authored) ──────────────────────────
-    "concept_diagram": "llm_unvalidated",
-    "form_diagram": "llm_unvalidated",
-    "volumetric_block_diagram": "llm_unvalidated",
-    "volumetric_component_diagram": "llm_unvalidated",
-    "process_diagram": "llm_unvalidated",
-    "solid_void_diagram": "llm_unvalidated",
-    "spatial_organism_diagram": "llm_unvalidated",
-    "hierarchy_diagram": "llm_unvalidated",
+    # ── Diagrams (LLM-authored, unvalidated) ────────────────────────
+    "generate_concept_diagram": "llm_unvalidated",
+    "generate_form_diagram": "llm_unvalidated",
+    "generate_volumetric_diagram": "llm_unvalidated",
+    "generate_volumetric_block_diagram": "llm_unvalidated",
+    "generate_design_process_diagram": "llm_unvalidated",
+    "generate_solid_void_diagram": "llm_unvalidated",
+    "generate_spatial_organism_diagram": "llm_unvalidated",
+    "generate_hierarchy_diagram": "llm_unvalidated",
 
-    # ── Stage 4G — pipeline orchestration ───────────────────────────
+    # ── Pipeline orchestration ──────────────────────────────────────
     "generate_initial_design": "llm_validated",
-    "regenerate_with_theme": "llm_validated",
-    "edit_design_iteration": "llm_validated",
+    "apply_theme": "llm_validated",
+    "edit_design_object": "llm_validated",
     "list_design_versions": "static_catalog",
-    "validate_design_graph": "deterministic",
+    "validate_current_design": "deterministic",
 
-    # ── Stage 4H — IO / exports / imports ───────────────────────────
+    # ── IO / exports / imports ──────────────────────────────────────
     "list_export_formats": "static_catalog",
     "list_import_formats": "static_catalog",
     "list_export_recipients": "static_catalog",
@@ -169,44 +183,35 @@ _DEFAULT_KIND_BY_TOOL: dict[str, str] = {
     "generate_import_manifest": "llm_unvalidated",
     "generate_export_manifest": "llm_unvalidated",
 
-    # ── Stage 5 — recall / memory ───────────────────────────────────
-    "retrieve_recent_messages": "deterministic",
-
-    # ── Stage 5B/D — project memory RAG ─────────────────────────────
+    # ── Memory / recall ─────────────────────────────────────────────
+    "recall_recent_chat": "deterministic",
     "search_project_memory": "rag",
     "index_project_artefact": "deterministic",
     "project_memory_stats": "deterministic",
     "prune_project_memory": "deterministic",
 
-    # ── Stage 6 — global knowledge corpus ───────────────────────────
-    "search_knowledge_corpus": "rag",
-    "list_knowledge_corpus": "static_catalog",
+    # ── Global knowledge corpus ─────────────────────────────────────
+    "search_knowledge": "rag",
+    "list_knowledge_sources": "static_catalog",
 
-    # ── Stage 7 — vision / multimodal ───────────────────────────────
+    # ── Vision / multimodal ─────────────────────────────────────────
     "analyze_image": "llm_unvalidated",
     "analyze_site_photo": "llm_unvalidated",
-    "analyze_aesthetic_reference": "llm_unvalidated",
-    "analyze_sketch": "llm_unvalidated",
-    "digitize_handwritten_dimensions": "llm_unvalidated",
+    "extract_aesthetic": "llm_unvalidated",
+    "sketch_to_floor_plan": "llm_unvalidated",
+    "digitize_floor_plan": "llm_unvalidated",
 
-    # ── Stage 8 — decisions + profiles ──────────────────────────────
+    # ── Decisions + profiles ────────────────────────────────────────
     "record_design_decision": "deterministic",
     "recall_design_decisions": "deterministic",
     "get_architect_fingerprint": "deterministic",
     "get_client_profile": "deterministic",
     "resume_project_context": "deterministic",
 
-    # ── Stage 9 — haptic export ─────────────────────────────────────
+    # ── Haptic export ───────────────────────────────────────────────
     "export_haptic_payload": "deterministic",
 
-    # ── Stage 10 — BRD closure ──────────────────────────────────────
-    "intake_design_brief": "deterministic",
-    "brief_to_generation_context": "deterministic",
-    "analyze_cost_shock": "llm_validated",
-    "quick_recommendations": "heuristic",
-    "full_recommendations": "llm_validated",
-
-    # ── Stage 11 — transparency tools (forward-declared) ────────────
+    # ── Transparency tools ──────────────────────────────────────────
     "explain_decision": "deterministic",
     "challenge_design_decision": "deterministic",
     "compare_alternatives": "llm_validated",
