@@ -670,7 +670,7 @@ function EmptyHero({ onPick }: { onPick: (prompt: string) => void }) {
         <p className="section-tag">Start here</p>
         <ul className="mt-2 border-t border-hairline">
           {suggestions.map((s, i) => (
-            <li key={s} className="border-b border-hairline">
+            <li key={`${i}-${s}`} className="border-b border-hairline">
               <button
                 type="button"
                 onClick={() => onPick(s)}
@@ -981,9 +981,9 @@ function AssistantMessage({
           {message.isStreaming ? <TypingDots /> : null}
           {message.suggestions && message.suggestions.length > 0 ? (
             <div className="mt-5 flex flex-wrap gap-2">
-              {message.suggestions.map((s) => (
+              {message.suggestions.map((s, i) => (
                 <span
-                  key={s}
+                  key={`${i}-${s}`}
                   className="text-[13px] text-ink-soft border border-hairline px-2.5 py-1 rounded-md bg-paper-soft"
                 >
                   {s}
@@ -999,7 +999,7 @@ function AssistantMessage({
               <SectionTag>Sources</SectionTag>
               <ul className="mt-2 space-y-1">
                 {refs.map((r, i) => (
-                  <li key={r.url} className="text-[13px] flex items-baseline gap-2">
+                  <li key={`${i}-${r.url}`} className="text-[13px] flex items-baseline gap-2">
                     <span className="font-mono text-pencil text-[11px] shrink-0">
                       {refMarker(i)}
                     </span>
@@ -1029,7 +1029,7 @@ function AssistantMessage({
               <SectionTag>Sources</SectionTag>
               <ul className="mt-2 space-y-3">
                 {refs.map((r, i) => (
-                  <li key={r.url} className="text-[12px] leading-snug">
+                  <li key={`${i}-${r.url}`} className="text-[12px] leading-snug">
                     <a
                       href={r.url}
                       target="_blank"
