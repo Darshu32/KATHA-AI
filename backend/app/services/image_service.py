@@ -172,7 +172,7 @@ async def generate_image(
         "No text, no watermarks, no labels."
     )
 
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key={api_key}"
 
     payload = {
         "contents": [
