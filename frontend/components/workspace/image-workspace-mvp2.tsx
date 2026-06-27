@@ -1273,20 +1273,28 @@ function LeftControls({
   // value for architects who tune Brief + Regulatory together every
   // time). Brief is open by default on first visit.
   const ACCORDION_KEY = "katha.design.accordion.openSections";
-  const [openSections, setOpenSections] = useState<Set<string>>(() => {
-    if (typeof window === "undefined") return new Set(["brief"]);
+  // Start from the deterministic default so the server-rendered HTML and
+  // the first client render agree (reading localStorage during render
+  // causes a hydration mismatch). Persisted state is applied after mount.
+  const [openSections, setOpenSections] = useState<Set<string>>(
+    () => new Set(["brief"]),
+  );
+  const [accordionHydrated, setAccordionHydrated] = useState(false);
+  useEffect(() => {
     try {
       const raw = localStorage.getItem(ACCORDION_KEY);
-      if (raw) return new Set(JSON.parse(raw) as string[]);
+      if (raw) setOpenSections(new Set(JSON.parse(raw) as string[]));
     } catch {}
-    return new Set(["brief"]);
-  });
+    setAccordionHydrated(true);
+  }, []);
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    // Don't persist until the stored state has been loaded, otherwise the
+    // initial default would clobber the user's saved sections on mount.
+    if (!accordionHydrated) return;
     try {
       localStorage.setItem(ACCORDION_KEY, JSON.stringify([...openSections]));
     } catch {}
-  }, [openSections]);
+  }, [openSections, accordionHydrated]);
   const toggle = (id: string) => {
     setOpenSections((prev) => {
       const next = new Set(prev);
@@ -2255,19 +2263,23 @@ function RightSummary({
 }) {
   const hasGraph = objects.length > 0;
   const TAB_KEY = "katha.design.rightRail.activeTab";
-  const [tab, setTab] = useState<RightTab>(() => {
-    if (typeof window === "undefined") return "summary";
+  // Deterministic default on first render so SSR HTML matches the first
+  // client render; the persisted tab is restored after mount to avoid a
+  // hydration mismatch.
+  const [tab, setTab] = useState<RightTab>("summary");
+  const [tabHydrated, setTabHydrated] = useState(false);
+  useEffect(() => {
     try {
       const saved = localStorage.getItem(TAB_KEY) as RightTab | null;
       const allowed: RightTab[] = ["summary", "views", "specs", "cost", "compliance", "recs"];
-      if (saved && allowed.includes(saved)) return saved;
+      if (saved && allowed.includes(saved)) setTab(saved);
     } catch {}
-    return "summary";
-  });
+    setTabHydrated(true);
+  }, []);
   useEffect(() => {
-    if (typeof window === "undefined") return;
+    if (!tabHydrated) return;
     try { localStorage.setItem(TAB_KEY, tab); } catch {}
-  }, [tab]);
+  }, [tab, tabHydrated]);
 
   // Tab definitions — all six surfaces visible at full width. Specs
   // is the placeholder tab; its body carries the "Post-sprint" note,
