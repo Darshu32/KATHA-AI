@@ -150,8 +150,21 @@ class DesignGraphVersion(Base, UUIDMixin, TimestampMixin):
     change_summary: Mapped[str] = mapped_column(Text, default="")
     changed_object_ids: Mapped[list] = mapped_column(JSONB, default=list)
 
-    # The full design graph snapshot (JSONB)
+    # The full design graph snapshot (JSONB) — always the *normalized*
+    # graph (see app.services.graph_normalizer). Every renderer / 3D / cost
+    # consumer reads this, so it is guaranteed to satisfy the canonical
+    # axis + unit + bounds contract.
     graph_data: Mapped[dict] = mapped_column(JSONB, default=dict)
+
+    # The original, pre-normalization graph exactly as the LLM emitted it.
+    # Kept for provenance / debugging so normalization is never lossy.
+    # NULL for rows written before migration 0038.
+    raw_graph_data: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    # Report from the normalization pass: corrections applied + validation
+    # result {ok, errors, warnings}. Lets the UI surface "we auto-corrected
+    # N things" and lets tests assert the graph is clean. NULL pre-0038.
+    normalization_report: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     # The originating user prompt — captured on initial generation,
     # preserved across edits + theme switches so the pipeline can

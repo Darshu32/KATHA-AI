@@ -6,6 +6,7 @@ from sqlalchemy import select, func
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.orm import DesignGraphVersion, GeneratedAsset, Project
+from app.services.graph_normalizer import normalize_graph
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,28 @@ async def save_graph_version(
     current_max = result.scalar_one()
     new_version = current_max + 1
 
+    # Single chokepoint: every graph — initial generation, prompt edit,
+    # manual edit, theme switch — is normalized + validated here before it
+    # is persisted. Downstream renderers / 3D / cost read graph_data and can
+    # rely on the canonical axis + unit + bounds contract. Idempotent, so
+    # re-saving an already-clean graph is a no-op (modulo the report).
+    normalized_graph, report = normalize_graph(graph_data)
+    if report.get("corrections"):
+        logger.info(
+            "Normalized graph for project %s v%d: %d correction(s), ok=%s",
+            project_id,
+            new_version,
+            len(report["corrections"]),
+            report.get("ok"),
+        )
+    if not report.get("ok") and report.get("errors"):
+        logger.warning(
+            "Graph for project %s v%d failed validation after normalization: %s",
+            project_id,
+            new_version,
+            report["errors"],
+        )
+
     version = DesignGraphVersion(
         project_id=project_id,
         version=new_version,
@@ -73,7 +96,9 @@ async def save_graph_version(
         change_type=change_type,
         change_summary=change_summary,
         changed_object_ids=changed_object_ids or [],
-        graph_data=graph_data,
+        graph_data=normalized_graph,
+        raw_graph_data=graph_data,
+        normalization_report=report,
         prompt=prompt,
     )
     db.add(version)

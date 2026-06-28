@@ -11,28 +11,15 @@ from app.middleware import get_current_user
 from app.models.orm import User
 from app.models.schemas import ErrorResponse
 from app.services.design_graph_service import get_latest_version, get_project, get_version
+from app.services.graph_normalizer import normalize_graph
 from app.services.project_drawing_service import generate_floor_plan_package
-from app.services.elevation_view_drawing_service import (
-    ElevationPiece,
-    ElevationViewError,
-    ElevationViewRequest,
-    generate_elevation_view_drawing,
+from app.services.architectural_views_service import (
+    generate_detail_package,
+    generate_elevation_package,
+    generate_isometric_package,
+    generate_section_package,
 )
-from app.services.section_view_drawing_service import (
-    SectionViewError,
-    SectionViewRequest,
-    generate_section_view_drawing,
-)
-from app.services.isometric_view_drawing_service import (
-    IsometricViewError,
-    IsometricViewRequest,
-    generate_isometric_view_drawing,
-)
-from app.services.detail_sheet_drawing_service import (
-    DetailSheetError,
-    DetailSheetRequest,
-    generate_detail_sheet_drawing,
-)
+from app.services.view_fidelity import verify_graph_views
 
 router = APIRouter(prefix="/projects/{project_id}/drawings", tags=["drawings"])
 
@@ -60,19 +47,6 @@ def _resolve_theme(graph_data: dict) -> str:
     return "modern"
 
 
-def _derive_piece(graph_data: dict) -> ElevationPiece:
-    """Pick a representative furniture piece from the graph for furniture-scale views.
-
-    The detail/section/isometric/elevation generators are furniture-scale; they
-    fall back to ergonomic envelopes when only a piece *type* is supplied, so we
-    hand them the primary object's type and let the service resolve dimensions.
-    """
-    objects = graph_data.get("objects") or []
-    primary = objects[0] if objects and isinstance(objects[0], dict) else {}
-    piece_type = str(primary.get("type") or primary.get("name") or "lounge_chair").strip().lower().replace(" ", "_")
-    return ElevationPiece(type=piece_type or "lounge_chair")
-
-
 def _raise_drawing_error(exc: Exception) -> None:
     msg = str(exc)
     if "Unknown theme" in msg:
@@ -98,7 +72,11 @@ async def get_floor_plan(
     _check_owner(project, user)
 
     target_version = await _resolve_target_version(db, project_id, version)
-    drawing_payload = generate_floor_plan_package(target_version.graph_data)
+    # Defensive read-time normalization: versions saved before the normalization
+    # layer (or any future schema drift) are corrected on the fly. Idempotent,
+    # so already-clean graphs pass through unchanged.
+    clean_graph, _ = normalize_graph(target_version.graph_data or {})
+    drawing_payload = generate_floor_plan_package(clean_graph)
     return {
         "project_id": project_id,
         "version": target_version.version,
@@ -116,7 +94,9 @@ async def _generate_view(
     project = await get_project(db, project_id)
     _check_owner(project, user)
     target_version = await _resolve_target_version(db, project_id, version)
-    graph = target_version.graph_data or {}
+    # Defensive read-time normalization (idempotent) so pre-normalization
+    # versions render with correct axes / units / bounds.
+    graph, _ = normalize_graph(target_version.graph_data or {})
     return target_version, _resolve_theme(graph), graph
 
 
@@ -137,12 +117,8 @@ async def get_elevation_view(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    target_version, theme, graph = await _generate_view(db, project_id, version, user)
-    req = ElevationViewRequest(theme=theme, piece=_derive_piece(graph), design_graph=graph)
-    try:
-        result = await generate_elevation_view_drawing(req, session=db)
-    except ElevationViewError as exc:
-        _raise_drawing_error(exc)
+    target_version, _theme, graph = await _generate_view(db, project_id, version, user)
+    result = generate_elevation_package(graph)
     return _view_response(project_id, target_version.version, result)
 
 
@@ -153,12 +129,8 @@ async def get_section_view(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    target_version, theme, graph = await _generate_view(db, project_id, version, user)
-    req = SectionViewRequest(theme=theme, piece=_derive_piece(graph))
-    try:
-        result = await generate_section_view_drawing(req, session=db)
-    except SectionViewError as exc:
-        _raise_drawing_error(exc)
+    target_version, _theme, graph = await _generate_view(db, project_id, version, user)
+    result = generate_section_package(graph)
     return _view_response(project_id, target_version.version, result)
 
 
@@ -169,12 +141,8 @@ async def get_isometric_view(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    target_version, theme, graph = await _generate_view(db, project_id, version, user)
-    req = IsometricViewRequest(theme=theme, piece=_derive_piece(graph))
-    try:
-        result = await generate_isometric_view_drawing(req, session=db)
-    except IsometricViewError as exc:
-        _raise_drawing_error(exc)
+    target_version, _theme, graph = await _generate_view(db, project_id, version, user)
+    result = generate_isometric_package(graph)
     return _view_response(project_id, target_version.version, result)
 
 
@@ -185,10 +153,29 @@ async def get_detail_sheet(
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    target_version, theme, graph = await _generate_view(db, project_id, version, user)
-    req = DetailSheetRequest(theme=theme, piece=_derive_piece(graph))
-    try:
-        result = await generate_detail_sheet_drawing(req, session=db)
-    except DetailSheetError as exc:
-        _raise_drawing_error(exc)
+    target_version, _theme, graph = await _generate_view(db, project_id, version, user)
+    result = generate_detail_package(graph)
     return _view_response(project_id, target_version.version, result)
+
+
+@router.get("/fidelity")
+async def get_view_fidelity(
+    project_id: str,
+    version: int | None = Query(default=None, ge=1),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Prove the views faithfully depict the design (no architectural judgement).
+
+    Cross-checks each rendered view against the design graph: every object the
+    user designed appears in every relevant view, and every dimension annotated
+    on a drawing equals the graph's room envelope. Returns a machine-readable
+    report the UI can surface as a "verified faithful to your design" badge.
+    """
+    target_version, _theme, graph = await _generate_view(db, project_id, version, user)
+    report = verify_graph_views(graph)
+    return {
+        "project_id": project_id,
+        "version": target_version.version,
+        **report,
+    }
