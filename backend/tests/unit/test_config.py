@@ -24,10 +24,16 @@ def test_prod_environment_rejects_default_jwt() -> None:
 
 
 def test_prod_environment_requires_an_llm_key() -> None:
+    # Pin every LLM key to empty so a developer's real .env (which may now
+    # carry a live OpenAI/Gemini key) can't bleed in and satisfy the check.
+    # Init kwargs take priority over the env file in pydantic-settings.
     s = Settings(
         environment="prod",
         jwt_secret="x" * 48,
         database_url="postgresql+asyncpg://user:pw@db.prod/x",
+        anthropic_api_key="",
+        openai_api_key="",
+        gemini_api_key="",
     )
     with pytest.raises(RuntimeError, match="LLM provider"):
         s.assert_production_safe()
@@ -58,7 +64,9 @@ def test_redacted_dict_masks_secrets() -> None:
 
 
 def test_has_key_helpers() -> None:
-    s = Settings(anthropic_api_key="  sk-ant  ")
+    # Empty openai/gemini kwargs override any keys present in the real .env
+    # so this stays hermetic on a developer machine with live keys set.
+    s = Settings(anthropic_api_key="  sk-ant  ", openai_api_key="", gemini_api_key="")
     assert s.has_anthropic_key
     assert not s.has_openai_key
     assert not s.has_gemini_key
