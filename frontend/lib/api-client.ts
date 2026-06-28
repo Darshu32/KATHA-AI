@@ -700,6 +700,15 @@ export const design = {
     }>(`/projects/${projectId}/validate?${qs.toString()}`, "POST", undefined, token);
   },
 
+  /** Second-speed advisor — LLM-authored recommendations (~3-8s). */
+  fullReview: (token: string, projectId: string, versionNum?: number) => {
+    const qs = versionNum !== undefined ? `?version_num=${versionNum}` : "";
+    return request<{
+      version: number;
+      report: import("./types").FullRecommendationsReport;
+    }>(`/projects/${projectId}/recommendations/full${qs}`, "POST", undefined, token);
+  },
+
   // ── Phase 1 Layer 2B — Auto-diagrams ────────────────────────────────────
   listDiagramsAvailable: (token: string, projectId: string) =>
     request<{ diagrams: Array<{ id: string; name: string; status: "ready" | "planned" }> }>(

@@ -376,6 +376,41 @@ export interface RecommendationItem {
   evidence?: Record<string, unknown>;
 }
 
+// ── Second-speed advisor (LLM-authored) — BRD §6 ──────────────────────────
+//
+// Returned by POST /projects/{id}/recommendations/full. Richer than the
+// deterministic RecommendationItem: each entry carries confidence / impact /
+// effort labels plus catalogue-grounded alternatives.
+
+export interface FullRecAlternative {
+  name: string;
+  [k: string]: unknown;
+}
+
+export interface FullRecItem {
+  category: string;
+  title: string;
+  detail: string;
+  supporting?: unknown[];
+  alternatives?: FullRecAlternative[];
+  confidence: string;
+  impact: string;
+  effort: string;
+}
+
+export interface FullRecommendationsReport {
+  id: string;
+  name: string;
+  model: string;
+  recommendations: {
+    header?: Record<string, unknown>;
+    recommendations: FullRecItem[];
+    ranking?: number[];
+    assumptions?: string[];
+  };
+  validation?: Record<string, unknown>;
+}
+
 export interface ThemeApplierChange {
   path: string;
   rule: string;

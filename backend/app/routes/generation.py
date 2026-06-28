@@ -33,6 +33,12 @@ from app.services.diagrams import (
 from app.services.exporters import available_formats, export as export_bundle
 from app.services.knowledge_validator import validate_design_graph_async
 from app.services.recommendations import recommend as build_recommendations
+from app.services.recommendations_service import (
+    RecommendationsError,
+    RecommendationsRequest,
+    generate_recommendations,
+)
+from app.knowledge import materials as _materials_kb
 from app.services.pricing.knowledge_service import load_html_export_bands
 from app.services.specs import build_spec_bundle
 from app.services.standards.manufacturing_lookup import (
@@ -243,6 +249,118 @@ async def validate_route(
         "validation": report,
         "recommendations": recommendations,
     }
+
+
+# ── Second-speed advisor: LLM-authored recommendations ──────────────────────
+
+
+def _dominant_material(graph: dict) -> tuple[str, str]:
+    """Infer (primary_material, family) from the graph's materials + objects.
+
+    Picks the most frequently named material across the materials list
+    and object materials, then classifies it as ``wood`` / ``metal`` by
+    matching against the knowledge-base catalogues (falls back to a
+    keyword check for common species not keyed verbatim).
+    """
+    from collections import Counter
+
+    names: list[str] = []
+    for m in graph.get("materials", []) or []:
+        n = (m.get("name") or "").strip()
+        if n:
+            names.append(n.lower())
+    for o in graph.get("objects", []) or []:
+        n = (o.get("material") or "").strip()
+        if n:
+            names.append(n.lower())
+    if not names:
+        return "", ""
+
+    primary = Counter(names).most_common(1)[0][0]
+    wood_keys = {k.lower() for k in _materials_kb.WOOD}
+    metal_keys = {k.lower() for k in _materials_kb.METALS}
+
+    family = ""
+    if any(k in primary for k in wood_keys) or any(
+        w in primary for w in
+        ("wood", "walnut", "oak", "teak", "rosewood", "rubberwood", "pine", "plywood")
+    ):
+        family = "wood"
+    elif any(k in primary for k in metal_keys) or any(
+        w in primary for w in
+        ("steel", "iron", "brass", "aluminium", "aluminum", "metal")
+    ):
+        family = "metal"
+
+    return primary[:80], family[:32]
+
+
+def _dominant_piece_type(graph: dict) -> str:
+    """Most common object ``type`` in the graph (used as the piece type)."""
+    from collections import Counter
+
+    types = [
+        (o.get("type") or "").strip().lower()
+        for o in graph.get("objects", []) or []
+    ]
+    types = [t for t in types if t]
+    if not types:
+        return ""
+    return Counter(types).most_common(1)[0][0][:80]
+
+
+def _request_from_graph(graph: dict, project_name: str) -> RecommendationsRequest:
+    """Build the LLM recommendations brief from a stored design graph."""
+    style = ((graph.get("style") or {}).get("primary") or "")[:64]
+    city = ((graph.get("site") or {}).get("location") or "").strip()[:80]
+    primary_material, family = _dominant_material(graph)
+    return RecommendationsRequest(
+        project_name=(project_name or "KATHA Project")[:200],
+        theme=style,
+        piece_type=_dominant_piece_type(graph),
+        primary_material=primary_material,
+        primary_material_family=family,
+        city=city,
+    )
+
+
+@router.post("/recommendations/full")
+async def full_recommendations_route(
+    project_id: str,
+    version_num: int | None = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Run the LLM recommendations author against a stored graph version.
+
+    This is the BRD §6 "second speed" advisor — slower than the
+    deterministic ``/validate`` path (a live LLM call, ~3-8s) but it adds
+    confidence / impact / effort labels and catalogue-grounded
+    alternatives. The brief is derived from the version's graph (theme,
+    dominant material + family, city, piece type) so the caller doesn't
+    need to assemble it client-side.
+    """
+    project = await get_project(db, project_id)
+    _check_owner(project, user)
+
+    version = (
+        await get_version(db, project_id, version_num)
+        if version_num is not None
+        else await get_latest_version(db, project_id)
+    )
+    if version is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
+
+    graph = version.graph_data or {}
+    req = _request_from_graph(graph, project.name or "KATHA Project")
+    try:
+        report = await generate_recommendations(req, session=db)
+    except RecommendationsError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=str(exc),
+        ) from exc
+    return {"version": version.version, "report": report}
 
 
 @router.get("/diagrams/available")

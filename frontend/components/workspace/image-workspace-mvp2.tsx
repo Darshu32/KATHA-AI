@@ -3412,8 +3412,9 @@ function IssueRow({
  * shows its category as a mono tag and the message body.
  *
  * The LLM-driven full advisor (BRD §6 second speed) is reachable via
- * "Run full review" — placeholder for now since the route round-trip
- * is 3-8s and needs its own progress affordance (lands in polish day). */
+ * "Run full LLM review" — an on-demand live LLM call (~3-8s) that adds
+ * confidence / impact / effort labels and catalogue-grounded
+ * alternatives on top of the deterministic items. */
 function RecsTab({
   hasActiveProject,
   activeProjectId,
@@ -3430,6 +3431,37 @@ function RecsTab({
   >(null);
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
+
+  // Second-speed advisor (LLM-authored, ~3-8s). Triggered on demand by
+  // the "Run full LLM review" button; not auto-fired since it costs a
+  // live LLM round-trip per click.
+  const [fullReview, setFullReview] = useState<
+    import("@/lib/types").FullRecommendationsReport | null
+  >(null);
+  const [fullLoading, setFullLoading] = useState(false);
+  const [fullErr, setFullErr] = useState<string | null>(null);
+
+  // Reset the full review when the project / version changes so stale
+  // LLM output from a prior version never lingers on screen.
+  useEffect(() => {
+    setFullReview(null);
+    setFullErr(null);
+  }, [activeProjectId, latestVersion]);
+
+  const runFullReview = () => {
+    if (!activeProjectId) return;
+    setFullLoading(true);
+    setFullErr(null);
+    designApi
+      .fullReview(token, activeProjectId, latestVersion ?? undefined)
+      .then((res) => setFullReview(res.report))
+      .catch((e) =>
+        setFullErr(
+          e instanceof Error ? e.message : "Full LLM review is unavailable",
+        ),
+      )
+      .finally(() => setFullLoading(false));
+  };
 
   // Fetch once when the tab mounts and a project is loaded. Re-fires
   // when the project / version changes (so v01 → v02 pulls fresh recs).
@@ -3520,20 +3552,137 @@ function RecsTab({
         </div>
       )}
 
-      <div className="pt-2 border-t border-hairline">
+      <div className="pt-2 border-t border-hairline space-y-3">
         <button
           type="button"
-          disabled
-          className="w-full text-left px-3 py-2 border border-hairline border-dashed rounded-md text-[12.5px] text-ink-mute opacity-70 cursor-not-allowed"
-          title="LLM advisor lands in Day 5 polish"
+          onClick={runFullReview}
+          disabled={fullLoading}
+          className="w-full text-left px-3 py-2 border border-hairline rounded-md text-[12.5px] text-ink-deep hover:bg-paper-soft hover:border-pencil transition-colors disabled:opacity-60 disabled:cursor-wait"
+          title="Live LLM advisor — confidence, impact and effort labels (~3-8s)"
         >
-          Run full LLM review
+          {fullLoading ? "Running full LLM review…" : "Run full LLM review"}
           <span className="ml-2 font-mono text-[10px] uppercase tracking-tagged text-pencil">
-            Day 5
+            LLM
           </span>
         </button>
+
+        {fullErr && (
+          <p className="text-[12px] text-brick">{fullErr}</p>
+        )}
+
+        {fullReview && <FullReviewPanel report={fullReview} />}
       </div>
     </div>
+  );
+}
+
+/* FullReviewPanel — renders the LLM-authored (second-speed) advisor
+ * output: each recommendation with its confidence / impact / effort
+ * labels, catalogue-grounded alternatives, plus the model's stated
+ * assumptions. Ordered by the model's own ranking when present. */
+function FullReviewPanel({
+  report,
+}: {
+  report: import("@/lib/types").FullRecommendationsReport;
+}) {
+  const block = report.recommendations;
+  const items = block?.recommendations ?? [];
+  const ranking = block?.ranking ?? [];
+  const assumptions = block?.assumptions ?? [];
+
+  // Apply the model's ranking (indices into items) when valid; fall back
+  // to source order otherwise.
+  const ordered =
+    ranking.length === items.length
+      ? ranking
+          .filter((i) => i >= 0 && i < items.length)
+          .map((i) => items[i])
+      : items;
+
+  return (
+    <div className="space-y-3 rounded-md border border-hairline bg-paper-soft/40 p-3">
+      <div className="flex items-baseline justify-between">
+        <SectionTag>Full LLM review</SectionTag>
+        <span className="font-mono text-[10px] text-ink-mute lowercase">
+          {report.model}
+        </span>
+      </div>
+
+      {ordered.length === 0 ? (
+        <p className="text-[12.5px] text-ink-soft italic">
+          The advisor returned no recommendations for this version.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {ordered.map((item, i) => (
+            <FullRecCard key={`${i}-${item.title}`} item={item} />
+          ))}
+        </div>
+      )}
+
+      {assumptions.length > 0 && (
+        <div className="pt-2 border-t border-hairline">
+          <p className="font-mono text-[10px] uppercase tracking-tagged text-ink-mute mb-1">
+            Assumptions
+          </p>
+          <ul className="list-disc list-inside space-y-0.5">
+            {assumptions.map((a, i) => (
+              <li key={`${i}-${a}`} className="text-[11.5px] text-ink-soft">
+                {a}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FullRecCard({
+  item,
+}: {
+  item: import("@/lib/types").FullRecItem;
+}) {
+  return (
+    <div className="border-b border-hairline last:border-b-0 pb-2.5 last:pb-0">
+      <div className="flex items-baseline justify-between gap-2">
+        <span className="text-[12.5px] text-ink-deep font-medium">
+          {item.title}
+        </span>
+        <span className="font-mono text-[10px] uppercase tracking-tagged text-ink-mute shrink-0">
+          {item.category}
+        </span>
+      </div>
+      {item.detail && (
+        <p className="mt-1 text-[12px] text-ink-soft leading-relaxed">
+          {item.detail}
+        </p>
+      )}
+      <div className="mt-1.5 flex flex-wrap gap-1.5">
+        <LabelPill label="confidence" value={item.confidence} />
+        <LabelPill label="impact" value={item.impact} />
+        <LabelPill label="effort" value={item.effort} />
+      </div>
+      {item.alternatives && item.alternatives.length > 0 && (
+        <p className="mt-1.5 text-[11.5px] text-ink-mute">
+          Alternatives:{" "}
+          {item.alternatives
+            .map((a) => a.name)
+            .filter(Boolean)
+            .join(", ")}
+        </p>
+      )}
+    </div>
+  );
+}
+
+function LabelPill({ label, value }: { label: string; value: string }) {
+  if (!value) return null;
+  return (
+    <span className="inline-flex items-baseline gap-1 rounded border border-hairline px-1.5 py-0.5 font-mono text-[9.5px] uppercase tracking-tagged">
+      <span className="text-ink-mute">{label}</span>
+      <span className="text-ink-deep">{value}</span>
+    </span>
   );
 }
 
