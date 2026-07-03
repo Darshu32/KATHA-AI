@@ -17,6 +17,9 @@ import uuid
 import ifcopenshell
 from ifcopenshell.api import run
 
+from app.services.graph_normalizer import normalize_graph
+from app.services.wall_model import derive_wall_model
+
 
 def _m(value) -> float:
     try:
@@ -97,9 +100,83 @@ def _box_body_rep(model, context, l, h, w):
     )
 
 
+def _place_box(model, body_context, storey, ifc_class, name, loc, xdim, ydim, depth):
+    """Create an entity as an axis-aligned box (XDim×YDim, extruded Depth in Z)."""
+    ent = run("root.create_entity", model, ifc_class=ifc_class, name=name)
+    ent.ObjectPlacement = _make_local_placement(
+        model, loc[0], loc[1], loc[2], relative_to=storey.ObjectPlacement
+    )
+    ent.Representation = model.create_entity(
+        "IfcProductDefinitionShape",
+        Representations=[_box_body_rep(model, body_context, xdim, depth, ydim)],
+    )
+    return ent
+
+
+def _add_walls_with_openings(model, body_context, storey, space, graph, room_h):
+    """Build the four perimeter walls and void them with real window/door openings.
+
+    Reads the shared ``wall_model`` (same source the section/elevation drawings
+    use) so a window is an ``IfcOpeningElement`` that *voids* the wall and is
+    *filled* by an ``IfcWindow`` — not a floating box. Opens as coordinated
+    geometry in Revit / ArchiCAD.
+    """
+    model_walls = derive_wall_model(graph)
+    t = float(model_walls["thickness"])
+    L = float(model_walls["room"]["length"])
+    W = float(model_walls["room"]["width"])
+    H = float(room_h)
+
+    # (side, centre X, centre Y, XDim, YDim) — walls centred on their line, Z 0→H.
+    layout = {
+        "south": (L / 2, 0.0, L, t),
+        "north": (L / 2, W, L, t),
+        "west": (0.0, W / 2, t, W),
+        "east": (L, W / 2, t, W),
+    }
+    walls_by_side: dict[str, object] = {}
+    for side, (cx, cy, xdim, ydim) in layout.items():
+        wall = _place_box(model, body_context, storey, "IfcWall", f"Wall {side.title()}", (cx, cy, 0.0), xdim, ydim, H)
+        run("spatial.assign_container", model, relating_structure=storey, products=[wall])
+        pset = run("pset.add_pset", model, product=wall, name="KATHA_Design")
+        run("pset.edit_pset", model, pset=pset, properties={"ObjectType": "wall", "Side": side, "Thickness_m": round(t, 3), "Height_m": round(H, 3)})
+        walls_by_side[side] = wall
+
+    for wall_spec in model_walls["walls"]:
+        side = wall_spec["side"]
+        wall = walls_by_side[side]
+        for op in wall_spec["openings"]:
+            c, w = float(op["center"]), float(op["width"])
+            sill, head = float(op["sill"]), float(op["head"])
+            oh = max(head - sill, 0.05)
+            if side in ("south", "north"):
+                at_y = 0.0 if side == "south" else W
+                op_loc, op_x, op_y = (c, at_y, sill), w, t * 1.6
+                fill_x, fill_y = w, max(t * 0.4, 0.05)
+            else:
+                at_x = 0.0 if side == "west" else L
+                op_loc, op_x, op_y = (at_x, c, sill), t * 1.6, w
+                fill_x, fill_y = max(t * 0.4, 0.05), w
+
+            opening = _place_box(model, body_context, storey, "IfcOpeningElement", f"Opening {op['source_id']}", op_loc, op_x, op_y, oh)
+            run("feature.add_feature", model, feature=opening, element=wall)
+
+            fill_class = "IfcWindow" if op["kind"] == "window" else "IfcDoor"
+            filling = _place_box(model, body_context, storey, fill_class, op["source_id"], op_loc, fill_x, fill_y, oh)
+            run("feature.add_filling", model, opening=opening, element=filling)
+            pset = run("pset.add_pset", model, product=filling, name="KATHA_Design")
+            run("pset.edit_pset", model, pset=pset, properties={"ObjectType": op["kind"], "Wall": side, "Width_m": round(w, 3), "Sill_m": round(sill, 3), "Head_m": round(head, 3)})
+
+    return {"walls": len(walls_by_side), "openings": sum(len(w["openings"]) for w in model_walls["walls"])}
+
+
 def export(spec: dict, graph: dict) -> dict:
     meta = spec.get("meta", {})
     project_name = meta.get("project_name") or "KATHA Project"
+    # Defensive, idempotent normalization so units/axes and the derived walls
+    # are correct even for legacy or un-normalized graphs (mirrors the drawing
+    # routes' read-time normalization).
+    graph, _ = normalize_graph(graph or {})
     room = graph.get("room") or (graph.get("spaces") or [{}])[0]
     room_dims = room.get("dimensions") or meta.get("dimensions_m") or {}
     room_l = float(room_dims.get("length") or 6.0)
@@ -136,10 +213,18 @@ def export(spec: dict, graph: dict) -> dict:
     )
     run("aggregate.assign_object", model, relating_object=storey, products=[space])
 
-    # Furnishings — one per object.
+    # Perimeter walls with real window/door voids (shared wall_model).
+    _add_walls_with_openings(model, body_context, storey, space, graph, room_h)
+
+    # Furnishings — one per object. Windows / doors / walls are handled by the
+    # wall model above (as fillings / walls), so skip them here to avoid
+    # duplicate, unrelated boxes.
     for obj in graph.get("objects", []):
         otype = (obj.get("type") or "object").lower()
+        role = str(obj.get("role") or "").lower()
         ifc_class = _type_to_ifc_class(otype)
+        if role in {"window", "door", "wall"} or ifc_class in {"IfcWindow", "IfcDoor", "IfcWall"}:
+            continue
         name = obj.get("id") or otype
         item = run("root.create_entity", model, ifc_class=ifc_class, name=name)
 

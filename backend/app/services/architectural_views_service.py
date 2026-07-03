@@ -24,6 +24,8 @@ from __future__ import annotations
 from html import escape
 from typing import Any
 
+from app.services.wall_model import derive_wall_model
+
 CW = 960
 CH = 640
 PAD = 64
@@ -148,12 +150,17 @@ def _vdim(y1: float, y2: float, x: float, text: str) -> str:
 def generate_section_package(graph: dict) -> dict:
     """Vertical cut through the room at mid-depth, looking along the depth axis.
 
-    Horizontal axis = room length (x), vertical = height (y). Objects crossing
-    the cut plane are poché-filled (cut); the rest are drawn as light elevation
-    outlines behind the cut.
+    Horizontal axis = room length (x), vertical = height (y). The two side walls
+    (west @ x=0, east @ x=L) are cut by the plane, so their openings appear as
+    **real gaps in the poché** (from the shared ``wall_model``). Furniture that
+    the plane crosses is poché-filled; the rest is ghosted behind. Openings on
+    the walls parallel to the cut are outlined as "beyond".
     """
     L, W, H = _room(graph)
+    model = derive_wall_model(graph)
+    walls = {w["side"]: w for w in model["walls"]}
     objs = [_obj_box(o) for o in _objects(graph)]
+    furniture = [o for o in objs if o["role"] not in _EDGE_ROLES]
     cut_z = W / 2.0
 
     plot_w, plot_h = CW - PAD * 2, CH - PAD * 2 - 30
@@ -171,19 +178,23 @@ def generate_section_package(graph: dict) -> dict:
         f"Section A–A — {_label(_room_type(graph))}",
         f"Cut at mid-depth ({cut_z:.2f} m) · ceiling {H:.2f} m · width {L:.2f} m",
     )
-    wall_t = max(0.1 * s, 6)
+    wall_t = max(model["thickness"] * s, 6)
 
-    # Room shell: floor slab, ceiling slab, two wall sections (poché).
-    seg.append(f'<rect x="{px(0)-wall_t:.1f}" y="{py(H):.1f}" width="{wall_t:.1f}" height="{H*s:.1f}" fill="url(#poche)" stroke="{_INK}" stroke-width="1.5"/>')
-    seg.append(f'<rect x="{px(L):.1f}" y="{py(H):.1f}" width="{wall_t:.1f}" height="{H*s:.1f}" fill="url(#poche)" stroke="{_INK}" stroke-width="1.5"/>')
+    def _crosses(op: dict) -> bool:
+        return op["center"] - op["width"] / 2 <= cut_z <= op["center"] + op["width"] / 2
+
+    west_cross = [op for op in walls["west"]["openings"] if _crosses(op)]
+    east_cross = [op for op in walls["east"]["openings"] if _crosses(op)]
+
+    # Ceiling slab + floor line, then the two cut side walls with real gaps.
     seg.append(f'<rect x="{px(0)-wall_t:.1f}" y="{py(H)-wall_t:.1f}" width="{L*s+wall_t*2:.1f}" height="{wall_t:.1f}" fill="url(#poche)" stroke="{_INK}" stroke-width="1.5"/>')
     seg.append(f'<line x1="{px(0):.1f}" y1="{floor_y:.1f}" x2="{px(L):.1f}" y2="{floor_y:.1f}" stroke="{_INK}" stroke-width="3"/>')
+    _draw_section_side_wall(seg, px(0) - wall_t, wall_t, west_cross, floor_y, H, s)
+    _draw_section_side_wall(seg, px(L), wall_t, east_cross, floor_y, H, s)
 
-    # Objects: cut vs behind.
+    # Furniture: cut (plane passes through) vs behind (ghosted).
     cut_items, behind = [], []
-    for o in objs:
-        if o["role"] == "wall":
-            continue
+    for o in furniture:
         z0, z1 = o["z"] - o["dz"] / 2, o["z"] + o["dz"] / 2
         (cut_items if z0 <= cut_z <= z1 else behind).append(o)
 
@@ -197,9 +208,26 @@ def generate_section_package(graph: dict) -> dict:
         x = px(o["x"] - o["dx"] / 2)
         w = o["dx"] * s
         h = o["dy"] * s
-        fill = _OPENING if o["role"] == "window" else _DOOR if o["role"] == "door" else _FILL
-        seg.append(f'<rect x="{x:.1f}" y="{floor_y-h:.1f}" width="{w:.1f}" height="{h:.1f}" rx="3" fill="{fill}" stroke="{_POCHE}" stroke-width="2"/>')
+        seg.append(f'<rect x="{x:.1f}" y="{floor_y-h:.1f}" width="{w:.1f}" height="{h:.1f}" rx="3" fill="{_FILL}" stroke="{_POCHE}" stroke-width="2"/>')
         seg.append(f'<text x="{x+w/2:.1f}" y="{floor_y-h-4:.1f}" text-anchor="middle" fill="#2c221a" font-size="10">{_label(o["name"])[:16]}</text>')
+
+    # Openings on the walls parallel to the cut (north/south run along x) and any
+    # side-wall opening the plane misses — drawn as "beyond" outlines so every
+    # opening is still represented.
+    for side in ("north", "south"):
+        for op in walls[side]["openings"]:
+            x = px(op["center"] - op["width"] / 2)
+            w = op["width"] * s
+            top = py(op["head"])
+            h = (op["head"] - op["sill"]) * s
+            stroke = _OPENING if op["kind"] == "window" else _DOOR
+            seg.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{w:.1f}" height="{h:.1f}" fill="none" stroke="{stroke}" stroke-width="1.6" stroke-dasharray="3 3"/>')
+    for side, xw in (("west", px(0)), ("east", px(L))):
+        crossed = west_cross if side == "west" else east_cross
+        for op in walls[side]["openings"]:
+            if op in crossed:
+                continue
+            seg.append(f'<line x1="{xw:.1f}" y1="{py(op["head"]):.1f}" x2="{xw:.1f}" y2="{py(op["sill"]):.1f}" stroke="{_INK_SOFT}" stroke-width="2" stroke-dasharray="3 3"/>')
 
     # Dimensions.
     seg.append(_vdim(py(H), floor_y, px(0) - wall_t - 16, f"{H:.2f} m"))
@@ -209,85 +237,178 @@ def generate_section_package(graph: dict) -> dict:
     placements = (
         [{"id": o["id"], "role": o["role"], "mode": "cut"} for o in cut_items]
         + [{"id": o["id"], "role": o["role"], "mode": "behind"} for o in behind]
+        + [
+            {"id": op["source_id"], "role": op["kind"], "mode": "opening", "wall": w["side"]}
+            for w in model["walls"]
+            for op in w["openings"]
+        ]
     )
+    opening_count = sum(len(w["openings"]) for w in model["walls"])
     return {
         "drawing_type": "section_view",
         "preview_svg": "".join(seg),
         "placements": placements,
-        "summary": {"cut_depth_m": round(cut_z, 2), "ceiling_height_m": round(H, 2), "objects_cut": len(cut_items)},
+        "summary": {
+            "cut_depth_m": round(cut_z, 2),
+            "ceiling_height_m": round(H, 2),
+            "objects_cut": len(cut_items),
+            "openings": opening_count,
+        },
     }
+
+
+def _draw_section_side_wall(
+    seg: list[str],
+    bx: float,
+    block_w: float,
+    crossing: list[dict],
+    floor_y: float,
+    H: float,
+    s: float,
+) -> None:
+    """Poché one cut side wall as a full-height block minus opening gaps."""
+    def _y(h: float) -> float:
+        return floor_y - h * s
+
+    gaps = sorted((op["sill"], op["head"], op) for op in crossing)
+    cursor = 0.0
+    for sill, head, _op in gaps:
+        if sill > cursor:  # solid poché below the opening
+            seg.append(f'<rect x="{bx:.1f}" y="{_y(sill):.1f}" width="{block_w:.1f}" height="{(sill-cursor)*s:.1f}" fill="url(#poche)" stroke="{_INK}" stroke-width="1.5"/>')
+        cursor = max(cursor, head)
+    if cursor < H:  # solid poché above the topmost opening (up to ceiling)
+        seg.append(f'<rect x="{bx:.1f}" y="{_y(H):.1f}" width="{block_w:.1f}" height="{(H-cursor)*s:.1f}" fill="url(#poche)" stroke="{_INK}" stroke-width="1.5"/>')
+    # Opening symbols in the gaps.
+    for sill, head, op in gaps:
+        fill = _OPENING if op["kind"] == "window" else _DOOR
+        seg.append(f'<rect x="{bx:.1f}" y="{_y(head):.1f}" width="{block_w:.1f}" height="{(head-sill)*s:.1f}" fill="{fill}" fill-opacity="0.45" stroke="{_INK}" stroke-width="1.4"/>')
 
 
 # ── Elevation view ───────────────────────────────────────────────────────────
 
 
 def generate_elevation_package(graph: dict) -> dict:
-    """Front elevation projected onto the back wall (z=0).
+    """Four-up elevation sheet (South / North / West / East).
 
-    Horizontal = room length (x), vertical = height (y). Openings on the wall
-    are drawn distinctly; furniture silhouettes are layered far-to-near.
+    Each cell is a true elevation of one perimeter wall: the wall face to
+    scale, its window/door openings **cut as real holes** (from the shared
+    ``wall_model``), and the room's furniture projected as faint silhouettes
+    layered far-to-near. Every opening appears on exactly one wall; every piece
+    of furniture appears against every wall — so the sheet stays complete.
     """
     L, W, H = _room(graph)
-    objs = [_obj_box(o) for o in _objects(graph)]
-
-    plot_w, plot_h = CW - PAD * 2, CH - PAD * 2 - 30
-    s = min(plot_w / L, plot_h / H)
-    ox = PAD + (plot_w - L * s) / 2
-    floor_y = PAD + 30 + H * s
-
-    def px(x: float) -> float:
-        return ox + x * s
-
-    def py(y: float) -> float:
-        return floor_y - y * s
+    room = (L, W, H)
+    model = derive_wall_model(graph)
+    furniture = [_obj_box(o) for o in _objects(graph) if _obj_box(o)["role"] not in _EDGE_ROLES]
 
     seg = _svg_open(
-        f"Elevation — {_label(_room_type(graph))}",
-        f"Wall face {L:.2f} m × {H:.2f} m · projected onto rear wall",
+        f"Elevations — {_label(_room_type(graph))}",
+        f"South · North · West · East · openings cut to scale · walls {model['thickness']*1000:.0f} mm",
     )
 
-    # Wall plane + ground line.
-    seg.append(f'<rect x="{px(0):.1f}" y="{py(H):.1f}" width="{L*s:.1f}" height="{H*s:.1f}" fill="#fbf4e8" stroke="{_INK}" stroke-width="2.5"/>')
-    seg.append(f'<line x1="{px(0)-20:.1f}" y1="{floor_y:.1f}" x2="{px(L)+20:.1f}" y2="{floor_y:.1f}" stroke="{_INK}" stroke-width="3"/>')
+    # 2×2 grid of wall elevations.
+    grid_top = PAD + 26
+    gap = 22
+    cell_w = (CW - PAD * 2 - gap) / 2
+    cell_h = (CH - grid_top - PAD - gap) / 2
+    order = ["south", "north", "west", "east"]
+    walls = {w["side"]: w for w in model["walls"]}
+    for i, side in enumerate(order):
+        cx = PAD + (i % 2) * (cell_w + gap)
+        cy = grid_top + (i // 2) * (cell_h + gap)
+        _draw_wall_elevation(seg, walls[side], room, furniture, cx, cy, cell_w, cell_h)
 
-    openings = [o for o in objs if o["role"] in ("window", "door")]
-    furniture = [o for o in objs if o["role"] not in _EDGE_ROLES]
-
-    # Furniture silhouettes, far wall first.
-    for o in sorted(furniture, key=lambda b: -b["z"]):
-        x = px(o["x"] - o["dx"] / 2)
-        w = o["dx"] * s
-        h = o["dy"] * s
-        seg.append(f'<rect x="{x:.1f}" y="{floor_y-h:.1f}" width="{w:.1f}" height="{h:.1f}" rx="3" fill="{_FILL}" fill-opacity="0.55" stroke="{_POCHE}" stroke-width="1.6"/>')
-        if w > 34:
-            seg.append(f'<text x="{x+w/2:.1f}" y="{floor_y-6:.1f}" text-anchor="middle" fill="#2c221a" font-size="10">{_label(o["name"])[:16]}</text>')
-
-    # Openings on the wall.
-    for o in openings:
-        x = px(o["x"] - o["dx"] / 2)
-        w = o["dx"] * s
-        h = o["dy"] * s
-        sill = o["y"] if o["y"] > 0 else (0.9 if o["role"] == "window" else 0.0)
-        top = py(sill + o["dy"])
-        oh = o["dy"] * s
-        fill = _OPENING if o["role"] == "window" else _DOOR
-        seg.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{w:.1f}" height="{oh:.1f}" fill="{fill}" fill-opacity="0.4" stroke="{_INK}" stroke-width="1.8"/>')
-        seg.append(f'<text x="{x+w/2:.1f}" y="{top-4:.1f}" text-anchor="middle" fill="#2c221a" font-size="10">{_label(o["role"])}</text>')
-
-    seg.append(_vdim(py(H), floor_y, px(0) - 16, f"{H:.2f} m"))
-    seg.append(_hdim(px(0), px(L), floor_y + 34, f"{L:.2f} m"))
     seg.append("</svg>")
 
-    placements = (
-        [{"id": o["id"], "role": o["role"], "mode": "opening"} for o in openings]
-        + [{"id": o["id"], "role": o["role"], "mode": "silhouette"} for o in furniture]
-    )
+    placements = [
+        {"id": op["source_id"], "role": op["kind"], "mode": "opening", "wall": w["side"]}
+        for w in model["walls"]
+        for op in w["openings"]
+    ] + [
+        {"id": o["id"], "role": o["role"], "mode": "silhouette", "wall": side}
+        for side in order
+        for o in furniture
+    ]
+    opening_count = sum(len(w["openings"]) for w in model["walls"])
     return {
         "drawing_type": "elevation_view",
         "preview_svg": "".join(seg),
         "placements": placements,
-        "summary": {"wall_length_m": round(L, 2), "wall_height_m": round(H, 2), "openings": len(openings)},
+        "summary": {"wall_length_m": round(L, 2), "wall_height_m": round(H, 2), "openings": opening_count},
     }
+
+
+def _draw_wall_elevation(
+    seg: list[str],
+    wall: dict,
+    room: tuple[float, float, float],
+    furniture: list[dict],
+    cx: float,
+    cy: float,
+    cw: float,
+    ch: float,
+) -> None:
+    """Render one wall's elevation (face + real openings + furniture) in a cell."""
+    L, W, H = room
+    side, runs, wlen = wall["side"], wall["runs"], wall["length"]
+    pad, label_h, dim_h = 16, 22, 20
+    plot_w = cw - pad * 2
+    plot_h = ch - pad - label_h - dim_h
+    s = min(plot_w / wlen, plot_h / H) if wlen > 0 and H > 0 else 1.0
+    ox = cx + pad + (plot_w - wlen * s) / 2
+    ground = cy + label_h + pad / 2 + H * s
+
+    def ux(u: float) -> float:
+        return ox + u * s
+
+    def hy(h: float) -> float:
+        return ground - h * s
+
+    # Cell frame + label.
+    seg.append(f'<rect x="{cx:.1f}" y="{cy:.1f}" width="{cw:.1f}" height="{ch:.1f}" rx="10" fill="#fbf8f2" stroke="{_GRID}" stroke-width="1.2"/>')
+    seg.append(f'<text x="{cx+14:.1f}" y="{cy+22:.1f}" fill="{_INK}" font-size="12" font-weight="700">{side.title()} Elevation</text>')
+
+    # Wall face + ground line.
+    seg.append(f'<rect x="{ux(0):.1f}" y="{hy(H):.1f}" width="{wlen*s:.1f}" height="{H*s:.1f}" fill="#f6ede0" stroke="{_INK}" stroke-width="2"/>')
+    seg.append(f'<line x1="{ux(0)-10:.1f}" y1="{ground:.1f}" x2="{ux(wlen)+10:.1f}" y2="{ground:.1f}" stroke="{_INK}" stroke-width="2.5"/>')
+
+    # Furniture projected onto this wall, far-first (faint, so openings read).
+    proj = []
+    for o in furniture:
+        if runs == "x":
+            u, ext = o["x"], o["dx"]
+            dist = o["z"] if side == "south" else (W - o["z"])
+        else:
+            u, ext = o["z"], o["dz"]
+            dist = o["x"] if side == "west" else (L - o["x"])
+        proj.append((dist, u, ext, o["dy"]))
+    for _dist, u, ext, hh in sorted(proj, key=lambda p: -p[0]):
+        x = ux(u - ext / 2)
+        w = ext * s
+        h = hh * s
+        seg.append(f'<rect x="{x:.1f}" y="{ground-h:.1f}" width="{max(w,1):.1f}" height="{h:.1f}" rx="2" fill="{_FILL}" fill-opacity="0.3" stroke="{_POCHE}" stroke-width="1" stroke-opacity="0.5"/>')
+
+    # Openings cut as real holes in the wall face.
+    for op in wall["openings"]:
+        x = ux(op["center"] - op["width"] / 2)
+        w = op["width"] * s
+        top = hy(op["head"])
+        h = (op["head"] - op["sill"]) * s
+        # Punch: paper-fill the hole so it reads as a void through the wall.
+        seg.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{w:.1f}" height="{h:.1f}" fill="{_PAPER}" stroke="{_INK}" stroke-width="1.8"/>')
+        if op["kind"] == "window":
+            # Glazing tint + mullions.
+            seg.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{w:.1f}" height="{h:.1f}" fill="{_OPENING}" fill-opacity="0.28"/>')
+            seg.append(f'<line x1="{x+w/2:.1f}" y1="{top:.1f}" x2="{x+w/2:.1f}" y2="{top+h:.1f}" stroke="{_INK}" stroke-width="1" stroke-opacity="0.7"/>')
+            seg.append(f'<line x1="{x:.1f}" y1="{top+h/2:.1f}" x2="{x+w:.1f}" y2="{top+h/2:.1f}" stroke="{_INK}" stroke-width="1" stroke-opacity="0.7"/>')
+        else:
+            # Door leaf hint + threshold.
+            seg.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{w:.1f}" height="{h:.1f}" fill="{_DOOR}" fill-opacity="0.22"/>')
+            seg.append(f'<line x1="{x+w*0.82:.1f}" y1="{top:.1f}" x2="{x+w*0.82:.1f}" y2="{top+h:.1f}" stroke="{_INK}" stroke-width="1" stroke-opacity="0.7"/>')
+
+    # Compact dimensions.
+    seg.append(_hdim(ux(0), ux(wlen), ground + 16, f"{wlen:.2f} m"))
+    seg.append(_vdim(hy(H), ground, ux(0) - 12, f"{H:.2f} m"))
 
 
 # ── Isometric view ───────────────────────────────────────────────────────────
