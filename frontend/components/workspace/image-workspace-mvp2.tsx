@@ -15,14 +15,14 @@ import {
   brief as briefApi,
   design as designApi,
   projects as projectsApi,
-  regions as regionsApi,
   resolveAssetUrl,
-  type RegionDef,
 } from "@/lib/api-client";
 import { toastError, useToastStore } from "@/lib/toast-store";
 import type {
   ArchTheme,
+  CameraMode,
   ImageRatio,
+  LightingMode,
   ProjectType,
 } from "@/lib/types";
 import {
@@ -58,6 +58,18 @@ const DIMS: { id: Dim; label: string; tagline: string }[] = [
 // admin theme registry). See useConfigStore.loadThemes in lib/store.ts.
 
 const RATIOS: ImageRatio[] = ["16:9", "4:3", "1:1", "3:4", "9:16"];
+const CAMERAS: { id: CameraMode; label: string }[] = [
+  { id: "front", label: "Front" },
+  { id: "eye-level", label: "Eye-level" },
+  { id: "interior", label: "Interior" },
+  { id: "aerial", label: "Aerial" },
+];
+const LIGHTINGS: { id: LightingMode; label: string }[] = [
+  { id: "daylight", label: "Daylight" },
+  { id: "golden-hour", label: "Golden hour" },
+  { id: "night", label: "Night" },
+  { id: "overcast", label: "Overcast" },
+];
 
 /* BRD §3A working-drawing catalogue. Mirrors the backend
  * /working-drawings/types response so the UI can render the picker
@@ -107,11 +119,15 @@ export default function ImageWorkspaceMvp2() {
     projectType,
     setProjectType,
     region,
-    setRegion,
     theme,
     setTheme,
     ratio,
     setRatio,
+    camera,
+    setCamera,
+    lighting,
+    setLighting,
+    viewMode,
     isGenerating,
     setIsGenerating,
     generations,
@@ -441,9 +457,15 @@ export default function ImageWorkspaceMvp2() {
       // 2 — single backend call: graph + render baked together
       const graphRes = await designApi.generate(token, projectId, {
         prompt: prompt.trim(),
-        room_type: "living_room",
+        // room_type intentionally omitted — the backend derives it from
+        // the prompt (knowledge.infer_room_type) instead of assuming one.
         style: theme,
         ratio,
+        // The actual workspace selections drive the render, not fixed
+        // strings — the camera / lighting controls now reach the model.
+        camera,
+        lighting,
+        view_mode: viewMode,
         drawing_type: "3d-render",
       });
 
@@ -471,8 +493,8 @@ export default function ImageWorkspaceMvp2() {
         ratio,
         quality: "standard",
         drawingType: "3d-render",
-        camera: "front",
-        lighting: "daylight",
+        camera,
+        lighting,
         width: 1024,
         height: 576,
         projectId,
@@ -555,14 +577,16 @@ export default function ImageWorkspaceMvp2() {
           projectType={projectType}
           setProjectType={setProjectType}
           projectTypeDefs={projectTypeDefs}
-          region={region}
-          setRegion={setRegion}
           scope={scope}
           setScope={setScope}
           dim={dim}
           setDim={setDim}
           ratio={ratio}
           setRatio={setRatio}
+          camera={camera}
+          setCamera={setCamera}
+          lighting={lighting}
+          setLighting={setLighting}
         />
 
         <main className="flex-1 flex flex-col min-w-0 border-x border-hairline bg-paper">
@@ -1246,26 +1270,30 @@ function LeftControls({
   projectType,
   setProjectType,
   projectTypeDefs,
-  region,
-  setRegion,
   scope,
   setScope,
   dim,
   setDim,
   ratio,
   setRatio,
+  camera,
+  setCamera,
+  lighting,
+  setLighting,
 }: {
   projectType: ProjectType;
   setProjectType: (t: ProjectType) => void;
   projectTypeDefs: import("@/lib/api-client").ProjectTypeDef[];
-  region: string;
-  setRegion: (r: string) => void;
   scope: Scope;
   setScope: (s: Scope) => void;
   dim: Dim;
   setDim: (d: Dim) => void;
   ratio: ImageRatio;
   setRatio: (r: ImageRatio) => void;
+  camera: CameraMode;
+  setCamera: (c: CameraMode) => void;
+  lighting: LightingMode;
+  setLighting: (l: LightingMode) => void;
 }) {
   // Multi-open accordion — architects often want to see Brief + Space
   // simultaneously when tuning a design. State persists to localStorage
@@ -1357,7 +1385,6 @@ function LeftControls({
             defs={projectTypeDefs}
             onChange={setProjectType}
           />
-          <RegionSelector value={region} onChange={setRegion} />
           <section>
             <SectionTag>Scope</SectionTag>
             <div className="mt-2.5 grid grid-cols-2 gap-1.5">
@@ -1405,6 +1432,38 @@ function LeftControls({
                   onClick={() => setRatio(r)}
                 >
                   {r}
+                </button>
+              ))}
+            </div>
+          </section>
+          <section>
+            <SectionTag>Camera</SectionTag>
+            <div className="mt-2.5 grid grid-cols-2 gap-1.5">
+              {CAMERAS.map((c) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  className="slide-pill text-center"
+                  data-active={c.id === camera}
+                  onClick={() => setCamera(c.id)}
+                >
+                  {c.label}
+                </button>
+              ))}
+            </div>
+          </section>
+          <section>
+            <SectionTag>Lighting</SectionTag>
+            <div className="mt-2.5 grid grid-cols-2 gap-1.5">
+              {LIGHTINGS.map((l) => (
+                <button
+                  key={l.id}
+                  type="button"
+                  className="slide-pill text-center"
+                  data-active={l.id === lighting}
+                  onClick={() => setLighting(l.id)}
+                >
+                  {l.label}
                 </button>
               ))}
             </div>
@@ -1790,74 +1849,108 @@ function CanvasEmptyHero({
   onPickPrompt: (p: string) => void;
 }) {
   const lowerLabel = projectTypeLabel.toLowerCase();
+  const scopeLabel = SCOPES.find((s) => s.id === scope)?.label ?? "Interior";
+
+  // The three moves, drawn as a numbered sequence rather than three
+  // generic cards — brass numerals echo the drawing-index register.
+  const steps: { n: string; title: string; body: string }[] = [
+    {
+      n: "01",
+      title: "Configure",
+      body: `Scope set to ${scopeLabel}, ${dim.toUpperCase()} — standards and cost bands load to match.`,
+    },
+    {
+      n: "02",
+      title: "Prompt",
+      body: `Describe the design. KATHA reads it as a ${lowerLabel} project and pulls the right codes.`,
+    },
+    {
+      n: "03",
+      title: "Iterate",
+      body: "Cost streams live in the terminal below. Re-prompt to refine; export to edit.",
+    },
+  ];
 
   return (
-    <div className="px-6 md:px-12 py-16 max-w-3xl mx-auto">
-      <h1 className="text-[1.625rem] md:text-[1.875rem] text-ink-deep leading-[1.2] tracking-[-0.02em] font-semibold">
-        A {lowerLabel} canvas, ready when you are.
-      </h1>
-      <p className="mt-4 text-ink-soft text-[15px] leading-relaxed max-w-xl">
-        Standards, ergonomic ranges, and cost defaults are tuned for{" "}
-        <strong className="text-ink">{lowerLabel}</strong> projects. Pick a
-        starter below or write your own prompt.
-      </p>
+    <div className="px-6 md:px-10 py-14 max-w-3xl mx-auto">
+      {/* Drawing sheet — pinned on the drafting table (the gridpaper
+          canvas). Corner registration marks + a title-block header make
+          the sheet metaphor legible; the whole surface is where the
+          architect is about to draw. */}
+      <div className="relative bg-paper border border-hairline shadow-card px-7 md:px-11 py-9 md:py-11">
+        {/* Registration / crop marks at the four corners. */}
+        <span aria-hidden className="absolute -top-px -left-px h-3.5 w-3.5 border-t-2 border-l-2 border-graphite" />
+        <span aria-hidden className="absolute -top-px -right-px h-3.5 w-3.5 border-t-2 border-r-2 border-graphite" />
+        <span aria-hidden className="absolute -bottom-px -left-px h-3.5 w-3.5 border-b-2 border-l-2 border-graphite" />
+        <span aria-hidden className="absolute -bottom-px -right-px h-3.5 w-3.5 border-b-2 border-r-2 border-graphite" />
 
-      {starterPrompts.length > 0 ? (
-        <div className="mt-8">
-          <SectionTag>Starter prompts</SectionTag>
-          <div className="mt-3 space-y-2">
-            {starterPrompts.map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => onPickPrompt(s)}
-                className="w-full text-left px-4 py-3 border border-hairline bg-paper-soft/60 hover:bg-paper-soft hover:border-graphite rounded-md transition-colors text-[14px] text-ink leading-snug"
-              >
-                {s}
-              </button>
-            ))}
-          </div>
+        {/* Title block — mono sheet designation left, ready status right. */}
+        <div className="flex items-center justify-between gap-4">
+          <span className="mono-tag">
+            New sheet · {projectTypeLabel} / {scopeLabel} · {dim.toUpperCase()}
+          </span>
+          <span className="mono-tag inline-flex items-center whitespace-nowrap">
+            <span aria-hidden className="mr-1.5 inline-block h-1.5 w-1.5 rounded-full bg-pencil align-middle" />
+            Ready
+          </span>
         </div>
-      ) : null}
 
-      <div className="mt-10 grid grid-cols-1 md:grid-cols-3 gap-3">
-        <CanvasInfoCard
-          tag="Step 1"
-          title="Configure"
-          body={`Pick scope (${SCOPES.find((s) => s.id === scope)?.label}) and dimensionality (${dim.toUpperCase()}).`}
-        />
-        <CanvasInfoCard
-          tag="Step 2"
-          title="Prompt"
-          body={`Describe the design. KATHA AI treats it as a ${lowerLabel} project and pulls the right codes + cost defaults.`}
-        />
-        <CanvasInfoCard
-          tag="Step 3"
-          title="Iterate"
-          body="Cost streams live in the terminal below. Re-prompt to refine; export to edit."
-        />
+        <div className="mt-4 h-px bg-hairline" />
+
+        {/* Headline — the editorial serif moment (Newsreader). */}
+        <h1 className="mt-7 font-display text-[2.1rem] md:text-[2.6rem] text-ink-deep leading-[1.1] tracking-[-0.015em]">
+          A {lowerLabel} canvas,
+          <br />
+          ready when you are.
+        </h1>
+        <p className="mt-4 max-w-lg text-[15px] leading-relaxed text-ink-soft">
+          Standards, ergonomic ranges, and cost defaults are tuned for{" "}
+          <strong className="font-semibold text-ink">{lowerLabel}</strong>{" "}
+          projects. Pick a starter below, or write your own prompt.
+        </p>
+
+        {/* Starter prompts as pinned, indexed reference notes. */}
+        {starterPrompts.length > 0 ? (
+          <div className="mt-9">
+            <SectionTag>Starter prompts</SectionTag>
+            <div className="mt-3.5">
+              {starterPrompts.map((s, i) => (
+                <button
+                  key={s}
+                  type="button"
+                  onClick={() => onPickPrompt(s)}
+                  className="group flex w-full items-start gap-3.5 rounded-md border border-transparent px-3 py-3 text-left transition-colors hover:border-hairline hover:bg-paper-soft"
+                >
+                  <span className="pt-0.5 font-mono text-[12px] tabular-nums text-ink-mute transition-colors group-hover:text-pencil">
+                    {String(i + 1).padStart(2, "0")}
+                  </span>
+                  <span className="flex-1 text-[14px] leading-snug text-ink">{s}</span>
+                  <span aria-hidden className="pt-0.5 text-[13px] text-ink-mute transition-all group-hover:translate-x-0.5 group-hover:text-pencil">
+                    →
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      {/* Workflow strip — three moves as a connected numbered sequence,
+          hairline-separated so they read as one drawing, not three cards. */}
+      <div className="mt-8 grid grid-cols-1 gap-px overflow-hidden rounded-md border border-hairline bg-hairline md:grid-cols-3">
+        {steps.map((step) => (
+          <div key={step.n} className="bg-paper px-5 py-5">
+            <div className="flex items-baseline gap-2.5">
+              <span className="font-mono text-[15px] tabular-nums text-brass">{step.n}</span>
+              <h3 className="text-[13.5px] font-semibold tracking-[-0.01em] text-ink-deep">
+                {step.title}
+              </h3>
+            </div>
+            <p className="mt-2 text-[12.5px] leading-relaxed text-ink-soft">{step.body}</p>
+          </div>
+        ))}
       </div>
     </div>
-  );
-}
-
-function CanvasInfoCard({
-  tag,
-  title,
-  body,
-}: {
-  tag: string;
-  title: string;
-  body: string;
-}) {
-  return (
-    <PaperCard className="p-4">
-      <SectionTag>{tag}</SectionTag>
-      <h3 className="mt-2 text-[14px] text-ink-deep font-semibold tracking-[-0.01em]">
-        {title}
-      </h3>
-      <p className="mt-1.5 text-[13px] text-ink-soft leading-relaxed">{body}</p>
-    </PaperCard>
   );
 }
 
@@ -4935,79 +5028,6 @@ function IssueSection({
 // live under a "More" affordance. The selector renders a tiny "Loading…"
 // state on cold start; in practice the fetch completes well before the
 // user clicks anything because we kick it off on workspace mount.
-
-// Static fallback for the region catalogue so the selector renders
-// instantly (and offline) before GET /regions resolves. Mirrors the
-// backend registry in app/services/regions/__init__.py — the live fetch
-// overrides this with authoritative currency/code-basis metadata.
-const REGION_FALLBACK: RegionDef[] = [
-  { key: "india", label: "India", currency: "INR", currency_symbol: "₹", jurisdiction: "india_nbc", code_basis: "NBC 2016 + ECBC", codes_seeded: true, locale: "en-IN" },
-  { key: "europe", label: "Europe", currency: "EUR", currency_symbol: "€", jurisdiction: "eu_eurocode", code_basis: "Eurocodes + DIN + EPBD", codes_seeded: true, locale: "de-DE" },
-  { key: "middle_east", label: "Middle East", currency: "AED", currency_symbol: "AED", jurisdiction: "uae_dubai", code_basis: "Dubai Building Code + Estidama", codes_seeded: true, locale: "en-AE" },
-  { key: "north_america", label: "North America", currency: "USD", currency_symbol: "$", jurisdiction: "international_ibc", code_basis: "IBC (international baseline)", codes_seeded: false, locale: "en-US" },
-  { key: "asia_pacific", label: "Asia-Pacific", currency: "USD", currency_symbol: "$", jurisdiction: "international_ibc", code_basis: "IBC (international baseline)", codes_seeded: false, locale: "en-US" },
-  { key: "latin_america", label: "Latin America", currency: "USD", currency_symbol: "$", jurisdiction: "international_ibc", code_basis: "IBC (international baseline)", codes_seeded: false, locale: "en-US" },
-  { key: "africa", label: "Africa", currency: "USD", currency_symbol: "$", jurisdiction: "international_ibc", code_basis: "IBC (international baseline)", codes_seeded: false, locale: "en-US" },
-  { key: "oceania", label: "Oceania", currency: "AUD", currency_symbol: "A$", jurisdiction: "international_ibc", code_basis: "IBC (international baseline)", codes_seeded: false, locale: "en-AU" },
-];
-
-function RegionSelector({
-  value,
-  onChange,
-}: {
-  value: string;
-  onChange: (r: string) => void;
-}) {
-  // Fetch the authoritative catalogue once; the static fallback keeps
-  // the control populated instantly and if the endpoint is unreachable.
-  const [defs, setDefs] = useState<RegionDef[]>(REGION_FALLBACK);
-  useEffect(() => {
-    let cancelled = false;
-    regionsApi
-      .list()
-      .then((res) => {
-        if (!cancelled && res.regions?.length) setDefs(res.regions);
-      })
-      .catch(() => {
-        /* keep fallback — selector stays usable */
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  const active = defs.find((d) => d.key === value) ?? defs[0];
-
-  return (
-    <section>
-      <SectionTag>Region</SectionTag>
-      <div className="mt-2.5 grid grid-cols-2 gap-1.5">
-        {defs.map((d) => (
-          <button
-            key={d.key}
-            type="button"
-            className="slide-pill text-center"
-            data-active={d.key === value}
-            onClick={() => onChange(d.key)}
-            title={`${d.currency} · ${d.code_basis}`}
-          >
-            {d.label}
-          </button>
-        ))}
-      </div>
-      {active ? (
-        <p className="mt-2 text-[12px] text-ink-mute leading-snug">
-          Estimates in{" "}
-          <span className="text-ink-soft font-medium">
-            {active.currency_symbol} {active.currency}
-          </span>{" "}
-          · codes: {active.code_basis}
-          {active.codes_seeded ? "" : " (baseline)"}
-        </p>
-      ) : null}
-    </section>
-  );
-}
 
 function ProjectTypeSelector({
   value,
