@@ -22,7 +22,10 @@ from app.services.regions import (
     get_region,
     jurisdiction_for_region,
 )
-from app.services.graph_describer import describe_graph_for_render
+from app.services.graph_render_reference import (
+    build_reference_image,
+    describe_graph_materials,
+)
 from app.services.image_service import generate_image, resolve_theme_visual_hint
 from app.services.knowledge_validator import validate_design_graph_async
 from app.services.standards.knowledge_service import resolve_standard as _resolve_standard
@@ -42,6 +45,9 @@ async def _attach_render(
     theme: str | None,
     graph_data: dict | None = None,
     theme_label: str | None = None,
+    ratio: str | None = None,
+    camera: str | None = None,
+    lighting: str | None = None,
 ) -> str | None:
     """Best-effort: render an image for the just-saved version, persist
     the bytes to object storage, and write a GeneratedAsset row pointing
@@ -63,30 +69,46 @@ async def _attach_render(
       4. Return a short ``/api/v1/assets/{key}`` URL the browser can
          cache like any normal image.
 
-    When ``graph_data`` is supplied, we also append a structured
-    description of the graph (objects, materials, dimensions,
-    positions) to the prompt so the image model is conditioned on the
-    actual geometry — the load-bearing step that lets edits like
-    "move the table 30cm right" surface in the next render.
+    When ``graph_data`` is supplied, the render is *grounded* on it: the
+    graph is rasterised into a flat top-down layout guide (positions +
+    sizes + material colours) that the image model conditions on, plus a
+    number-free materials one-liner. Coordinates never enter the prompt
+    and the reference carries no text, so the model has nothing to
+    hallucinate onto the frame — and the render tracks the actual graph,
+    including edits like "move the table 30cm right".
     """
     if not prompt or not prompt.strip():
         return None
-    enriched_prompt = prompt.strip()
+    clean_prompt = prompt.strip()
+    reference_png: bytes | None = None
     if graph_data is not None:
-        graph_desc = describe_graph_for_render(graph_data)
-        if graph_desc:
-            enriched_prompt = f"{enriched_prompt}\n\n{graph_desc}"
+        # Rasterise the graph into a flat top-down layout guide the image
+        # model conditions on (text-free), and name the materials in a
+        # number-free one-liner. This is what makes the render a function
+        # of the graph instead of an independent text-to-image guess.
+        try:
+            reference_png = build_reference_image(graph_data, ratio=ratio)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("Reference image build failed for version %s: %s",
+                           graph_version_id, exc)
+            reference_png = None
+        elements = describe_graph_materials(graph_data)
+        if elements:
+            clean_prompt = f"{clean_prompt}. Elements: {elements}"
     # Resolve the visual hint from DB first — admin-defined themes
     # carry their hint in rule_pack.visual_hint, with the legacy
     # Python dict as a fallback for the 10 stock themes.
     resolved_hint = await resolve_theme_visual_hint(db, theme)
     try:
         result = await generate_image(
-            enriched_prompt,
+            clean_prompt,
             project_type=project_type,
             theme=theme,
             theme_label=theme_label,
             theme_visual_hint=resolved_hint,
+            reference_png=reference_png,
+            camera=camera,
+            lighting=lighting,
         )
     except Exception as exc:  # noqa: BLE001
         logger.warning("Render generation failed for version %s: %s",
@@ -719,6 +741,9 @@ async def run_initial_generation(
         project_type=project_type,
         theme=style,
         graph_data=graph_data,
+        ratio=ratio,
+        camera=camera,
+        lighting=lighting,
     )
 
     logger.info(

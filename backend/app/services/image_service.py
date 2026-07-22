@@ -109,6 +109,27 @@ async def resolve_theme_visual_hint(db, theme_slug: str | None) -> str | None:
     return None
 
 
+# Camera / lighting selections (from the design workspace controls) →
+# render clauses. These drive the actual viewpoint and light of the
+# render instead of a hardcoded "eye-level, natural light", so the
+# architect's choice is reflected. Unknown values fall back to a sane
+# default rather than an error.
+_CAMERA_VIEWPOINTS: dict[str, str] = {
+    "front": "straight-on frontal eye-level view",
+    "aerial": "high aerial three-quarter view looking down into the space",
+    "interior": "interior eye-level three-quarter view from within the room",
+    "eye-level": "eye-level three-quarter perspective",
+}
+_LIGHTING_CLAUSES: dict[str, str] = {
+    "daylight": "bright natural daylight",
+    "golden-hour": "warm golden-hour light",
+    "night": "night-time interior lighting with warm lamps",
+    "overcast": "soft diffuse overcast light",
+}
+_DEFAULT_VIEWPOINT = "eye-level three-quarter perspective"
+_DEFAULT_LIGHTING = "natural daylight"
+
+
 async def generate_image(
     prompt: str,
     *,
@@ -116,6 +137,9 @@ async def generate_image(
     theme: str | None = None,
     theme_label: str | None = None,
     theme_visual_hint: str | None = None,
+    reference_png: bytes | None = None,
+    camera: str | None = None,
+    lighting: str | None = None,
 ) -> dict[str, Any] | None:
     """Generate an architecture image using Google Nano Banana (Gemini Image API).
 
@@ -162,26 +186,58 @@ async def generate_image(
             theme_hint = f"{theme_label} style"
     theme_clause = f"Style: {theme_hint}. " if theme_hint else ""
 
-    arch_prompt = (
-        f"Generate a professional architectural visualization. "
-        f"{type_clause}"
-        f"{theme_clause}"
-        f"Subject: {prompt}. "
-        "Photorealistic, high detail, clean composition, studio quality. "
-        "Architecture photography style with natural lighting. "
-        "No text, no watermarks, no labels."
-    )
+    viewpoint = _CAMERA_VIEWPOINTS.get((camera or "").lower(), _DEFAULT_VIEWPOINT)
+    light = _LIGHTING_CLAUSES.get((lighting or "").lower(), _DEFAULT_LIGHTING)
+
+    # Two prompt modes:
+    #
+    #  • Grounded (``reference_png`` present) — the caller has rasterised
+    #    the design graph into a flat top-down layout guide. We attach it
+    #    as a multimodal reference and instruct the model to honour the
+    #    layout while rendering photorealistically. Crucially the prompt
+    #    carries NO coordinates and the reference NO text, so nothing gets
+    #    hallucinated onto the frame as dimension labels. This makes the
+    #    render an actual function of the graph.
+    #  • Prompt-only (no reference) — the legacy path, kept for callers
+    #    that render from a bare prompt (e.g. chat concept images).
+    if reference_png:
+        arch_prompt = (
+            "Photorealistic architectural interior photograph. "
+            f"{type_clause}{theme_clause}"
+            f"Subject: {prompt}. "
+            "The attached image is ONLY a flat top-down layout guide showing "
+            "where each element sits and how large it is — use it to place and "
+            "proportion the furniture faithfully. Do NOT draw, trace or "
+            "reproduce any rectangles, outlines, boxes, borders, frames, "
+            "floor-plan lines or flat colour blocks in the output. "
+            f"{viewpoint}, {light}, high detail, studio quality. "
+            "No text, no watermarks, no labels, no dimensions."
+        )
+        parts: list[dict[str, Any]] = [
+            {
+                "inlineData": {
+                    "mimeType": "image/png",
+                    "data": base64.b64encode(reference_png).decode(),
+                }
+            },
+            {"text": arch_prompt},
+        ]
+    else:
+        arch_prompt = (
+            f"Generate a professional architectural visualization. "
+            f"{type_clause}"
+            f"{theme_clause}"
+            f"Subject: {prompt}. "
+            "Photorealistic, high detail, clean composition, studio quality. "
+            "Architecture photography style with natural lighting. "
+            "No text, no watermarks, no labels."
+        )
+        parts = [{"text": arch_prompt}]
 
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent?key={api_key}"
 
     payload = {
-        "contents": [
-            {
-                "parts": [
-                    {"text": arch_prompt}
-                ]
-            }
-        ],
+        "contents": [{"parts": parts}],
         "generationConfig": {
             "responseModalities": ["TEXT", "IMAGE"],
         },
