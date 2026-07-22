@@ -16,6 +16,38 @@ from app.knowledge import (
     themes,
 )
 
+# Prompt keyword → canonical room-type key (matches the space_standards /
+# ergonomics tables). Ordered most-specific first; the first hit wins.
+# This is what lets us derive the room type from what the architect
+# actually asked for, instead of assuming one.
+_ROOM_TYPE_KEYWORDS: list[tuple[str, tuple[str, ...]]] = [
+    ("kitchen", ("kitchenette", "kitchen", "cook", "pantry")),
+    ("bathroom", ("bathroom", "washroom", "toilet", "powder room", "ensuite", "en-suite", "restroom", "shower")),
+    ("bedroom", ("bedroom", "master bed", "guest room", "kids room", "children's room", "child's room", "nursery", "bunk", "sleeping")),
+    ("living_room", ("living room", "living-cum", "living cum", "drawing room", "sitting room", "family room", "tv room", "lounge")),
+    ("dining_room", ("dining",)),
+    ("office_workstation", ("office", "workstation", "study", "cabin", "workspace", "co-work", "cowork", "meeting room", "conference room", "boardroom")),
+    ("restaurant", ("restaurant", "cafe", "café", "bistro", "diner", "eatery", "coffee shop")),
+]
+
+
+def infer_room_type(prompt: str | None, *, fallback: str = "") -> str:
+    """Derive the room type from the design prompt.
+
+    Returns the canonical room-type key when a keyword is recognised, or
+    ``fallback`` (default empty) when the prompt gives no clear signal —
+    in which case the caller should NOT inject a room-specific space
+    standard rather than assume a wrong one. The prompt is the primary
+    intent, so this is preferred over any client-supplied default.
+    """
+    text = (prompt or "").lower()
+    if not text.strip():
+        return fallback
+    for room_type, keywords in _ROOM_TYPE_KEYWORDS:
+        if any(kw in text for kw in keywords):
+            return room_type
+    return fallback
+
 
 def build_knowledge_brief(
     *,
@@ -61,6 +93,7 @@ def build_knowledge_brief(
         "kitchen": ["kitchen_cabinet_base", "counter"],
         "study": ["office_chair", "desk"],
         "office": ["office_chair", "desk"],
+        "office_workstation": ["office_chair", "desk"],
     }.get(room_type, [])
     if room_ergo:
         ergo_lines = []

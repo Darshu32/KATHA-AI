@@ -585,7 +585,9 @@ export const design = {
     projectId: string,
     body: {
       prompt: string;
-      room_type: string;
+      // Optional: when omitted the backend derives the room type from the
+      // prompt (knowledge.infer_room_type) rather than assuming one.
+      room_type?: string;
       style: string;
       dimensions?: { length: number; width: number };
       camera?: string;

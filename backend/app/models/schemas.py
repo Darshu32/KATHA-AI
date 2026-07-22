@@ -197,7 +197,9 @@ class DesignGraphOut(BaseModel):
 
 class PromptRequest(BaseModel):
     prompt: str = Field(min_length=10, max_length=5000)
-    room_type: str = Field(default="living_room")
+    # Empty = "derive the room type from the prompt" — see
+    # ai_orchestrator.generate_design_graph / knowledge.infer_room_type.
+    room_type: str = Field(default="")
     style: str = Field(default="modern")
     dimensions: Dimensions | None = None
     camera: str | None = None

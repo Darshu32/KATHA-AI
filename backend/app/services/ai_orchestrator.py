@@ -7,7 +7,7 @@ from copy import deepcopy
 from openai import AsyncOpenAI
 
 from app.config import get_settings
-from app.knowledge.summary import build_knowledge_brief
+from app.knowledge.summary import build_knowledge_brief, infer_room_type
 from app.models.design_graph import DesignGraph
 from app.prompts.design_graph import DESIGN_GRAPH_SYSTEM_PROMPT
 from app.services.knowledge_validator import validate_design_graph
@@ -190,6 +190,12 @@ async def generate_design_graph(
     quality: str | None = None,
     drawing_type: str | None = None,
 ) -> DesignGraph:
+    # Derive the room type from the prompt — the design intent lives in
+    # what the architect asked for, not a client-supplied default. Falls
+    # back to the passed value only when the prompt gives no signal, and
+    # an empty result means "don't assume a room-specific space standard".
+    room_type = infer_room_type(prompt, fallback=room_type)
+
     if not _has_openai_config():
         logger.warning(
             "OPENAI_API_KEY is not configured. Using local starter design graph."
@@ -253,9 +259,10 @@ async def generate_design_graph(
         f"{knowledge_brief}\n"
     ) if knowledge_brief else ""
 
+    room_type_line = f"Room type: {room_type}\n" if room_type else ""
     user_message = (
         f"Design prompt: {prompt}\n"
-        f"Room type: {room_type}\n"
+        f"{room_type_line}"
         f"Style/theme: {style}"
         f"{theme_block}"
         f"{knowledge_block}"
@@ -580,7 +587,7 @@ def _build_local_design_graph(
     }
     materials = material_presets.get(style, material_presets["modern"])
 
-    room_name = room_type.replace("_", " ").title()
+    room_name = room_type.replace("_", " ").title() or "Room"
     dims = {"length": 15, "width": 12, "height": 10}
     objects = [
         {
