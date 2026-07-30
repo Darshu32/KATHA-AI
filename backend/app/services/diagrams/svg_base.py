@@ -11,6 +11,7 @@ room-space (metres) via a transform so every module works in natural units.
 from __future__ import annotations
 
 import html
+import math
 
 # Canonical palette — neutral, printable, aligned with Satoshi/paper UI.
 INK = "#1f1d1a"
@@ -18,6 +19,7 @@ INK_SOFT = "#4a463f"
 INK_MUTED = "#8a847a"
 PAPER = "#f7f2ea"
 PAPER_DEEP = "#ece5d8"
+WHITE = "#ffffff"
 ACCENT_WARM = "#b46a3a"
 ACCENT_COOL = "#3a6a7a"
 
@@ -25,6 +27,19 @@ ZONE_COLOURS = [
     "#c9b79a", "#d7c3a6", "#b79a74", "#8a6a3b",
     "#5a4632", "#3a5a4a", "#7a4632", "#c98a5a",
 ]
+
+# Discrete tonal ramp, dark → light. Encodes rank / weight / depth without
+# reaching for colour — keeps the figure-ground register the redesigned
+# diagrams share.
+TONES = ["#1f1d1a", "#453f38", "#6b6459", "#938c7e", "#bcb4a3", "#dcd4c4"]
+
+
+def tone(rank: int, count: int) -> str:
+    """Pick a ramp tone for item ``rank`` of ``count`` (0 = darkest/heaviest)."""
+    if count <= 1:
+        return TONES[0]
+    idx = round(rank / (count - 1) * (len(TONES) - 2))
+    return TONES[min(idx, len(TONES) - 1)]
 
 
 def svg_open(width: int, height: int, view_box: str | None = None, title: str = "") -> str:
@@ -40,11 +55,12 @@ def svg_close() -> str:
     return "</svg>"
 
 
-def rect(x: float, y: float, w: float, h: float, fill: str = "none", stroke: str = INK, stroke_width: float = 1, opacity: float = 1.0, extra: str = "") -> str:
+def rect(x: float, y: float, w: float, h: float, fill: str = "none", stroke: str = INK, stroke_width: float = 1, opacity: float = 1.0, dash: str | None = None, extra: str = "") -> str:
+    da = f' stroke-dasharray="{dash}"' if dash else ""
     return (
         f'<rect x="{x:.2f}" y="{y:.2f}" width="{w:.2f}" height="{h:.2f}" '
         f'fill="{fill}" stroke="{stroke}" stroke-width="{stroke_width}" '
-        f'opacity="{opacity}" {extra}/>'
+        f'opacity="{opacity}"{da} {extra}/>'
     )
 
 
@@ -53,8 +69,28 @@ def line(x1: float, y1: float, x2: float, y2: float, stroke: str = INK, stroke_w
     return f'<line x1="{x1:.2f}" y1="{y1:.2f}" x2="{x2:.2f}" y2="{y2:.2f}" stroke="{stroke}" stroke-width="{stroke_width}"{da}/>'
 
 
-def circle(cx: float, cy: float, r: float, fill: str = INK, opacity: float = 1.0) -> str:
-    return f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{r:.2f}" fill="{fill}" opacity="{opacity}"/>'
+def circle(cx: float, cy: float, r: float, fill: str = INK, opacity: float = 1.0, stroke: str = "none", stroke_width: float = 0.0) -> str:
+    return (
+        f'<circle cx="{cx:.2f}" cy="{cy:.2f}" r="{r:.2f}" fill="{fill}" opacity="{opacity}" '
+        f'stroke="{stroke}" stroke-width="{stroke_width}"/>'
+    )
+
+
+def arrow(
+    x1: float, y1: float, x2: float, y2: float, *,
+    stroke: str = INK, stroke_width: float = 1.4, head: float = 7.0, dash: str | None = None,
+) -> str:
+    """Line from (x1,y1) to (x2,y2) with a filled triangular head at the end."""
+    dx, dy = x2 - x1, y2 - y1
+    length = math.hypot(dx, dy) or 1.0
+    ux, uy = dx / length, dy / length
+    ex, ey = x2 - ux * head, y2 - uy * head  # shaft stops short of the tip
+    da = f' stroke-dasharray="{dash}"' if dash else ""
+    shaft = f'<line x1="{x1:.2f}" y1="{y1:.2f}" x2="{ex:.2f}" y2="{ey:.2f}" stroke="{stroke}" stroke-width="{stroke_width}"{da}/>'
+    lx, ly = ex - uy * head * 0.55, ey + ux * head * 0.55
+    rx, ry = ex + uy * head * 0.55, ey - ux * head * 0.55
+    headp = f'<polygon points="{lx:.2f},{ly:.2f} {rx:.2f},{ry:.2f} {x2:.2f},{y2:.2f}" fill="{stroke}"/>'
+    return shaft + headp
 
 
 def text(x: float, y: float, content: str, size: float = 11, fill: str = INK, weight: str = "400", anchor: str = "start") -> str:

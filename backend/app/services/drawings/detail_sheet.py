@@ -60,16 +60,23 @@ def _cell_frame(x: float, y: float, w: float, h: float, title: str, scale: str, 
     parts.append(rect(x, y, w, h, fill="white", stroke=INK, stroke_width=0.9))
     # Title strip on top.
     parts.append(rect(x, y, w, 22, fill=PAPER_DEEP, stroke="none"))
-    parts.append(text(x + 8, y + 15, title, size=10, fill=INK, weight="700"))
-    # Scale stamp on top-right.
-    parts.append(text(x + w - 8, y + 15, f"Scale {scale}", size=9, fill=INK_SOFT, weight="600", anchor="end"))
-    # Key bubble on top-left circle.
+    # Key bubble on top-left circle. Show a SHORT token so a long LLM key
+    # ("CELL 1") can't spill out of the bubble and over the title.
+    _digits = "".join(c for c in (key or "") if c.isdigit())
+    key_disp = _digits[-2:] if _digits else (key.split()[-1] if key else "")[:3]
     parts.append(circle(x + 14, y + 12, 11, fill=PAPER))
     parts.append(
         f'<circle cx="{x + 14:.2f}" cy="{y + 12:.2f}" r="11" fill="none" '
         f'stroke="{INK}" stroke-width="0.7"/>'
     )
-    parts.append(text(x + 14, y + 15, key, size=10, fill=INK, anchor="middle", weight="700"))
+    parts.append(text(x + 14, y + 15, key_disp, size=10, fill=INK, anchor="middle", weight="700"))
+    # Title starts clear of the bubble; truncated so it can't reach the scale
+    # stamp on the right.
+    title_budget = max(6, int((w - 120) / 6))
+    title_fit = title if len(title) <= title_budget else title[: title_budget - 1] + "…"
+    parts.append(text(x + 30, y + 15, title_fit, size=10, fill=INK, weight="700"))
+    # Scale stamp on top-right.
+    parts.append(text(x + w - 8, y + 15, f"Scale {scale}", size=9, fill=INK_SOFT, weight="600", anchor="end"))
     return parts
 
 

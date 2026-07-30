@@ -196,22 +196,20 @@ def render_plan_view(
     # Room outline.
     body.append(rect(tx, ty, room_px_w, room_px_h, fill="none", stroke=INK, stroke_width=1.6))
 
-    # Object footprints (filled with hatch if mapped).
+    # Object footprints (filled with hatch if mapped). Footprints are clamped
+    # into the room outline so nothing spills past the walls / off-sheet.
     for obj in graph.get("objects", []):
         otype = (obj.get("type") or "").lower()
         d = obj.get("dimensions") or {}
         p = obj.get("position") or {}
-        ox = float(p.get("x", 0)) * scale_px + tx
-        oz = float(p.get("z", 0)) * scale_px + ty
-        ow = (_m(d.get("length")) or 0.4) * scale_px
-        oh = (_m(d.get("width")) or 0.3) * scale_px
+        ow = min((_m(d.get("length")) or 0.4) * scale_px, room_px_w)
+        oh = min((_m(d.get("width")) or 0.3) * scale_px, room_px_h)
+        rx0 = min(max(float(p.get("x", 0)) * scale_px + tx - ow / 2, tx), tx + room_px_w - ow)
+        rz0 = min(max(float(p.get("z", 0)) * scale_px + ty - oh / 2, ty), ty + room_px_h - oh)
         hatch_key = hatch_for_type.get(otype)
         fill = f"url(#hatch-{hatch_key})" if hatch_key else "none"
-        body.append(rect(
-            ox - ow / 2, oz - oh / 2, ow, oh,
-            fill=fill, stroke=INK_SOFT, stroke_width=0.7,
-        ))
-        body.append(text(ox, oz + 3, otype.replace("_", " "), size=9, fill=INK, anchor="middle"))
+        body.append(rect(rx0, rz0, ow, oh, fill=fill, stroke=INK_SOFT, stroke_width=0.7))
+        body.append(text(rx0 + ow / 2, rz0 + oh / 2 + 3, otype.replace("_", " "), size=9, fill=INK, anchor="middle"))
 
     # Overall dimension chains — width along top, depth along right.
     body.append(_dim_chain(

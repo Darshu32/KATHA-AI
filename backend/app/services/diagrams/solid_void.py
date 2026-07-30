@@ -1,9 +1,17 @@
-"""Solid vs Void diagram (BRD Layer 2B #6).
+"""Solid vs Void diagram (BRD Layer 2B #6) — figure-ground / poché.
 
-Plan view that reads positive (solid) vs negative (void) space at a
-glance. Solids are filled dark, voids are filled with a light hatch, and
-a stat strip at the bottom reports the solid / void ratio + breathing
-room (median void cell size).
+Reads positive (solid) vs negative (void) space the way an architect's
+figure-ground study does: stark two-tone, no opacity fades. Two panels sit
+side by side —
+
+  • SOLID — wall poché + object footprints as black mass on an open (paper)
+    floor. The built/occupied mass is the figure.
+  • VOID  — the inversion: the open floor becomes the black figure, mass
+    drops to white. The *negative* space reads as a shape.
+
+A clean solid/void ratio + a 1 m scale bar sit beneath. The layout keeps to
+the left region (x < 650) so the LLM authoring overlay's right rail and top
+summary band compose on top without collision.
 """
 
 from __future__ import annotations
@@ -13,15 +21,17 @@ from app.services.diagrams.svg_base import (
     INK_MUTED,
     INK_SOFT,
     PAPER,
-    PAPER_DEEP,
     background,
-    compute_plan_transform,
+    line,
     rect,
     svg_close,
     svg_open,
     text,
     title_block,
 )
+
+WHITE = "#ffffff"
+WALL_M = 0.12  # synthesised enclosure thickness (m) drawn as poché
 
 
 def _m(value) -> float:
@@ -46,56 +56,129 @@ def _footprints(objects: list[dict]) -> list[tuple[float, float, float, float]]:
     return boxes
 
 
+def _panel_transform(
+    room_l: float, room_w: float, x0: float, y0: float, pw: float, ph: float, margin: float
+) -> tuple[float, float, float]:
+    """Scale + offset mapping room metres → px, centred inside a sub-panel."""
+    avail_w = pw - 2 * margin
+    avail_h = ph - 2 * margin
+    scale = min(avail_w / room_l, avail_h / room_w)
+    plan_w = room_l * scale
+    plan_h = room_w * scale
+    tx = x0 + (pw - plan_w) / 2
+    ty = y0 + (ph - plan_h) / 2
+    return scale, tx, ty
+
+
+def _figure_ground_panel(
+    boxes: list[tuple[float, float, float, float]],
+    room_l: float,
+    room_w: float,
+    x0: float,
+    y0: float,
+    pw: float,
+    ph: float,
+    *,
+    invert: bool,
+    label: str,
+) -> tuple[str, float]:
+    """Draw one figure-ground panel. Returns (svg, scale)."""
+    scale, tx, ty = _panel_transform(room_l, room_w, x0, y0, pw, ph, margin=30)
+    plan_w = room_l * scale
+    plan_h = room_w * scale
+    wt = max(WALL_M * scale, 3.0)  # poché thickness in px, floored so it reads
+
+    # Figure-ground fills. Normal: mass=ink, open=paper. Inverted: open=ink.
+    wall_fill = PAPER if invert else INK
+    floor_fill = INK if invert else PAPER
+    obj_fill = PAPER if invert else INK
+    obj_stroke = INK if invert else PAPER
+
+    parts: list[str] = []
+    # Panel label sits above the plan.
+    parts.append(text(x0 + 6, y0 + 2, label, size=10, weight="600", fill=INK_SOFT))
+    # Enclosure poché: outer rect in wall colour, inner floor rect on top.
+    parts.append(rect(tx, ty, plan_w, plan_h, fill=wall_fill, stroke=INK, stroke_width=1.0))
+    parts.append(
+        rect(tx + wt, ty + wt, plan_w - 2 * wt, plan_h - 2 * wt, fill=floor_fill, stroke="none")
+    )
+    # Object footprints — thin contrasting outline keeps neighbours legible.
+    for x, z, l, w in boxes:
+        sx = tx + max(0.0, x) * scale
+        sz = ty + max(0.0, z) * scale
+        sw = min(l * scale, tx + plan_w - sx)
+        sh = min(w * scale, ty + plan_h - sz)
+        if sw <= 0 or sh <= 0:
+            continue
+        parts.append(rect(sx, sz, sw, sh, fill=obj_fill, stroke=obj_stroke, stroke_width=0.8))
+    return "".join(parts), scale
+
+
 def generate(graph: dict, *, canvas_w: int = 900, canvas_h: int = 620) -> dict:
     room = graph.get("room") or (graph.get("spaces") or [{}])[0]
     dims = room.get("dimensions") or {}
     room_l = float(dims.get("length") or 6.0)
     room_w = float(dims.get("width") or 5.0)
-
-    scale, tx, ty = compute_plan_transform(room_l, room_w, canvas_w, canvas_h - 80, margin=60)
+    boxes = _footprints(graph.get("objects", []))
 
     body: list[str] = [background(canvas_w, canvas_h, fill=PAPER)]
-    body.append(title_block(40, 36, "Solid vs Void", f"Plan analysis — {room_l:.1f} x {room_w:.1f} m", width=canvas_w - 80))
-
-    defs = (
-        '<defs>'
-        '<pattern id="voidDiag" patternUnits="userSpaceOnUse" width="8" height="8">'
-        f'<path d="M 0 8 L 8 0" stroke="{INK_MUTED}" stroke-width="0.5" opacity="0.45"/></pattern>'
-        '</defs>'
+    body.append(
+        title_block(
+            40, 36, "Solid vs Void",
+            f"Figure-ground — {room_l:.1f} x {room_w:.1f} m   ·   mass vs open space",
+            width=canvas_w - 80,
+        )
     )
-    body.append(defs)
 
-    # Void field (whole room).
-    body.append(rect(tx, ty + 20, room_l * scale, room_w * scale, fill=PAPER_DEEP, stroke=INK, stroke_width=1.2))
-    body.append(rect(tx, ty + 20, room_l * scale, room_w * scale, fill="url(#voidDiag)", stroke="none"))
+    # Two panels within the left region (overlay owns x >= 665 / top band).
+    panel_y = 128
+    panel_h = 300
+    gap = 24
+    total_w = 610  # 40 .. 650
+    panel_w = (total_w - gap) / 2
+    solid_svg, scale = _figure_ground_panel(
+        boxes, room_l, room_w, 40, panel_y, panel_w, panel_h, invert=False, label="SOLID · mass"
+    )
+    void_svg, _ = _figure_ground_panel(
+        boxes, room_l, room_w, 40 + panel_w + gap, panel_y, panel_w, panel_h, invert=True, label="VOID · open"
+    )
+    body.append(solid_svg)
+    body.append(void_svg)
 
-    # Solid footprints.
-    boxes = _footprints(graph.get("objects", []))
-    total_solid_m2 = 0.0
-    for x, z, l, w in boxes:
-        sx = x * scale + tx
-        sz = z * scale + ty + 20
-        sw = l * scale
-        sh = w * scale
-        body.append(rect(sx, sz, sw, sh, fill=INK, stroke=INK, stroke_width=0.6, opacity=0.85))
-        total_solid_m2 += l * w
-
+    # ── Ratios ──────────────────────────────────────────────────────────────
     room_area = room_l * room_w
-    solid_pct = 100 * total_solid_m2 / room_area if room_area else 0
+    total_solid_m2 = sum(l * w for _, _, l, w in boxes)
+    solid_pct = 100 * total_solid_m2 / room_area if room_area else 0.0
     void_pct = max(0.0, 100.0 - solid_pct)
 
-    # Ratio bar at bottom.
-    bar_y = canvas_h - 60
-    bar_w = canvas_w - 80
+    # Slim two-tone ratio bar (kept narrow so it clears the overlay rail).
+    bar_x, bar_y, bar_w, bar_h = 40, panel_y + panel_h + 34, 560, 20
     solid_w = bar_w * solid_pct / 100
-    body.append(rect(40, bar_y, solid_w, 22, fill=INK, stroke="none"))
-    body.append(rect(40 + solid_w, bar_y, bar_w - solid_w, 22, fill=PAPER_DEEP, stroke=INK_SOFT, stroke_width=0.6))
-    body.append(rect(40 + solid_w, bar_y, bar_w - solid_w, 22, fill="url(#voidDiag)", stroke="none"))
+    body.append(rect(bar_x, bar_y, bar_w, bar_h, fill=PAPER, stroke=INK, stroke_width=1.0))
+    body.append(rect(bar_x, bar_y, solid_w, bar_h, fill=INK, stroke="none"))
+    if solid_w > 46:
+        body.append(text(bar_x + 8, bar_y + 14, f"SOLID {solid_pct:.0f}%", size=10, fill=PAPER, weight="600"))
+    body.append(
+        text(bar_x + bar_w - 8, bar_y + 14, f"VOID {void_pct:.0f}%", size=10, fill=INK, weight="600", anchor="end")
+    )
 
-    body.append(text(44, bar_y + 15, f"SOLID {solid_pct:.1f}%", size=10, fill=PAPER, weight="600"))
-    body.append(text(canvas_w - 44, bar_y + 15, f"VOID {void_pct:.1f}%", size=10, fill=INK_SOFT, weight="600", anchor="end"))
+    # Legend + 1 m scale bar sit under the ratio.
+    leg_y = bar_y + bar_h + 20
+    body.append(rect(bar_x, leg_y - 8, 10, 10, fill=INK, stroke="none"))
+    body.append(text(bar_x + 16, leg_y + 1, "mass (walls · objects)", size=9, fill=INK_SOFT))
+    body.append(rect(bar_x + 170, leg_y - 8, 10, 10, fill=PAPER, stroke=INK, stroke_width=0.8))
+    body.append(text(bar_x + 186, leg_y + 1, "open (void)", size=9, fill=INK_SOFT))
 
-    # Breathing-room metric: mean clearance between items (rough, proxy).
+    # 1 m scale bar (right-aligned within the panel band).
+    sb_len = max(scale, 12.0)
+    sb_x = bar_x + bar_w - sb_len
+    sb_y = leg_y
+    body.append(line(sb_x, sb_y, sb_x + sb_len, sb_y, stroke=INK, stroke_width=1.4))
+    body.append(line(sb_x, sb_y - 3, sb_x, sb_y + 3, stroke=INK, stroke_width=1.4))
+    body.append(line(sb_x + sb_len, sb_y - 3, sb_x + sb_len, sb_y + 3, stroke=INK, stroke_width=1.4))
+    body.append(text(sb_x + sb_len / 2, sb_y - 6, "1 m", size=8, fill=INK_MUTED, anchor="middle"))
+
+    # Breathing room — mean inter-object clearance (kept, quietly).
     breathing = 0.0
     if len(boxes) >= 2:
         total = 0.0
@@ -107,8 +190,9 @@ def generate(graph: dict, *, canvas_w: int = 900, canvas_h: int = 620) -> dict:
                 total += (dx + dz) / 2
                 pairs += 1
         breathing = total / pairs if pairs else 0
-
-    body.append(text(40, bar_y - 12, f"Breathing room (mean inter-object clearance): {breathing:.2f} m", size=10, fill=INK_SOFT))
+    body.append(
+        text(bar_x, leg_y + 20, f"Breathing room · mean clearance {breathing:.2f} m", size=9, fill=INK_MUTED)
+    )
 
     svg = svg_open(canvas_w, canvas_h, title="Solid vs Void") + "".join(body) + svg_close()
     return {

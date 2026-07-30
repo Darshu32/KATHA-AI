@@ -19,14 +19,70 @@ from app.services.architectural_views_service import (
     generate_isometric_package,
     generate_section_package,
 )
+# Piece-scale (furniture/product) renderers — deterministic; used when the
+# workspace scope selector is set to furniture/product instead of room-scale.
+from app.services.drawings.plan_view import render_plan_view
+from app.services.drawings.elevation_view import render_elevation_view
+from app.services.drawings.section_view import render_section_view
+from app.services.drawings.isometric_view import render_isometric_view
+from app.services.drawings.detail_sheet import render_detail_sheet
 from app.services.view_fidelity import verify_graph_views
 
 router = APIRouter(prefix="/projects/{project_id}/drawings", tags=["drawings"])
+
+# Scopes that mean "draw the furniture piece" rather than the room.
+PIECE_SCOPES = {"furniture", "product"}
 
 
 def _check_owner(project, user: User):
     if project is None or project.owner_id != user.id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+
+def _to_mm(value) -> float:
+    """Coerce a graph dimension (metres or mm) to millimetres."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return 0.0
+    return v * 1000.0 if 0 < v <= 20 else v
+
+
+def _piece_from_graph(graph: dict) -> dict:
+    """Derive a single furniture-piece envelope from the design graph — the
+    dominant object by volume, with ergonomic targets estimated from its height
+    so the piece-scale renderers draw a real silhouette / profile."""
+    objs = graph.get("objects") or []
+    if not objs:
+        return {"type": "piece", "dimensions_mm": {"length": 800, "width": 800, "height": 750}}
+
+    def _vol(o):
+        d = o.get("dimensions") or {}
+        return _to_mm(d.get("length")) * _to_mm(d.get("width")) * max(_to_mm(d.get("height")), 1.0)
+
+    obj = max(objs, key=_vol)
+    d = obj.get("dimensions") or {}
+    length = _to_mm(d.get("length")) or 800
+    width = _to_mm(d.get("width")) or 800
+    height = _to_mm(d.get("height")) or 750
+    mat = (obj.get("material") or "").lower()
+    hatch = None
+    if any(w in mat for w in ("wood", "oak", "walnut", "teak", "ply")):
+        hatch = "wood"
+    elif any(w in mat for w in ("steel", "metal", "brass", "iron", "alumin")):
+        hatch = "metal"
+    return {
+        "type": obj.get("type") or "piece",
+        "dimensions_mm": {"length": length, "width": width, "height": height},
+        "ergonomic_targets_mm": {
+            "seat_height_mm": round(height * 0.42),
+            "back_height_mm": round(height * 0.96),
+            "arm_height_mm": round(height * 0.62),
+            "seat_depth_mm": round(width * 0.62),
+        },
+        "material_hatch_key": hatch,
+        "leg_base_hatch_key": "metal" if hatch == "wood" else None,
+    }
 
 
 async def _resolve_target_version(db: AsyncSession, project_id: str, version: int | None):
@@ -65,6 +121,7 @@ def _raise_drawing_error(exc: Exception) -> None:
 async def get_floor_plan(
     project_id: str,
     version: int | None = Query(default=None, ge=1),
+    scope: str = Query(default="interior"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -76,6 +133,24 @@ async def get_floor_plan(
     # layer (or any future schema drift) are corrected on the fly. Idempotent,
     # so already-clean graphs pass through unchanged.
     clean_graph, _ = normalize_graph(target_version.graph_data or {})
+
+    if scope.lower() in PIECE_SCOPES:
+        # Furniture plan = top-down footprint of the piece, framed with margin.
+        piece = _piece_from_graph(clean_graph)
+        dm = piece["dimensions_mm"]
+        length_m, width_m = dm["length"] / 1000.0, dm["width"] / 1000.0
+        m = 1.3
+        piece_graph = {
+            "room": {"dimensions": {"length": length_m * m, "width": width_m * m}},
+            "objects": [{
+                "type": piece["type"],
+                "dimensions": {"length": length_m, "width": width_m},
+                "position": {"x": length_m * m / 2, "z": width_m * m / 2},
+            }],
+        }
+        result = render_plan_view(graph=piece_graph)
+        return _view_response(project_id, target_version.version, result)
+
     drawing_payload = generate_floor_plan_package(clean_graph)
     return {
         "project_id": project_id,
@@ -114,11 +189,15 @@ def _view_response(project_id: str, version_num: int, result: dict) -> dict:
 async def get_elevation_view(
     project_id: str,
     version: int | None = Query(default=None, ge=1),
+    scope: str = Query(default="interior"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     target_version, _theme, graph = await _generate_view(db, project_id, version, user)
-    result = generate_elevation_package(graph)
+    if scope.lower() in PIECE_SCOPES:
+        result = render_elevation_view(piece=_piece_from_graph(graph))
+    else:
+        result = generate_elevation_package(graph)
     return _view_response(project_id, target_version.version, result)
 
 
@@ -126,11 +205,15 @@ async def get_elevation_view(
 async def get_section_view(
     project_id: str,
     version: int | None = Query(default=None, ge=1),
+    scope: str = Query(default="interior"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     target_version, _theme, graph = await _generate_view(db, project_id, version, user)
-    result = generate_section_package(graph)
+    if scope.lower() in PIECE_SCOPES:
+        result = render_section_view(piece=_piece_from_graph(graph))
+    else:
+        result = generate_section_package(graph)
     return _view_response(project_id, target_version.version, result)
 
 
@@ -138,11 +221,15 @@ async def get_section_view(
 async def get_isometric_view(
     project_id: str,
     version: int | None = Query(default=None, ge=1),
+    scope: str = Query(default="interior"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     target_version, _theme, graph = await _generate_view(db, project_id, version, user)
-    result = generate_isometric_package(graph)
+    if scope.lower() in PIECE_SCOPES:
+        result = render_isometric_view(piece=_piece_from_graph(graph))
+    else:
+        result = generate_isometric_package(graph)
     return _view_response(project_id, target_version.version, result)
 
 
@@ -150,11 +237,17 @@ async def get_isometric_view(
 async def get_detail_sheet(
     project_id: str,
     version: int | None = Query(default=None, ge=1),
+    scope: str = Query(default="interior"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
     target_version, _theme, graph = await _generate_view(db, project_id, version, user)
-    result = generate_detail_package(graph)
+    if scope.lower() in PIECE_SCOPES:
+        # Piece detail cells are LLM-authored (the /working-drawings path);
+        # the deterministic sheet renders its frame + a "needs authoring" note.
+        result = render_detail_sheet()
+    else:
+        result = generate_detail_package(graph)
     return _view_response(project_id, target_version.version, result)
 
 

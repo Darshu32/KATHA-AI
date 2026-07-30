@@ -69,7 +69,6 @@ export default function ProjectBriefPanel({
           <span className="text-[11px] font-semibold uppercase tracking-wider text-ink-soft">
             Project Brief
           </span>
-          <span className="text-[10px] text-ink-mute font-mono">BRD §1A</span>
         </div>
       </header>
 

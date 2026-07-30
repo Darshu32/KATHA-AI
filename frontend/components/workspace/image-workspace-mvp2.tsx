@@ -79,16 +79,15 @@ const LIGHTINGS: { id: LightingMode; label: string }[] = [
 const DRAWINGS_CATALOGUE: {
   id: string;
   name: string;
-  stage: string;
   summary: string;
   /** True when the project-scoped fetch path is wired in api-client. */
   wired: boolean;
 }[] = [
-  { id: "plan_view",       name: "Plan View",       stage: "BRD 3A §1", summary: "Top-down — overall dims, key measurements, section refs, hatches.",                 wired: true },
-  { id: "elevation_view",  name: "Elevation View",  stage: "BRD 3A §2", summary: "Front/side — heights, leg-base proportions, hardware + detail callouts.",          wired: true },
-  { id: "section_view",    name: "Section View",    stage: "BRD 3A §3", summary: "Cut-through — internal layers, joints, seat depth, leg taper details.",            wired: true },
-  { id: "isometric_view",  name: "Isometric View",  stage: "BRD 3A §4", summary: "3D iso — overall form, material finishes, superimposed dimensions.",               wired: true },
-  { id: "detail_sheet",    name: "Detail Sheet",    stage: "BRD 3A §5", summary: "Zoomed details — joints, hardware, edge profiles, seams, transitions.",            wired: true },
+  { id: "plan_view",       name: "Plan View",       summary: "Top-down — overall dims, key measurements, section refs, hatches.",                 wired: true },
+  { id: "elevation_view",  name: "Elevation View",  summary: "Front/side — heights, leg-base proportions, hardware + detail callouts.",          wired: true },
+  { id: "section_view",    name: "Section View",    summary: "Cut-through — internal layers, joints, seat depth, leg taper details.",            wired: true },
+  { id: "isometric_view",  name: "Isometric View",  summary: "3D iso — overall form, material finishes, superimposed dimensions.",               wired: true },
+  { id: "detail_sheet",    name: "Detail Sheet",    summary: "Zoomed details — joints, hardware, edge profiles, seams, transitions.",            wired: true },
 ];
 
 /* BRD §2B diagram catalogue. Each id MUST match a generator in the
@@ -99,17 +98,16 @@ const DRAWINGS_CATALOGUE: {
 const DIAGRAMS_CATALOGUE: {
   id: string;
   name: string;
-  stage: string;
   summary: string;
 }[] = [
-  { id: "concept_transparency", name: "Concept Transparency", stage: "BRD 2B §1", summary: "Core design intent — material/form relationship, functional zones." },
-  { id: "form_development",     name: "Form Development",     stage: "BRD 2B §2", summary: "Four-stage evolution — volume → grid → subtract → articulate." },
-  { id: "massing",              name: "Massing",              stage: "BRD 2B §3", summary: "Horizontal + vertical massing — silhouette, weight, height bands." },
-  { id: "volumetric",           name: "Volumetric",           stage: "BRD 2B §4", summary: "Axonometric 3D block read — masses, voids, spatial volume." },
-  { id: "design_process",       name: "Design Process",       stage: "BRD 2B §5", summary: "Step-by-step narrative — decision points, rule drivers." },
-  { id: "solid_void",           name: "Solid vs Void",        stage: "BRD 2B §6", summary: "Solid % / void % — weight pattern, breathing room." },
-  { id: "spatial_organism",     name: "Spatial Organism",     stage: "BRD 2B §7", summary: "How a body inhabits the space — touchpoints, movement." },
-  { id: "hierarchy",            name: "Hierarchy",            stage: "BRD 2B §8", summary: "Three rankings — visual, material, functional." },
+  { id: "concept_transparency", name: "Concept Transparency", summary: "Core design intent — material/form relationship, functional zones." },
+  { id: "form_development",     name: "Form Development",     summary: "Four-stage evolution — volume → grid → subtract → articulate." },
+  { id: "massing",              name: "Massing",              summary: "Horizontal + vertical massing — silhouette, weight, height bands." },
+  { id: "volumetric",           name: "Volumetric",           summary: "Axonometric 3D block read — masses, voids, spatial volume." },
+  { id: "design_process",       name: "Design Process",       summary: "Step-by-step narrative — decision points, rule drivers." },
+  { id: "solid_void",           name: "Solid vs Void",        summary: "Solid % / void % — weight pattern, breathing room." },
+  { id: "spatial_organism",     name: "Spatial Organism",     summary: "How a body inhabits the space — touchpoints, movement." },
+  { id: "hierarchy",            name: "Hierarchy",            summary: "Three rankings — visual, material, functional." },
 ];
 
 export default function ImageWorkspaceMvp2() {
@@ -679,6 +677,7 @@ export default function ImageWorkspaceMvp2() {
           activeProjectId={activeProjectId}
           latestVersion={latestGeneration?.version ?? null}
           token={token ?? ""}
+          scope={scope}
         />
       </div>
 
@@ -1640,7 +1639,7 @@ function CanvasHeader({
   // info lives there now. Header is trimmed to the action controls
   // (Theme switcher + Version timeline) on the right.
   return (
-    <div className="px-6 py-2 border-b border-hairline bg-paper/85 backdrop-blur-sm flex items-center justify-end gap-3">
+    <div className="relative z-40 px-6 py-2 border-b border-hairline bg-paper/85 backdrop-blur-sm flex items-center justify-end gap-3">
       {themeSwitchError ? (
         <span className="text-[11px] font-mono text-brick mr-auto">
           {themeSwitchError}
@@ -2334,6 +2333,7 @@ function RightSummary({
   activeProjectId,
   latestVersion,
   token,
+  scope,
 }: {
   hasDesign: boolean;
   dim: Dim;
@@ -2353,6 +2353,7 @@ function RightSummary({
   activeProjectId: string | null;
   latestVersion: number | null;
   token: string;
+  scope: Scope;
 }) {
   const hasGraph = objects.length > 0;
   const TAB_KEY = "katha.design.rightRail.activeTab";
@@ -2470,6 +2471,7 @@ function RightSummary({
             activeProjectId={activeProjectId}
             latestVersion={latestVersion}
             token={token}
+            scope={scope}
           />
         ) : tab === "cost" ? (
           <CostTab hasDesign={hasDesign} mepCost={mepCost} />
@@ -2499,11 +2501,14 @@ function ViewsTab({
   activeProjectId,
   latestVersion,
   token,
+  scope,
 }: {
   hasActiveProject: boolean;
   activeProjectId: string | null;
   latestVersion: number | null;
   token: string;
+  /** Workspace scope selector — drives room-scale vs piece-scale drawings. */
+  scope: string;
 }) {
   const [loading, setLoading] = useState<string | null>(null);
   const [view, setView] = useState<{
@@ -2558,6 +2563,7 @@ function ViewsTab({
           token,
           activeProjectId,
           latestVersion ?? undefined,
+          scope,
         );
         if (!res.preview_svg) {
           notify({ type: "warning", title: name, message: "No preview returned." });
@@ -2570,6 +2576,7 @@ function ViewsTab({
           activeProjectId,
           DRAWING_SLUG[id],
           latestVersion ?? undefined,
+          scope,
         );
         if (!res.preview_svg) {
           notify({ type: "warning", title: name, message: "Generator returned no SVG." });
@@ -2592,12 +2599,11 @@ function ViewsTab({
 
   return (
     <div className="space-y-6">
-      <ViewsSection title="Working Drawings" badge="BRD §3A">
+      <ViewsSection title="Working Drawings" badge="5 sheets">
         {DRAWINGS_CATALOGUE.map((d) => (
           <ViewCard
             key={d.id}
             name={d.name}
-            stage={d.stage}
             summary={d.summary}
             loading={loading === `drawing:${d.id}`}
             disabled={!hasActiveProject}
@@ -2607,12 +2613,11 @@ function ViewsTab({
         ))}
       </ViewsSection>
 
-      <ViewsSection title="BRD Diagrams" badge="BRD §2B · 9 types">
+      <ViewsSection title="Diagrams" badge="8 types">
         {DIAGRAMS_CATALOGUE.map((d) => (
           <ViewCard
             key={d.id}
             name={d.name}
-            stage={d.stage}
             summary={d.summary}
             loading={loading === `diagram:${d.id}`}
             disabled={!hasActiveProject}
@@ -2659,7 +2664,6 @@ function ViewsSection({
  * style + optional "Day N" tag for unwired entries. */
 function ViewCard({
   name,
-  stage,
   summary,
   loading,
   disabled,
@@ -2667,7 +2671,6 @@ function ViewCard({
   onClick,
 }: {
   name: string;
-  stage: string;
   summary: string;
   loading: boolean;
   disabled: boolean;
@@ -2688,7 +2691,7 @@ function ViewCard({
           {name}
         </span>
         <span className="font-mono text-[10px] uppercase tracking-tagged text-ink-mute shrink-0">
-          {loading ? "…" : extra ?? stage}
+          {loading ? "…" : extra}
         </span>
       </div>
       <p className="mt-0.5 text-[11.5px] text-ink-soft leading-snug line-clamp-2">
@@ -2772,7 +2775,7 @@ function CostTab({
           here after the first generation.
         </p>
         <p className="font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
-          ← /estimates/* · BRD §4
+          ← /estimates/*
         </p>
       </div>
     );
@@ -3082,7 +3085,7 @@ function HapticReadyBadge({ hasActiveProject }: { hasActiveProject: boolean }) {
   return (
     <span
       className="inline-flex items-center gap-1.5 px-2 py-1 rounded-md bg-pencil-bg/60 text-pencil text-[11px] font-medium border border-pencil/20"
-      title="Haptic-ready data layer shipped (BRD §Layer 7). Hardware integration lands Phase 2 — Aug–Sept 2026."
+      title="Haptic-ready data layer shipped. Hardware integration lands Phase 2 — Aug–Sept 2026."
     >
       <span className="w-1.5 h-1.5 rounded-full bg-pencil" aria-hidden />
       Haptic ready
@@ -3177,7 +3180,7 @@ function SpecsTab({
           targets. Populates after the first generation.
         </p>
         <p className="font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
-          ← /projects/{"{id}"}/specs · BRD §3B/C/D
+          ← /projects/{"{id}"}/specs
         </p>
       </div>
     );
@@ -3582,7 +3585,7 @@ function RecsTab({
           labels. Populates once a project exists.
         </p>
         <p className="font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
-          ← /projects/{"{id}"}/validate · BRD §6
+          ← /projects/{"{id}"}/validate
         </p>
       </div>
     );
@@ -3818,7 +3821,7 @@ function TabPlaceholder({ tab }: { tab: RightTab }) {
     compliance: { title: "", body: "", day: "", backend: "" },
     views: {
       title: "Views",
-      body: "Switcher for 5 working drawings (plan · elevation · section · isometric · detail) and 8 BRD diagrams (concept · form · massing · volumetric · process · solid-vs-void · spatial organism · hierarchy). Click a thumbnail → it swaps into the canvas.",
+      body: "Switcher for 5 working drawings (plan · elevation · section · isometric · detail) and 8 diagrams (concept · form · massing · volumetric · process · solid-vs-void · spatial organism · hierarchy). Click a thumbnail → it swaps into the canvas.",
       day: "Day 2",
       backend: "/drawings/* · /diagrams/*",
     },

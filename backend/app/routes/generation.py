@@ -1,5 +1,8 @@
 """Generation routes — initial design, local edit, theme switch, version history."""
 
+import asyncio
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -46,7 +49,145 @@ from app.services.standards.manufacturing_lookup import (
 )
 from app.services.themes import get_theme as _get_theme_db
 
+# LLM-authored diagram services (BRD Layer 2B). Each pairs a request model
+# with a generate fn that reuses the matching deterministic renderer as the
+# base SVG, then overlays a prompt/theme-aware interpretation on top. Used by
+# the authored fan-out below; the deterministic registry remains the fallback.
+from app.services.concept_diagram_service import (
+    ConceptDiagramRequest,
+    generate_concept_diagram,
+)
+from app.services.form_diagram_service import (
+    FormDiagramRequest,
+    generate_form_diagram,
+)
+from app.services.massing_diagram_service import (
+    MassingDiagramRequest,
+    generate_massing_diagram,
+)
+from app.services.volumetric_block_diagram_service import (
+    VolumetricBlockRequest,
+    generate_volumetric_block_diagram,
+)
+from app.services.design_process_diagram_service import (
+    DesignProcessRequest,
+    generate_design_process_diagram,
+)
+from app.services.solid_void_diagram_service import (
+    SolidVoidRequest,
+    generate_solid_void_diagram,
+)
+from app.services.spatial_organism_diagram_service import (
+    SpatialOrganismRequest,
+    generate_spatial_organism_diagram,
+)
+from app.services.hierarchy_diagram_service import (
+    HierarchyRequest,
+    generate_hierarchy_diagram,
+)
+
 router = APIRouter(prefix="/projects/{project_id}", tags=["generation"])
+
+logger = logging.getLogger(__name__)
+
+# panel diagram_id → (request model, async generate fn). Ordered to match the
+# frontend DIAGRAMS_CATALOGUE and the deterministic registry so the authored
+# and fallback lists render in the same sequence.
+_AUTHORED_DIAGRAMS: dict[str, tuple[type, object]] = {
+    "concept_transparency": (ConceptDiagramRequest, generate_concept_diagram),
+    "form_development": (FormDiagramRequest, generate_form_diagram),
+    "massing": (MassingDiagramRequest, generate_massing_diagram),
+    "volumetric": (VolumetricBlockRequest, generate_volumetric_block_diagram),
+    "design_process": (DesignProcessRequest, generate_design_process_diagram),
+    "solid_void": (SolidVoidRequest, generate_solid_void_diagram),
+    "spatial_organism": (SpatialOrganismRequest, generate_spatial_organism_diagram),
+    "hierarchy": (HierarchyRequest, generate_hierarchy_diagram),
+}
+
+_DIAGRAM_NAMES: dict[str, str] = {
+    "concept_transparency": "Concept Transparency",
+    "form_development": "Form Development",
+    "massing": "Massing",
+    "volumetric": "Volumetric",
+    "design_process": "Design Process",
+    "solid_void": "Solid vs Void",
+    "spatial_organism": "Spatial Organism",
+    "hierarchy": "Hierarchy",
+}
+
+
+async def _resolve_theme_slug(db: AsyncSession, graph: dict) -> str:
+    """Best-effort resolve the stored theme to a slug the theme DB accepts.
+
+    Real generations store ``style.primary`` as the theme key (slug), so the
+    first candidate usually resolves directly. Older/starter graphs may carry
+    a display name ("Warm Contemporary"); we try a couple of normalised forms
+    before giving up. If nothing resolves we return the raw value and let the
+    authored fan-out degrade that diagram to its deterministic base.
+    """
+    raw = ((graph.get("style") or {}).get("primary") or "").strip()
+    seen: set[str] = set()
+    for cand in (raw, raw.lower().replace(" ", "_"), raw.lower().replace(" ", "-"), raw.lower()):
+        if not cand or cand in seen:
+            continue
+        seen.add(cand)
+        if await _get_theme_db(db, cand):
+            return cand
+    return raw
+
+
+async def _author_one_diagram(
+    diagram_id: str,
+    graph: dict,
+    summary: str,
+    theme: str,
+) -> dict:
+    """Run one LLM diagram author, falling back to the deterministic base.
+
+    Each service manages its own DB session (``session=None``) so the callers
+    can fan these out concurrently. On any failure — missing LLM key, unknown
+    theme, malformed response — we return the deterministic renderer's output
+    tagged ``meta.authored=False`` so the panel still shows a real diagram
+    rather than an error, only without the prompt-aware overlay.
+    """
+    req_model, gen_fn = _AUTHORED_DIAGRAMS[diagram_id]
+    try:
+        req = req_model(theme=theme, design_graph=graph, project_summary=summary)
+        result = await gen_fn(req, session=None)  # type: ignore[operator]
+        result.setdefault("meta", {})
+        result["meta"]["authored"] = True
+        return result
+    except Exception as exc:  # noqa: BLE001 — degrade, never fail the whole sheet
+        logger.warning(
+            "authored_diagram_degraded",
+            extra={"id": diagram_id, "error": str(exc)[:300]},
+        )
+        base = generate_one_diagram(graph, diagram_id) or {"id": diagram_id}
+        base.setdefault("name", _DIAGRAM_NAMES.get(diagram_id, diagram_id))
+        base.setdefault("format", "svg")
+        base.setdefault("meta", {})
+        base["meta"]["authored"] = False
+        base["meta"]["authored_error"] = str(exc)[:300]
+        # Only surface a hard error when the deterministic base also produced
+        # nothing renderable; a present SVG is a valid (un-annotated) diagram.
+        if not base.get("svg") and not base.get("error"):
+            base["error"] = str(exc)[:300]
+        return base
+
+
+async def _generate_authored_diagrams(
+    db: AsyncSession,
+    graph: dict,
+    summary: str,
+    diagram_id: str | None = None,
+) -> list[dict]:
+    """Fan out the LLM diagram authors concurrently (or one, if requested)."""
+    theme = await _resolve_theme_slug(db, graph)
+    ids = [diagram_id] if diagram_id else list(_AUTHORED_DIAGRAMS)
+    results = await asyncio.gather(
+        *(_author_one_diagram(did, graph, summary, theme) for did in ids)
+    )
+    return list(results)
 
 
 def _check_owner(project, user: User):
@@ -377,6 +518,7 @@ async def diagrams_route(
     project_id: str,
     version_num: int | None = None,
     diagram_id: str | None = None,
+    authored: bool = False,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -384,6 +526,10 @@ async def diagrams_route(
 
     - If `diagram_id` is given, returns only that diagram.
     - Otherwise returns every ready diagram for the version.
+    - If `authored` is set, each diagram is run through its LLM author
+      (prompt + theme aware) instead of the geometry-only renderer, with a
+      per-diagram fallback to the deterministic base when the LLM is
+      unavailable. Slower (concurrent live LLM calls) but reflects the brief.
     """
     project = await get_project(db, project_id)
     _check_owner(project, user)
@@ -397,6 +543,16 @@ async def diagrams_route(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Version not found")
 
     graph = version.graph_data or {}
+
+    if authored:
+        if diagram_id and diagram_id not in _AUTHORED_DIAGRAMS:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown diagram '{diagram_id}'")
+        # The prompt is the prompt-awareness signal the geometry lacks; fall
+        # back to the project name so the author always has a brief to read.
+        summary = (version.prompt or project.name or "")[:2000]
+        diagrams = await _generate_authored_diagrams(db, graph, summary, diagram_id)
+        return {"version": version.version, "diagrams": diagrams}
+
     if diagram_id:
         single = generate_one_diagram(graph, diagram_id)
         if single is None:

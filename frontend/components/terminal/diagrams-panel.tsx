@@ -24,7 +24,16 @@ export default function DiagramsPanel() {
     setLoading(true);
     setError(null);
     try {
-      const res = await api.design.generateDiagrams(token, activeProjectId);
+      // authored=true → each diagram is authored from the project's prompt +
+      // theme (LLM), with a per-diagram fallback to the deterministic base
+      // when the model is unavailable (surfaced as a muted "base" tag).
+      const res = await api.design.generateDiagrams(
+        token,
+        activeProjectId,
+        undefined,
+        undefined,
+        true,
+      );
       setDiagrams(res.diagrams);
       if (!selected && res.diagrams[0]?.id) setSelected(res.diagrams[0].id);
     } catch (err) {
@@ -71,7 +80,8 @@ export default function DiagramsPanel() {
         <div className="flex-1 min-h-0 overflow-y-auto">
           {diagrams.length === 0 && !loading && (
             <div className="p-3 text-[11px]" style={{ color: "var(--ink-4)" }}>
-              Click Generate to render the 8 BRD auto-diagrams for this design.
+              Click Generate to author the 8 diagrams from this design&rsquo;s
+              prompt &amp; theme.
             </div>
           )}
           {diagrams.map((d) => (
@@ -87,11 +97,19 @@ export default function DiagramsPanel() {
               }}
             >
               {d.name}
-              {d.error && (
+              {d.error ? (
                 <div className="text-[10px] mt-0.5" style={{ color: "#b14a2c" }}>
                   error
                 </div>
-              )}
+              ) : d.meta?.authored === false ? (
+                <div
+                  className="text-[10px] mt-0.5"
+                  style={{ color: "var(--ink-4)" }}
+                  title="LLM author unavailable — showing the deterministic base diagram"
+                >
+                  base
+                </div>
+              ) : null}
             </button>
           ))}
         </div>

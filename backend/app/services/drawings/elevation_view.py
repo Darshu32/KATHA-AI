@@ -67,16 +67,31 @@ def _pick_scale(longest_edge_mm: float) -> str:
     return "1:100"
 
 
-def _v_dim(x: float, y_top: float, y_bottom: float, label: str) -> str:
-    """Vertical dimension chain — used for heights (right side of piece)."""
+def _badge(key: str) -> str:
+    """Short bubble token from a possibly-verbose LLM key (JOINT_DETAIL → JD)."""
+    key = (key or "").strip()
+    if not key:
+        return ""
+    parts = [p for p in key.replace("-", "_").replace(" ", "_").split("_") if p]
+    if len(parts) >= 2:
+        return "".join(p[0] for p in parts[:3]).upper()
+    return key[:3].upper()
+
+
+def _v_dim(x: float, y_top: float, y_bottom: float, label: str = "") -> str:
+    """Vertical dimension chain — used for heights (right side of piece).
+
+    Label is optional so callers can place de-conflicted labels separately.
+    """
     parts: list[str] = []
     parts.append(
         f'<line x1="{x:.2f}" y1="{y_top:.2f}" x2="{x:.2f}" y2="{y_bottom:.2f}" '
         f'stroke="{INK}" stroke-width="0.6" '
         f'marker-start="url(#dim-arrow)" marker-end="url(#dim-arrow)"/>'
     )
-    cy = (y_top + y_bottom) / 2
-    parts.append(text(x + 8, cy + 4, label, size=10, fill=INK, anchor="start", weight="600"))
+    if label:
+        cy = (y_top + y_bottom) / 2
+        parts.append(text(x + 8, cy + 4, label, size=10, fill=INK, anchor="start", weight="600"))
     return "".join(parts)
 
 
@@ -102,8 +117,8 @@ def _hardware_callout(x: float, y: float, label: str, key: str) -> str:
     parts.append(
         f'<circle cx="{x + 24:.2f}" cy="{y - 18:.2f}" r="9" fill="none" stroke="{INK}" stroke-width="0.7"/>'
     )
-    parts.append(text(x + 24, y - 15, key, size=9, fill=INK, anchor="middle", weight="700"))
-    parts.append(text(x + 36, y - 16, label, size=9, fill=INK_SOFT, anchor="start"))
+    parts.append(text(x + 24, y - 15, _badge(key), size=9, fill=INK, anchor="middle", weight="700"))
+    parts.append(text(x + 36, y - 16, (label or "")[:22], size=9, fill=INK_SOFT, anchor="start"))
     return "".join(parts)
 
 
@@ -119,9 +134,36 @@ def _detail_callout(x: float, y: float, key: str, label: str) -> str:
     parts.append(
         f'<circle cx="{x + 40:.2f}" cy="{y - 22:.2f}" r="11" fill="none" stroke="{INK}" stroke-width="0.7"/>'
     )
-    parts.append(text(x + 40, y - 19, key, size=10, fill=INK, anchor="middle", weight="700"))
-    parts.append(text(x + 54, y - 20, label, size=9, fill=INK_SOFT, anchor="start"))
+    parts.append(text(x + 40, y - 19, _badge(key), size=10, fill=INK, anchor="middle", weight="700"))
+    parts.append(text(x + 54, y - 20, (label or "")[:22], size=9, fill=INK_SOFT, anchor="start"))
     return "".join(parts)
+
+
+def _front_silhouette(tx, ty, px_w, px_h, scale_px, ergo, overall_h_mm, fill) -> str:
+    """Composite front-elevation chair silhouette from the ergonomic envelope —
+    backrest (between the arms) · arms · seat slab · two front legs."""
+    floor = ty + px_h
+
+    def y_at(mm):
+        return floor - _mm(mm) * scale_px
+
+    seat_mm = _mm(ergo.get("seat_height_mm")) or overall_h_mm * 0.42
+    back_mm = _mm(ergo.get("back_height_mm")) or overall_h_mm * 0.95
+    arm_mm = _mm(ergo.get("arm_height_mm")) or (seat_mm + (back_mm - seat_mm) * 0.45)
+    seat_y, back_y, arm_y = y_at(seat_mm), y_at(back_mm), y_at(arm_mm)
+    st = max(px_h * 0.05, 6.0)   # seat slab thickness
+    aw = px_w * 0.14             # arm width
+    lw = px_w * 0.07             # leg width
+    inset = px_w * 0.06
+    sw = 1.3
+    p: list[str] = []
+    p.append(rect(tx + aw, back_y, px_w - 2 * aw, seat_y - back_y, fill=fill, stroke=INK, stroke_width=sw))
+    p.append(rect(tx, arm_y, aw, seat_y - arm_y, fill=fill, stroke=INK, stroke_width=sw))
+    p.append(rect(tx + px_w - aw, arm_y, aw, seat_y - arm_y, fill=fill, stroke=INK, stroke_width=sw))
+    p.append(rect(tx, seat_y, px_w, st, fill=fill, stroke=INK, stroke_width=sw))
+    p.append(rect(tx + inset, seat_y + st, lw, floor - (seat_y + st), fill=fill, stroke=INK, stroke_width=sw))
+    p.append(rect(tx + px_w - inset - lw, seat_y + st, lw, floor - (seat_y + st), fill=fill, stroke=INK, stroke_width=sw))
+    return "".join(p)
 
 
 def render_elevation_view(
@@ -198,20 +240,24 @@ def render_elevation_view(
         ),
     ]
 
-    # Body (the piece silhouette).
+    # Body silhouette.
     body_hatch = piece.get("material_hatch_key")
     body_fill = f"url(#hatch-{body_hatch})" if body_hatch in HATCH_PATTERNS else "none"
-    body.append(rect(tx, ty, px_w, px_h, fill=body_fill, stroke=INK, stroke_width=1.4))
-
-    # Optional leg/base zone — drawn as a band at the bottom if leg_base_mm given.
     ergo = piece.get("ergonomic_targets_mm") or {}
-    leg_base_mm = ergo.get("leg_base_mm")
-    if leg_base_mm:
-        leg_h_px = _mm(leg_base_mm) * scale_px
-        leg_hatch = piece.get("leg_base_hatch_key")
-        leg_fill = f"url(#hatch-{leg_hatch})" if leg_hatch in HATCH_PATTERNS else PAPER_DEEP
-        body.append(rect(tx, ty + px_h - leg_h_px, px_w, leg_h_px, fill=leg_fill, stroke=INK_SOFT, stroke_width=0.6, opacity=0.85))
-        body.append(text(tx + px_w + 6, ty + px_h - leg_h_px / 2 + 3, "Base", size=9, fill=INK_SOFT))
+    if ergo and view == VIEW_FRONT:
+        # Furniture front elevation — a real chair silhouette proportioned from
+        # the ergonomic envelope, not a bounding box.
+        body.append(_front_silhouette(tx, ty, px_w, px_h, scale_px, ergo, overall_h, body_fill))
+    else:
+        # Room elevation / no ergonomic envelope — plain outline.
+        body.append(rect(tx, ty, px_w, px_h, fill=body_fill, stroke=INK, stroke_width=1.4))
+        leg_base_mm = ergo.get("leg_base_mm")
+        if leg_base_mm:
+            leg_h_px = _mm(leg_base_mm) * scale_px
+            leg_hatch = piece.get("leg_base_hatch_key")
+            leg_fill = f"url(#hatch-{leg_hatch})" if leg_hatch in HATCH_PATTERNS else PAPER_DEEP
+            body.append(rect(tx, ty + px_h - leg_h_px, px_w, leg_h_px, fill=leg_fill, stroke=INK_SOFT, stroke_width=0.6, opacity=0.85))
+            body.append(text(tx + px_w + 6, ty + px_h - leg_h_px / 2 + 3, "Base", size=9, fill=INK_SOFT))
 
     # Optional seat-line guide (horizontal dashed line at seat height).
     seat_h_mm = ergo.get("seat_height_mm")
@@ -232,18 +278,30 @@ def render_elevation_view(
     height_dims = spec.get("height_dimensions") or [
         {"label": f"{overall_h:.0f} mm", "from_mm": 0, "to_mm": overall_h}
     ]
-    # Sort by ascending from_mm so we can stagger the X if any chain overlaps.
+    # Draw the staggered dim lines first, then place labels in a single
+    # right-hand column with vertical de-confliction + leaders — so long
+    # labels (e.g. "Backrest Height") can't pile on top of each other.
+    ndims = len(height_dims[:6])
+    label_col_x = dim_x + ndims * 16 + 12
+    placed_ys: list[float] = []
     for i, d in enumerate(height_dims[:6]):
         from_mm = float(d.get("from_mm") or 0)
         to_mm = float(d.get("to_mm") or overall_h)
         # Y in SVG grows down; floor is at ty + px_h.
         y_bottom = ty + px_h - from_mm * scale_px
         y_top = ty + px_h - to_mm * scale_px
-        x = dim_x + i * 16  # stagger to avoid overlap
-        body.append(_v_dim(x, y_top, y_bottom, str(d.get("label") or f"{to_mm - from_mm:.0f} mm")))
-        # Extension lines from piece edge to the dim line.
+        x = dim_x + i * 16  # stagger the dim lines
+        body.append(_v_dim(x, y_top, y_bottom))  # line only — label placed below
         body.append(line(tx + px_w, y_bottom, x + 4, y_bottom, stroke=INK_SOFT, stroke_width=0.4))
         body.append(line(tx + px_w, y_top, x + 4, y_top, stroke=INK_SOFT, stroke_width=0.4))
+        # Label in the right column, pushed down to keep a 15px min gap.
+        ly = (y_top + y_bottom) / 2
+        for py in placed_ys:
+            if abs(ly - py) < 15:
+                ly = py + 15
+        placed_ys.append(ly)
+        body.append(line(x + 2, (y_top + y_bottom) / 2, label_col_x - 3, ly, stroke=INK_SOFT, stroke_width=0.35))
+        body.append(text(label_col_x, ly + 3, str(d.get("label") or f"{to_mm - from_mm:.0f} mm")[:22], size=9, fill=INK, anchor="start", weight="600"))
 
     # Width dimensions under the piece. LLM-supplied chains take priority;
     # otherwise the overall width.

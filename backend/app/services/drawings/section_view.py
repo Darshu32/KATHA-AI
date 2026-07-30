@@ -20,7 +20,7 @@ this module decides HOW to draw it.
 
 from __future__ import annotations
 
-from math import cos, radians, sin
+from math import cos, radians, sin, tan
 from typing import Any
 
 from app.services.diagrams.svg_base import (
@@ -90,6 +90,17 @@ def _pick_scale(longest_edge_mm: float) -> str:
     return "1:20"
 
 
+def _badge(key: str) -> str:
+    """Short bubble token from a possibly-verbose LLM key (SEAT_FRAME_JOINT → SFJ)."""
+    key = (key or "").strip()
+    if not key:
+        return ""
+    parts = [p for p in key.replace("-", "_").replace(" ", "_").split("_") if p]
+    if len(parts) >= 2:
+        return "".join(p[0] for p in parts[:3]).upper()
+    return key[:3].upper()
+
+
 def _joint_marker(x: float, y: float, key: str, label: str) -> str:
     """Joint diamond + key bubble."""
     parts: list[str] = []
@@ -106,8 +117,8 @@ def _joint_marker(x: float, y: float, key: str, label: str) -> str:
         f'<circle cx="{x + 36:.2f}" cy="{y - 24:.2f}" r="12" fill="none" '
         f'stroke="{INK}" stroke-width="0.7"/>'
     )
-    parts.append(text(x + 36, y - 21, key, size=10, fill=INK, anchor="middle", weight="700"))
-    parts.append(text(x + 52, y - 22, label, size=9, fill=INK_SOFT, anchor="start"))
+    parts.append(text(x + 36, y - 21, _badge(key), size=10, fill=INK, anchor="middle", weight="700"))
+    parts.append(text(x + 52, y - 22, (label or "")[:26], size=9, fill=INK_SOFT, anchor="start"))
     return "".join(parts)
 
 
@@ -121,8 +132,8 @@ def _reinforcement_marker(x: float, y: float, key: str, label: str) -> str:
         f'<circle cx="{x + 32:.2f}" cy="{y + 22:.2f}" r="12" fill="none" '
         f'stroke="{INK}" stroke-width="0.7"/>'
     )
-    parts.append(text(x + 32, y + 25, key, size=10, fill=INK, anchor="middle", weight="700"))
-    parts.append(text(x + 48, y + 24, label, size=9, fill=INK_SOFT, anchor="start"))
+    parts.append(text(x + 32, y + 25, _badge(key), size=10, fill=INK, anchor="middle", weight="700"))
+    parts.append(text(x + 48, y + 24, (label or "")[:26], size=9, fill=INK_SOFT, anchor="start"))
     return "".join(parts)
 
 
@@ -143,6 +154,41 @@ def _angle_marker(cx: float, cy: float, angle_deg: float, label: str, radius: fl
     parts.append(arc)
     parts.append(text(cx + radius * 0.55, cy - radius * 0.55, label, size=10, fill=INK, weight="600"))
     return "".join(parts)
+
+
+def _section_profile(tx, ty, px_w, px_h, scale_px, ergo, overall_h_mm, back_angle_deg, fill):
+    """Chair side-section cut profile from the ergonomic envelope: seat slab,
+    reclined backrest, and front/rear legs. Returns (svg, (seat_front, seat_back, seat_y))."""
+    floor = ty + px_h
+
+    def y_at(mm):
+        return floor - _mm(mm) * scale_px
+
+    seat_mm = _mm(ergo.get("seat_height_mm")) or overall_h_mm * 0.42
+    back_mm = _mm(ergo.get("back_height_mm")) or overall_h_mm * 0.95
+    seat_y, back_y = y_at(seat_mm), y_at(back_mm)
+    st = max(px_h * 0.05, 6.0)
+    seat_front = tx
+    seat_back = tx + px_w * 0.60          # seat occupies the front 60% of the depth
+    ang = radians(float(back_angle_deg) if back_angle_deg else 12.0)
+    bt = px_w * 0.10                       # backrest thickness
+    dx = (seat_y - back_y) * tan(ang)      # recline: top leans back (+x)
+    lw = px_w * 0.05
+    sw = 1.5
+    p: list[str] = []
+    # Seat slab.
+    p.append(rect(seat_front, seat_y, seat_back - seat_front, st, fill=fill, stroke=INK, stroke_width=sw))
+    # Reclined backrest at the rear (polygon).
+    x0, x1 = seat_back, seat_back + bt
+    p.append(
+        f'<polygon points="{x0:.1f},{seat_y + st:.1f} {x1:.1f},{seat_y + st:.1f} '
+        f'{x1 + dx:.1f},{back_y:.1f} {x0 + dx:.1f},{back_y:.1f}" '
+        f'fill="{fill}" stroke="{INK}" stroke-width="{sw}"/>'
+    )
+    # Front + rear legs.
+    p.append(rect(seat_front + px_w * 0.05, seat_y + st, lw, floor - (seat_y + st), fill=fill, stroke=INK, stroke_width=sw))
+    p.append(rect(seat_back - lw, seat_y + st, lw, floor - (seat_y + st), fill=fill, stroke=INK, stroke_width=sw))
+    return "".join(p), (seat_front, seat_back, seat_y)
 
 
 def render_section_view(
@@ -192,8 +238,19 @@ def render_section_view(
         ),
     ]
 
-    # Outer silhouette (cut outline drawn heavy).
-    body.append(rect(tx, ty, px_w, px_h, fill="none", stroke=INK, stroke_width=1.6))
+    # Cut profile — a real chair side-section when we have an ergonomic
+    # envelope; otherwise the plain bounding outline.
+    ergo = piece.get("ergonomic_targets_mm") or {}
+    prof_hatch = piece.get("material_hatch_key")
+    prof_fill = f"url(#hatch-{prof_hatch})" if prof_hatch in HATCH_PATTERNS else PAPER_DEEP
+    profile_seat = None
+    if ergo:
+        prof_svg, profile_seat = _section_profile(
+            tx, ty, px_w, px_h, scale_px, ergo, overall_h, spec.get("back_angle_deg"), prof_fill
+        )
+        body.append(prof_svg)
+    else:
+        body.append(rect(tx, ty, px_w, px_h, fill="none", stroke=INK, stroke_width=1.6))
 
     # Internal layers — LLM supplies the order outer→inner, each occupying a
     # band proportional to layer.thickness_mm. We stack them inside the
@@ -202,7 +259,9 @@ def render_section_view(
     layer_origin = (spec.get("layer_origin") or "top").lower()  # top | bottom | full
     cursor = ty if layer_origin == "top" else ty + px_h
     total_layer_mm = sum(_mm(l.get("thickness_mm") or 0) for l in layers)
-    if total_layer_mm > 0 and total_layer_mm <= overall_h:
+    # Full-width layer bands only make sense for the plain-box fallback; with a
+    # real profile drawn, the layer stack is documented in the right-side legend.
+    if profile_seat is None and total_layer_mm > 0 and total_layer_mm <= overall_h:
         for i, layer in enumerate(layers[:8]):
             t_mm = _mm(layer.get("thickness_mm") or 0)
             if t_mm <= 0:

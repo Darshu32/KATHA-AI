@@ -1,14 +1,13 @@
 """Spatial Organism diagram (BRD Layer 2B #7).
 
-Plan view that shows how a human inhabits the space. Adds:
-  * human silhouette markers at key interaction points (primary objects)
-  * circulation arrows between anchor objects (entry → sofa → table)
-  * per-object clearance halos sized to ergonomic circulation standards
+How a body inhabits the space: a clean plan with human markers at the
+interaction points, dashed clearance halos sized to ergonomic circulation
+standards, and a solid circulation path from the entry through the primary
+anchors. Crisp linework, no opacity mud. Content stays in the left region so
+the LLM authoring overlay composes on top.
 """
 
 from __future__ import annotations
-
-import math
 
 from app.knowledge import clearances
 from app.services.diagrams.svg_base import (
@@ -19,10 +18,10 @@ from app.services.diagrams.svg_base import (
     INK_SOFT,
     PAPER,
     PAPER_DEEP,
+    WHITE,
+    arrow,
     background,
     circle,
-    compute_plan_transform,
-    line,
     rect,
     svg_close,
     svg_open,
@@ -43,7 +42,7 @@ _CLEARANCE_FOR_TYPE = {
 
 _INTERACTION_TYPES = {
     "sofa", "bed", "single_bed", "queen_bed", "king_bed",
-    "dining_table", "desk", "coffee_table", "wardrobe", "chair", "dining_chair", "office_chair",
+    "dining_table", "desk", "coffee_table", "wardrobe", "chair", "dining_chair", "office_chair", "island", "kitchen_island",
 }
 
 
@@ -55,10 +54,8 @@ def _m(value) -> float:
     return v / 1000.0 if v > 20 else v
 
 
-def _human_marker(cx: float, cy: float, r: float = 6, colour: str = INK) -> str:
-    head = circle(cx, cy - r * 1.2, r * 0.45, fill=colour)
-    body = circle(cx, cy, r, fill=colour, opacity=0.85)
-    return head + body
+def _human(cx: float, cy: float, r: float = 6, colour: str = INK) -> str:
+    return circle(cx, cy - r * 1.2, r * 0.5, fill=colour) + circle(cx, cy, r, fill=colour)
 
 
 def generate(graph: dict, *, canvas_w: int = 900, canvas_h: int = 620) -> dict:
@@ -67,65 +64,68 @@ def generate(graph: dict, *, canvas_w: int = 900, canvas_h: int = 620) -> dict:
     room_l = float(dims.get("length") or 6.0)
     room_w = float(dims.get("width") or 5.0)
 
-    scale, tx, ty = compute_plan_transform(room_l, room_w, canvas_w, canvas_h - 80, margin=60)
+    # Plan in the left region.
+    x0, y0, pw, ph = 40, 124, 610, 400
+    margin = 44
+    scale = min((pw - 2 * margin) / room_l, (ph - 2 * margin) / room_w)
+    rw, rh = room_l * scale, room_w * scale
+    rx = x0 + (pw - rw) / 2
+    ry = y0 + (ph - rh) / 2
 
     body: list[str] = [background(canvas_w, canvas_h, fill=PAPER)]
-    body.append(title_block(40, 36, "Spatial Organism", "Human occupation + circulation + clearance halos", width=canvas_w - 80))
+    body.append(title_block(40, 36, "Spatial Organism", "Occupation · circulation · clearance", width=canvas_w - 80))
+    body.append(rect(rx, ry, rw, rh, fill=WHITE, stroke=INK, stroke_width=1.4))
 
-    # Room outline.
-    rx = tx
-    ry = ty + 20
-    rw = room_l * scale
-    rh = room_w * scale
-    body.append(rect(rx, ry, rw, rh, fill=PAPER_DEEP, stroke=INK, stroke_width=1.2))
+    # Entry marker at south wall midpoint.
+    entry_cx, entry_cy = rx + rw / 2, ry + rh - 3
+    body.append(_human(entry_cx, entry_cy, r=7, colour=ACCENT_WARM))
+    body.append(text(entry_cx, entry_cy + 22, "ENTRY", size=9, weight="600", fill=ACCENT_WARM, anchor="middle"))
 
-    # Entry marker (assume midpoint of south wall).
-    entry_cx = rx + rw / 2
-    entry_cy = ry + rh - 4
-    body.append(_human_marker(entry_cx, entry_cy, r=7, colour=ACCENT_WARM))
-    body.append(text(entry_cx, entry_cy + 22, "ENTRY", size=9, fill=ACCENT_WARM, weight="600", anchor="middle"))
-
-    anchor_points: list[tuple[float, float, str]] = [(entry_cx, entry_cy, "entry")]
-
-    # Objects + clearance halos + human at interaction points.
+    anchors: list[tuple[float, float, str]] = []
     for obj in graph.get("objects", []):
         otype = (obj.get("type") or "").lower()
         d = obj.get("dimensions") or {}
         pos = obj.get("position") or {}
-        ox = float(pos.get("x", 0)) * scale + rx
-        oz = float(pos.get("z", 0)) * scale + ry
-        ow = (_m(d.get("length")) or 0.4) * scale
-        oh = (_m(d.get("width")) or 0.3) * scale
+        ow = min((_m(d.get("length")) or 0.4) * scale, rw)
+        oh = min((_m(d.get("width")) or 0.3) * scale, rh)
+        # Clamp footprint into the room, then derive centre from the clamp.
+        fx = min(max(float(pos.get("x", 0)) * scale + rx - ow / 2, rx), rx + rw - ow)
+        fz = min(max(float(pos.get("z", 0)) * scale + ry - oh / 2, ry), ry + rh - oh)
+        cx, cz = fx + ow / 2, fz + oh / 2
 
-        # Clearance halo.
         halo_m = _CLEARANCE_FOR_TYPE.get(otype)
         if halo_m:
-            halo_px = halo_m * scale
-            body.append(rect(ox - ow / 2 - halo_px, oz - oh / 2 - halo_px, ow + 2 * halo_px, oh + 2 * halo_px,
-                             fill=ACCENT_COOL, stroke=ACCENT_COOL, stroke_width=0.6, opacity=0.12))
-
-        # Object footprint.
-        body.append(rect(ox - ow / 2, oz - oh / 2, ow, oh, fill=INK_SOFT, stroke=INK, stroke_width=0.8, opacity=0.78))
-        body.append(text(ox, oz + 3, otype.replace("_", " "), size=9, fill=PAPER, anchor="middle", weight="600"))
-
-        # Human at interaction points.
+            hp = halo_m * scale
+            body.append(
+                rect(cx - ow / 2 - hp, cz - oh / 2 - hp, ow + 2 * hp, oh + 2 * hp,
+                     fill="none", stroke=ACCENT_COOL, stroke_width=0.9, dash="4 4", extra='rx="4"')
+            )
+        body.append(rect(cx - ow / 2, cz - oh / 2, ow, oh, fill=PAPER_DEEP, stroke=INK, stroke_width=0.9))
+        if ow > 34:
+            body.append(text(cx, cz + 3, otype.replace("_", " "), size=8, fill=INK_SOFT, anchor="middle"))
         if otype in _INTERACTION_TYPES:
-            body.append(_human_marker(ox, oz + oh / 2 + 14, r=5.5, colour=INK))
-            anchor_points.append((ox, oz, otype))
+            body.append(_human(cx, cz + oh / 2 + 13, r=5, colour=INK))
+            anchors.append((cx, cz, otype))
 
-    # Circulation arrows — connect entry → primary objects in order of distance.
-    primaries = [p for p in anchor_points[1:] if p[2] in {"sofa", "bed", "dining_table", "desk"}]
-    if primaries:
-        primaries.sort(key=lambda p: ((p[0] - entry_cx) ** 2 + (p[1] - entry_cy) ** 2))
-        prev = (entry_cx, entry_cy)
-        for px, py, _ in primaries[:4]:
-            body.append(_arrow(prev[0], prev[1], px, py, colour=ACCENT_WARM))
-            prev = (px, py)
+    # Circulation path: entry → nearest primaries.
+    primaries = [a for a in anchors if a[2] in {"sofa", "bed", "dining_table", "desk", "island", "kitchen_island"}]
+    primaries.sort(key=lambda p: (p[0] - entry_cx) ** 2 + (p[1] - entry_cy) ** 2)
+    prev = (entry_cx, entry_cy)
+    hops = 0
+    for px, py, _ in primaries[:4]:
+        body.append(arrow(prev[0], prev[1], px, py + 16, stroke=ACCENT_WARM, stroke_width=1.6, head=8, dash="5 3"))
+        prev = (px, py)
+        hops += 1
 
-    # Stats strip.
-    halo_count = sum(1 for o in graph.get("objects", []) if (o.get("type") or "").lower() in _CLEARANCE_FOR_TYPE)
     interactions = sum(1 for o in graph.get("objects", []) if (o.get("type") or "").lower() in _INTERACTION_TYPES)
-    body.append(text(40, canvas_h - 40, f"Interaction points: {interactions}   |   Clearance halos: {halo_count}   |   Circulation hops: {max(0, len(primaries[:4]))}", size=10, fill=INK_SOFT))
+    halo_count = sum(1 for o in graph.get("objects", []) if (o.get("type") or "").lower() in _CLEARANCE_FOR_TYPE)
+    body.append(
+        text(x0, y0 + ph + 22, f"Interaction points {interactions}   ·   clearance halos {halo_count}   ·   circulation hops {hops}", size=9, fill=INK_SOFT)
+    )
+    # Legend.
+    ly = y0 + ph + 42
+    body.append(rect(x0, ly - 8, 10, 10, fill="none", stroke=ACCENT_COOL, stroke_width=0.9, dash="4 4"))
+    body.append(text(x0 + 15, ly + 1, "clearance halo", size=9, fill=INK_MUTED))
 
     svg = svg_open(canvas_w, canvas_h, title="Spatial Organism") + "".join(body) + svg_close()
     return {
@@ -133,21 +133,5 @@ def generate(graph: dict, *, canvas_w: int = 900, canvas_h: int = 620) -> dict:
         "name": "Spatial Organism",
         "format": "svg",
         "svg": svg,
-        "meta": {"interaction_points": interactions, "clearance_halos": halo_count, "circulation_hops": max(0, len(primaries[:4]))},
+        "meta": {"interaction_points": interactions, "clearance_halos": halo_count, "circulation_hops": hops},
     }
-
-
-def _arrow(x1: float, y1: float, x2: float, y2: float, colour: str = INK) -> str:
-    dx, dy = x2 - x1, y2 - y1
-    length = math.hypot(dx, dy) or 1.0
-    # Shorten so arrow head doesn't bury under the destination marker.
-    ux, uy = dx / length, dy / length
-    x2s, y2s = x2 - ux * 14, y2 - uy * 14
-    shaft = line(x1, y1, x2s, y2s, stroke=colour, stroke_width=1.4, dash="4 3")
-    # Triangular head.
-    hx, hy = x2s, y2s
-    left = (hx - uy * 5, hy + ux * 5)
-    right = (hx + uy * 5, hy - ux * 5)
-    tip = (hx + ux * 8, hy + uy * 8)
-    head = f'<polygon points="{left[0]:.1f},{left[1]:.1f} {right[0]:.1f},{right[1]:.1f} {tip[0]:.1f},{tip[1]:.1f}" fill="{colour}"/>'
-    return shaft + head

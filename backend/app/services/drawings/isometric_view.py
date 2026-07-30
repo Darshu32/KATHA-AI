@@ -229,10 +229,11 @@ def render_isometric_view(
             fill_top=fill_top, fill_left=fill_left, fill_right=fill_right,
         ))
 
-        # Part label at front-top corner of the box.
-        label_proj = _iso_project((x_mm + L) / 1000.0, (y_mm + H) / 1000.0, z_mm / 1000.0,
+        # Part label at the top-back-LEFT corner, right-anchored — sits on the
+        # left of the model, clear of the right-side height dim + finishes legend.
+        label_proj = _iso_project(x_mm / 1000.0, (y_mm + H) / 1000.0, (z_mm + D) / 1000.0,
                                   scale_px_per_mm * 1000.0, ox, oy)
-        body.append(text(label_proj[0] + 4, label_proj[1] - 4, str(part.get("label") or f"P{i+1}"), size=9, fill=INK_SOFT))
+        body.append(text(label_proj[0] - 4, label_proj[1] - 4, str(part.get("label") or f"P{i+1}"), size=9, fill=INK_SOFT, anchor="end"))
 
         parts_drawn.append({"label": part.get("label"), "hatch_key": hatch})
 

@@ -652,21 +652,34 @@ export const design = {
       `/projects/${projectId}/theme`, "POST", body, token,
     ),
 
-  getFloorPlan: (token: string | undefined, projectId: string, version?: number) =>
-    request<{ drawing_type: string; floor_plan: unknown; drawing: unknown; preview_svg: string; summary: string }>(
-      `/projects/${projectId}/drawings/floor-plan${version ? `?version=${version}` : ""}`, "GET", undefined, token,
-    ),
+  getFloorPlan: (token: string | undefined, projectId: string, version?: number, scope?: string) => {
+    const qs = new URLSearchParams();
+    if (version) qs.set("version", String(version));
+    // scope drives room-scale (architecture/interior) vs piece-scale
+    // (furniture/product) rendering on the backend drawing routes.
+    if (scope) qs.set("scope", scope);
+    const q = qs.toString();
+    return request<{ drawing_type: string; floor_plan: unknown; drawing: unknown; preview_svg: string; summary: string }>(
+      `/projects/${projectId}/drawings/floor-plan${q ? `?${q}` : ""}`, "GET", undefined, token,
+    );
+  },
 
-  // ── Phase 1 Layer 3A — Working drawings (project-scoped, LLM-backed) ─────
+  // ── Phase 1 Layer 3A — Working drawings (project-scoped) ─────────────────
   getDrawingView: (
     token: string | undefined,
     projectId: string,
     drawing: "elevation-view" | "section-view" | "isometric-view" | "detail-sheet",
     version?: number,
-  ) =>
-    request<{ project_id: string; version: number; preview_svg: string; svg?: string; name?: string }>(
-      `/projects/${projectId}/drawings/${drawing}${version ? `?version=${version}` : ""}`, "GET", undefined, token,
-    ),
+    scope?: string,
+  ) => {
+    const qs = new URLSearchParams();
+    if (version) qs.set("version", String(version));
+    if (scope) qs.set("scope", scope);
+    const q = qs.toString();
+    return request<{ project_id: string; version: number; preview_svg: string; svg?: string; name?: string }>(
+      `/projects/${projectId}/drawings/${drawing}${q ? `?${q}` : ""}`, "GET", undefined, token,
+    );
+  },
 
   getLatest: (token: string | undefined, projectId: string) =>
     request<{
@@ -717,10 +730,20 @@ export const design = {
       `/projects/${projectId}/diagrams/available`, "GET", undefined, token,
     ),
 
-  generateDiagrams: (token: string, projectId: string, versionNum?: number, diagramId?: string) => {
+  generateDiagrams: (
+    token: string,
+    projectId: string,
+    versionNum?: number,
+    diagramId?: string,
+    authored?: boolean,
+  ) => {
     const qs = new URLSearchParams();
     if (versionNum !== undefined) qs.set("version_num", String(versionNum));
     if (diagramId) qs.set("diagram_id", diagramId);
+    // Prompt/theme-aware LLM authoring (with per-diagram fallback to the
+    // deterministic base when the model is unavailable). See the backend
+    // /projects/{id}/diagrams `authored` branch.
+    if (authored) qs.set("authored", "true");
     return request<{
       version: number;
       diagrams: import("./types").DiagramPayload[];
