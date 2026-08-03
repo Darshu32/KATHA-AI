@@ -184,6 +184,7 @@ export default function ImageWorkspaceMvp2() {
   // A single in-flight flag is enough — the chip itself owns its
   // open/closed state. Errors surface as a transient notice strip.
   const [isSwitchingTheme, setIsSwitchingTheme] = useState(false);
+  const [isRerendering, setIsRerendering] = useState(false);
   const [themeSwitchError, setThemeSwitchError] = useState<string | null>(null);
 
   // ── BRD 5B: import dialog open/close ────────────────────────────────
@@ -358,6 +359,33 @@ export default function ImageWorkspaceMvp2() {
       );
     } finally {
       setIsSwitchingTheme(false);
+    }
+  };
+
+  /* submitRerender — regenerate the photoreal 2D render from the current
+   * (directly-edited) spec. Drag edits in Plan / 3D mutate the spec in place
+   * and the 3D model re-derives instantly, but the photoreal image goes stale;
+   * this refreshes it + the exact hotspots on the same version. */
+  const submitRerender = async (): Promise<boolean> => {
+    if (!activeProjectId || !latestGeneration || isRerendering) return false;
+    setIsRerendering(true);
+    try {
+      const res = await designApi.rerender(token, activeProjectId);
+      if (res.image_url) {
+        replaceGenerations(
+          generations.map((g) =>
+            g.id === latestGeneration.id
+              ? { ...g, url: res.image_url ?? g.url, objectsBbox: res.objects_bbox ?? g.objectsBbox }
+              : g,
+          ),
+        );
+      }
+      return true;
+    } catch (e) {
+      toastError(e, "Re-render failed");
+      return false;
+    } finally {
+      setIsRerendering(false);
     }
   };
 
@@ -647,6 +675,8 @@ export default function ImageWorkspaceMvp2() {
                 isEditing={isEditing}
                 isSwitchingTheme={isSwitchingTheme}
                 pendingPrompt={prompt}
+                onRerender={submitRerender}
+                isRerendering={isRerendering}
               />
             )}
           </div>
@@ -1985,6 +2015,8 @@ function CanvasGallery({
   isEditing,
   isSwitchingTheme,
   pendingPrompt,
+  onRerender,
+  isRerendering,
 }: {
   generations: import("@/lib/types").ImageGeneration[];
   dim: Dim;
@@ -1996,6 +2028,8 @@ function CanvasGallery({
   isEditing: boolean;
   isSwitchingTheme: boolean;
   pendingPrompt: string;
+  onRerender?: () => Promise<boolean>;
+  isRerendering?: boolean;
 }) {
   // Any of the three async paths shows a skeleton — the user shouldn't
   // have to mentally map which spinner means what.
@@ -2131,6 +2165,20 @@ function CanvasGallery({
                     </button>
                   ))}
                 </div>
+              ) : null}
+              {/* Re-render the photoreal image from the edited spec */}
+              {heroView !== "image" && hero.projectId && onRerender ? (
+                <button
+                  type="button"
+                  disabled={isRerendering}
+                  onClick={async () => {
+                    const ok = await onRerender();
+                    if (ok) setHeroView("image");
+                  }}
+                  className="absolute top-2 left-2 z-10 rounded-md border border-hairline bg-paper/85 backdrop-blur-sm px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-ink-soft hover:text-ink disabled:opacity-60 transition-colors"
+                >
+                  {isRerendering ? "Re-rendering…" : "⟳ Re-render"}
+                </button>
               ) : null}
             </div>
           ) : (

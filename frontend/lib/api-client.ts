@@ -698,6 +698,16 @@ export const design = {
       `/projects/${projectId}/objects/${objectId}/position`, "PATCH", { position }, token,
     ),
 
+  /** Re-render the latest version's photoreal image from its current (edited)
+   *  spec — refreshes the 2D render + exact hotspots after direct edits. */
+  rerender: (token: string | undefined, projectId: string) =>
+    request<{
+      status: string;
+      version: number;
+      image_url: string | null;
+      objects_bbox: Array<{ id: string; name: string; type: string; x: number; y: number; w: number; h: number }>;
+    }>(`/projects/${projectId}/render`, "POST", undefined, token),
+
   updateMaterial: (token: string, projectId: string, objectId: string, material: string, color: string) =>
     request<{ status: string }>(
       `/projects/${projectId}/objects/${objectId}/material`, "PATCH", { material, color }, token,

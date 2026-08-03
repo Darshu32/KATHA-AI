@@ -22,11 +22,14 @@ from app.services.design_graph_service import (
     get_project,
     get_version,
     list_versions,
+    set_version_bboxes,
 )
 from app.services.object_bboxes import compute_object_bboxes
+from app.services.spatial import render_design
 from app.services.spatial.gltf import scene_to_gltf
 from app.services.storage import key_to_url
 from app.services.generation_pipeline import (
+    _persist_render,
     run_initial_generation,
     run_local_edit,
     run_theme_switch,
@@ -429,6 +432,49 @@ async def update_object_position(
     await db.flush()
     return {"status": "ok", "version": version.version, "object_id": object_id,
             "position": target["position"]}
+
+
+@router.post("/render")
+async def rerender_route(
+    project_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Re-render the latest version's photoreal image from its current spec.
+    After a direct edit (drag in the plan / 3D) the spec and the 3D model update
+    instantly, but the photoreal 2D render is stale — this regenerates it (kernel
+    → real-camera render → finish pass) and refreshes the exact hotspots so the
+    flagship image and the click-to-edit boxes match the edited layout."""
+    project = await get_project(db, project_id)
+    _check_owner(project, user)
+    version = await get_latest_version(db, project_id)
+    if version is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No versions found")
+
+    result = await render_design(version.graph_data or {})
+    if not result or not result.image_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Render unavailable (no geometry, or image provider unconfigured)",
+        )
+
+    image_url, _img, hotspots = await _persist_render(
+        db,
+        graph_version_id=version.id,
+        image_bytes=result.image_bytes,
+        mime_type=result.mime,
+        source=result.provider,
+        hotspots=result.hotspots,
+        title=f"{result.kind} re-render",
+    )
+    if hotspots:
+        await set_version_bboxes(db, version.id, hotspots)
+    return {
+        "status": "ok",
+        "version": version.version,
+        "image_url": image_url,
+        "objects_bbox": hotspots or compute_object_bboxes(version.graph_data or {}),
+    }
 
 
 @router.post("/validate")
