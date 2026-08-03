@@ -62,6 +62,12 @@ psd-tools==1.17.0
 # DWG + CDR + SKP importers remain stdlib-only (header parsers with
 # actionable redirects to formats we can fully parse).
 
+# ── Geometry kernel (spatial render path) ───────────
+# manifold3d = guaranteed-manifold mesh booleans (walls / slabs / openings /
+# atrium voids) for app/services/spatial/*. The LLM emits the spec; this
+# builds the solids. numpy + Pillow (already deps) do the rasterise + encode.
+manifold3d==3.5.2
+
 # ── Dev / Testing ───────────────────────────────────
 httpx==0.28.1
 pytest==8.3.4

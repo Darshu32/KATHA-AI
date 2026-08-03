@@ -2,7 +2,7 @@
 
 import logging
 
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.orm import DesignGraphVersion, GeneratedAsset, Project
@@ -143,6 +143,27 @@ async def save_render_asset(
     db.add(asset)
     await db.flush()
     return asset
+
+
+async def set_version_bboxes(
+    db: AsyncSession,
+    version_id: str,
+    bboxes: list[dict],
+) -> None:
+    """Persist vision-grounded hotspots on a version so re-opening a project
+    reuses them instead of recomputing (or re-detecting). Best-effort — never
+    raises; the request-level commit flushes it."""
+    if not version_id or not bboxes:
+        return
+    try:
+        await db.execute(
+            update(DesignGraphVersion)
+            .where(DesignGraphVersion.id == version_id)
+            .values(objects_bbox=bboxes)
+        )
+        await db.flush()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Persisting objects_bbox failed for version %s: %s", version_id, exc)
 
 
 async def get_latest_version(

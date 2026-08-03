@@ -391,7 +391,9 @@ def collect_render_images(spec: dict, graph: dict) -> list[dict[str, Any]]:
     if isinstance(graph, dict):
         candidates.extend(graph.get("renders") or [])
         for asset in (graph.get("assets") or []):
-            kind = (asset or {}).get("kind") or (asset or {}).get("asset_type") or ""
+            if not isinstance(asset, dict):
+                continue
+            kind = asset.get("kind") or asset.get("asset_type") or ""
             if kind in {"render_2d", "thumbnail"}:
                 candidates.append(asset)
 

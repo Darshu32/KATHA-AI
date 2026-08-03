@@ -9,6 +9,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import dynamic from "next/dynamic";
 import { useAuthStore, useConfigStore, useImageGenStore } from "@/lib/store";
 import {
   ApiError,
@@ -36,6 +37,17 @@ import {
   ProjectPicker,
   type OpenedProject,
 } from "@/components/workspace/project-picker";
+
+// Live 3D viewport is client-only (R3F Canvas) — load without SSR.
+const DesignViewport3D = dynamic(
+  () => import("@/components/workspace/design-viewport-3d"),
+  { ssr: false },
+);
+// Editable 2D plan (SVG) — client-only for pointer/CTM math.
+const DesignPlanEditor = dynamic(
+  () => import("@/components/workspace/design-plan-editor"),
+  { ssr: false },
+);
 
 type Scope = "architecture" | "interior" | "furniture" | "product";
 type Dim = "2d" | "3d" | "4d";
@@ -1994,6 +2006,9 @@ function CanvasGallery({
     ? "Applying edit"
     : "Switching theme";
 
+  // Hero surface: finished 2D render · live orbitable 3D model · editable 2D plan.
+  const [heroView, setHeroView] = useState<"image" | "model" | "plan">("image");
+
   // Resolve the hero: the focused render, falling back to the latest.
   const focusedIndex = Math.max(
     0,
@@ -2061,18 +2076,61 @@ function CanvasGallery({
             // sits on top with click-to-edit hotspots, but only on the
             // latest (editable) version — history renders stay read-only.
             <div className="relative aspect-video bg-paper-deep border border-hairline rounded-md overflow-hidden">
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                src={resolveAssetUrl(hero.url)}
-                alt={hero.prompt}
-                className="absolute inset-0 w-full h-full object-cover"
-              />
-              {isHeroLatest && hero.objectsBbox && hero.objectsBbox.length > 0 ? (
-                <ObjectOverlay
-                  bboxes={hero.objectsBbox}
+              {heroView === "model" && hero.projectId ? (
+                <DesignViewport3D
+                  projectId={hero.projectId}
+                  version={hero.version ?? undefined}
+                  graph={hero.graphData}
                   selectedObjectId={selectedObjectId}
-                  onSelect={onSelectObject}
+                  onSelectObject={onSelectObject}
                 />
+              ) : heroView === "plan" && hero.projectId ? (
+                <DesignPlanEditor
+                  projectId={hero.projectId}
+                  graph={hero.graphData}
+                  selectedObjectId={selectedObjectId}
+                  onSelectObject={onSelectObject}
+                />
+              ) : (
+                <>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={resolveAssetUrl(hero.url)}
+                    alt={hero.prompt}
+                    className="absolute inset-0 w-full h-full object-cover"
+                  />
+                  {isHeroLatest && hero.objectsBbox && hero.objectsBbox.length > 0 ? (
+                    <ObjectOverlay
+                      bboxes={hero.objectsBbox}
+                      selectedObjectId={selectedObjectId}
+                      onSelect={onSelectObject}
+                    />
+                  ) : null}
+                </>
+              )}
+              {/* Render · live 3D model · editable 2D plan */}
+              {hero.projectId ? (
+                <div className="absolute top-2 right-2 z-10 flex rounded-md border border-hairline bg-paper/85 backdrop-blur-sm overflow-hidden">
+                  {([
+                    ["image", "Render"],
+                    ["model", "3D"],
+                    ["plan", "Plan"],
+                  ] as const).map(([v, label]) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setHeroView(v)}
+                      aria-pressed={heroView === v}
+                      className={`px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] transition-colors ${
+                        heroView === v
+                          ? "bg-ink text-paper"
+                          : "text-ink-soft hover:text-ink"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
               ) : null}
             </div>
           ) : (
@@ -3246,7 +3304,7 @@ function SpecsTab({
         open={open.has("manufacturing")}
         onToggle={() => toggle("manufacturing")}
       >
-        <DictDump dict={bundle.manufacturing} />
+        <SpecTree data={bundle.manufacturing as unknown as Record<string, unknown>} />
       </SpecSubsection>
 
       <SpecSubsection
@@ -3261,7 +3319,7 @@ function SpecsTab({
               <h5 className="font-mono text-[10px] uppercase tracking-tagged text-ink-mute mb-1">
                 {sys}
               </h5>
-              <DictDump dict={bundle.mep?.[sys] as Record<string, unknown> | undefined} />
+              <SpecTree data={bundle.mep?.[sys] as Record<string, unknown> | undefined} />
             </div>
           ))}
         </div>
@@ -3349,27 +3407,113 @@ function MaterialGroup({
   );
 }
 
-/* DictDump — renders a Record<string, unknown> as flat key/value rows.
- * Nested objects collapse to JSON for now — manufacturing + MEP dicts
- * are usually flat scalars from the backend, so this looks clean. */
-function DictDump({ dict }: { dict?: Record<string, unknown> }) {
-  const entries = Object.entries(dict ?? {});
-  if (entries.length === 0) {
-    return <p className="text-[11.5px] text-ink-mute italic">No data on this version.</p>;
+/* SpecTree — recursively renders a spec section into readable rows instead
+ * of dumping JSON: scalars become label/value rows, [low, high] pairs become
+ * a range, scalar arrays become bullet lists, and nested objects / arrays of
+ * objects become indented sub-blocks. Handles Manufacturing's joinery + QA
+ * gates and MEP's ductwork / registers cleanly. */
+const _isScalar = (v: unknown): boolean =>
+  v === null || ["string", "number", "boolean"].includes(typeof v);
+
+function _fmtNum(n: number): string {
+  return Number.isInteger(n)
+    ? n.toLocaleString("en-IN")
+    : n.toLocaleString("en-IN", { maximumFractionDigits: 2 });
+}
+
+function _fmtScalar(v: unknown): string {
+  if (v === null || v === undefined || v === "") return "—";
+  if (typeof v === "number") return _fmtNum(v);
+  if (typeof v === "boolean") return v ? "Yes" : "No";
+  return String(v);
+}
+
+/* Drop empty values so the tree never shows blank rows. */
+function _specEntries(data?: Record<string, unknown>): [string, unknown][] {
+  return Object.entries(data ?? {}).filter(
+    ([, v]) =>
+      v !== null &&
+      v !== undefined &&
+      v !== "" &&
+      !(Array.isArray(v) && v.length === 0) &&
+      !(typeof v === "object" && !Array.isArray(v) && Object.keys(v as object).length === 0),
+  );
+}
+
+function SpecRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="py-1.5 border-b border-hairline last:border-b-0 flex items-baseline justify-between gap-3">
+      <span className="font-mono text-[10px] uppercase tracking-tagged text-ink-mute shrink-0">
+        {label.replace(/_/g, " ")}
+      </span>
+      <span className="text-[11.5px] text-ink text-right font-mono tnum break-words">{value}</span>
+    </div>
+  );
+}
+
+function SpecEntry({ k, v }: { k: string; v: unknown }) {
+  const label = k.replace(/_/g, " ");
+  if (_isScalar(v)) return <SpecRow label={label} value={_fmtScalar(v)} />;
+  // [low, high] numeric pair → a range
+  if (Array.isArray(v) && v.length === 2 && v.every((x) => typeof x === "number")) {
+    return <SpecRow label={label} value={`${_fmtNum(v[0] as number)}–${_fmtNum(v[1] as number)}`} />;
   }
+  // list of scalars → bullets
+  if (Array.isArray(v) && v.every(_isScalar)) {
+    return (
+      <div className="py-1.5 border-b border-hairline last:border-b-0">
+        <div className="font-mono text-[10px] uppercase tracking-tagged text-ink-mute mb-1">{label}</div>
+        <ul className="space-y-1">
+          {v.map((it, i) => (
+            <li key={i} className="flex gap-1.5 text-[11.5px] text-ink-soft leading-snug">
+              <span className="text-ink-mute shrink-0">·</span>
+              <span>{_fmtScalar(it)}</span>
+            </li>
+          ))}
+        </ul>
+      </div>
+    );
+  }
+  // list of objects → indented sub-blocks
+  if (Array.isArray(v)) {
+    return (
+      <div className="py-1.5 border-b border-hairline last:border-b-0">
+        <div className="font-mono text-[10px] uppercase tracking-tagged text-ink-mute mb-1.5">
+          {label} · {v.length}
+        </div>
+        <div className="space-y-2.5">
+          {v.map((item, i) => (
+            <div key={i} className="pl-2.5 border-l-2 border-graphite">
+              {_specEntries(item as Record<string, unknown>).map(([ck, cv]) => (
+                <SpecEntry key={ck} k={ck} v={cv} />
+              ))}
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+  // nested object → indented sub-block
+  return (
+    <div className="py-1.5 border-b border-hairline last:border-b-0">
+      <div className="font-mono text-[10px] uppercase tracking-tagged text-ink-soft mb-1">{label}</div>
+      <div className="pl-2.5 border-l border-hairline">
+        {_specEntries(v as Record<string, unknown>).map(([ck, cv]) => (
+          <SpecEntry key={ck} k={ck} v={cv} />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SpecTree({ data }: { data?: Record<string, unknown> }) {
+  const entries = _specEntries(data);
+  if (entries.length === 0)
+    return <p className="text-[11.5px] text-ink-mute italic">No data on this version.</p>;
   return (
     <div className="border-t border-hairline">
       {entries.map(([k, v]) => (
-        <div key={k} className="py-1.5 border-b border-hairline last:border-b-0 flex items-baseline justify-between gap-2">
-          <span className="font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
-            {k.replace(/_/g, " ")}
-          </span>
-          <span className="text-[11.5px] text-ink text-right font-mono break-all max-w-[60%]">
-            {typeof v === "string" || typeof v === "number" || typeof v === "boolean"
-              ? String(v)
-              : JSON.stringify(v)}
-          </span>
-        </div>
+        <SpecEntry key={k} k={k} v={v} />
       ))}
     </div>
   );

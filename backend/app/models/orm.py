@@ -172,6 +172,12 @@ class DesignGraphVersion(Base, UUIDMixin, TimestampMixin):
     # back-compat with versions written before migration 0028.
     prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+    # Vision-grounded click-to-edit hotspots for the *rendered* image
+    # ([{id,name,type,x,y,w,h}], normalised 0-1). Persisted at generation
+    # time so re-opening a project reuses accurate boxes without a repeat
+    # vision call. NULL falls back to the deterministic plan projection.
+    objects_bbox: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
     project: Mapped["Project"] = relationship(back_populates="versions")
     estimates: Mapped[list["EstimateSnapshot"]] = relationship(
         back_populates="graph_version"

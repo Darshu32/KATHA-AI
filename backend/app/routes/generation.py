@@ -4,6 +4,8 @@ import asyncio
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Response, status
+from pydantic import BaseModel
+from sqlalchemy.orm.attributes import flag_modified
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -22,6 +24,7 @@ from app.services.design_graph_service import (
     list_versions,
 )
 from app.services.object_bboxes import compute_object_bboxes
+from app.services.spatial.gltf import scene_to_gltf
 from app.services.storage import key_to_url
 from app.services.generation_pipeline import (
     run_initial_generation,
@@ -350,8 +353,82 @@ async def get_latest_route(
         "graph_data": version.graph_data,
         "prompt": version.prompt,
         "image_url": image_url,
-        "objects_bbox": compute_object_bboxes(version.graph_data),
+        # Prefer vision-grounded hotspots persisted at generation time
+        # (accurate to the render); fall back to the plan projection for
+        # versions saved before grounding, or when grounding was unavailable.
+        "objects_bbox": version.objects_bbox or compute_object_bboxes(version.graph_data),
     }
+
+
+@router.get("/scene.gltf")
+async def scene_gltf_route(
+    project_id: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Serve the latest version's real kernel geometry as glTF for the browser
+    3D viewport. Built on demand from the spec so it always matches the current
+    design; 404 when there is no renderable geometry yet."""
+    project = await get_project(db, project_id)
+    _check_owner(project, user)
+    version = await get_latest_version(db, project_id)
+    if version is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No versions found")
+    try:
+        gltf = scene_to_gltf(version.graph_data or {})
+    except Exception as exc:  # noqa: BLE001 — geometry must never 500 the workspace
+        logger.warning("scene.gltf build failed for project %s: %s", project_id, exc)
+        gltf = None
+    if not gltf:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No geometry for this design")
+    return Response(content=gltf, media_type="model/gltf+json",
+                    headers={"Cache-Control": "no-store"})
+
+
+class _Vec3(BaseModel):
+    x: float
+    y: float
+    z: float
+
+
+class ObjectPositionUpdate(BaseModel):
+    position: _Vec3
+
+
+@router.patch("/objects/{object_id}/position")
+async def update_object_position(
+    project_id: str,
+    object_id: str,
+    payload: ObjectPositionUpdate,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Direct-manipulation edit: set an object's position on the latest version's
+    spec. The spec is the source of truth, so the 3D model, 2D render and
+    drawings all re-derive from it. Updated in place (a nudge, not a new design
+    iteration); the photoreal 2D render refreshes on the next generate. 404 when
+    the object id isn't in the graph."""
+    project = await get_project(db, project_id)
+    _check_owner(project, user)
+    version = await get_latest_version(db, project_id)
+    if version is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No versions found")
+
+    graph = version.graph_data or {}
+    target = next(
+        (o for o in (graph.get("objects") or [])
+         if isinstance(o, dict) and str(o.get("id")) == object_id),
+        None,
+    )
+    if target is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Object not found in design")
+
+    target["position"] = {"x": payload.position.x, "y": payload.position.y, "z": payload.position.z}
+    # In-place JSONB mutation isn't auto-tracked — flag it so the commit writes it.
+    flag_modified(version, "graph_data")
+    await db.flush()
+    return {"status": "ok", "version": version.version, "object_id": object_id,
+            "position": target["position"]}
 
 
 @router.post("/validate")

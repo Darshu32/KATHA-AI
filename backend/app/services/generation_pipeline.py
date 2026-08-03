@@ -14,6 +14,7 @@ from app.services.design_graph_service import (
     get_latest_version,
     save_graph_version,
     save_render_asset,
+    set_version_bboxes,
 )
 from app.services.estimation.catalog import convert_from_inr, currency_symbol
 from app.services.estimation_engine import compute_estimate
@@ -31,9 +32,61 @@ from app.services.knowledge_validator import validate_design_graph_async
 from app.services.standards.knowledge_service import resolve_standard as _resolve_standard
 from app.services.standards.mep_sizing import system_cost_estimate as _mep_system_cost
 from app.services.object_bboxes import compute_object_bboxes
+from app.services.spatial import render_design
 from app.services.storage import key_to_url, make_key, save_bytes
 
+
+async def _resolve_bboxes(
+    db: AsyncSession,
+    version_id: str,
+    graph_data: dict,
+    hotspots: list[dict] | None,
+) -> list[dict]:
+    """Persist and return the hotspots. When the spatial engine rendered the
+    design, ``hotspots`` are exact camera projections of the real geometry —
+    the accurate path. Otherwise fall back to the deterministic plan projection
+    (legacy Gemini renders). Superseded the vision-grounding hack, which is only
+    ever needed when a 2D image model — not our kernel — produced the render."""
+    boxes = hotspots or compute_object_bboxes(graph_data)
+    if boxes:
+        await set_version_bboxes(db, version_id, boxes)
+    return boxes
+
 logger = logging.getLogger(__name__)
+
+
+async def _persist_render(
+    db: AsyncSession,
+    *,
+    graph_version_id: str,
+    image_bytes: bytes,
+    mime_type: str,
+    source: str,
+    hotspots: list[dict] | None,
+    title: str = "",
+) -> tuple[str | None, bytes | None, list | None]:
+    """Write render bytes to object storage + a GeneratedAsset row, and return
+    ``(url, bytes, hotspots)``. Best-effort — a storage failure returns Nones so
+    the surrounding generation still succeeds (the graph is already saved)."""
+    ext = _ext_for_mime(mime_type)
+    storage_key = make_key("renders", graph_version_id, ext=ext)
+    try:
+        await save_bytes(storage_key, image_bytes)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Storage write failed for render version=%s: %s", graph_version_id, exc)
+        return None, None, None
+    final_url = key_to_url(storage_key)
+    try:
+        await save_render_asset(
+            db,
+            graph_version_id=graph_version_id,
+            storage_key=storage_key,
+            mime_type=mime_type,
+            metadata={"source": source, "title": title, "bytes": len(image_bytes)},
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Persisting render asset failed for version %s: %s", graph_version_id, exc)
+    return final_url, image_bytes, hotspots
 
 
 async def _attach_render(
@@ -48,7 +101,7 @@ async def _attach_render(
     ratio: str | None = None,
     camera: str | None = None,
     lighting: str | None = None,
-) -> str | None:
+) -> tuple[str | None, bytes | None, list | None]:
     """Best-effort: render an image for the just-saved version, persist
     the bytes to object storage, and write a GeneratedAsset row pointing
     at the storage key. Returns a clean URL the frontend can GET, or
@@ -78,8 +131,32 @@ async def _attach_render(
     including edits like "move the table 30cm right".
     """
     if not prompt or not prompt.strip():
-        return None
+        return None, None, None
     clean_prompt = prompt.strip()
+
+    # ── Geometry-as-truth path ────────────────────────────────────────────
+    # Build real geometry from the spec (Manifold kernel), render it with a
+    # real camera, and finish it photoreal. Hotspots come from the same
+    # camera, so they are exact — no vision grounding. Any miss (no objects,
+    # kernel/finish failure) falls through to the legacy flat-plan path below.
+    if graph_data is not None:
+        spatial = None
+        try:
+            spatial = await render_design(graph_data)
+        except Exception as exc:  # noqa: BLE001 — never break generation
+            logger.warning("Spatial render failed for version %s: %s",
+                           graph_version_id, exc)
+        if spatial and spatial.image_bytes:
+            return await _persist_render(
+                db,
+                graph_version_id=graph_version_id,
+                image_bytes=spatial.image_bytes,
+                mime_type=spatial.mime,
+                source=spatial.provider,
+                hotspots=spatial.hotspots,
+                title=f"{spatial.kind} render",
+            )
+
     reference_png: bytes | None = None
     if graph_data is not None:
         # Rasterise the graph into a flat top-down layout guide the image
@@ -113,9 +190,9 @@ async def _attach_render(
     except Exception as exc:  # noqa: BLE001
         logger.warning("Render generation failed for version %s: %s",
                        graph_version_id, exc)
-        return None
+        return None, None, None
     if not result or not result.get("url"):
-        return None
+        return None, None, None
 
     raw_url = result["url"]
     image_bytes, mime_from_url = _decode_data_url(raw_url)
@@ -140,7 +217,7 @@ async def _attach_render(
                 "Storage write failed for render version=%s: %s",
                 graph_version_id, exc,
             )
-            return None
+            return None, None, None
         final_url = key_to_url(storage_key)
 
     try:
@@ -160,7 +237,7 @@ async def _attach_render(
                        graph_version_id, exc)
         # Asset row didn't save, but the bytes are on disk and the URL
         # still resolves — return it so the response carries the render.
-    return final_url
+    return final_url, image_bytes, None
 
 
 def _decode_data_url(value: str) -> tuple[bytes | None, str | None]:
@@ -734,7 +811,7 @@ async def run_initial_generation(
     # is down or the API key is unset). The graph_data flows in so the
     # image model is conditioned on the actual generated geometry, not
     # just the user's typed brief.
-    image_url = await _attach_render(
+    image_url, render_bytes, hotspots = await _attach_render(
         db,
         graph_version_id=version.id,
         prompt=prompt,
@@ -762,7 +839,7 @@ async def run_initial_generation(
         "graph_data": graph_data,
         "estimate": estimate,
         "image_url": image_url,
-        "objects_bbox": compute_object_bboxes(graph_data),
+        "objects_bbox": await _resolve_bboxes(db, version.id, graph_data, hotspots),
         "validation": validation,
         "mep_cost_estimate": mep_cost,
         "code_compliance_summary": compliance,
@@ -839,7 +916,7 @@ async def run_local_edit(
 
     # Render against the *updated* graph so geometric edits surface
     # in the new render rather than just the data layer.
-    image_url = await _attach_render(
+    image_url, render_bytes, hotspots = await _attach_render(
         db,
         graph_version_id=version.id,
         prompt=render_prompt,
@@ -856,7 +933,7 @@ async def run_local_edit(
         "estimate": estimate,
         "changed_objects": [object_id],
         "image_url": image_url,
-        "objects_bbox": compute_object_bboxes(updated_graph),
+        "objects_bbox": await _resolve_bboxes(db, version.id, updated_graph, hotspots),
         "validation": validation,
         "mep_cost_estimate": mep_cost,
         "code_compliance_summary": compliance,
@@ -928,7 +1005,7 @@ async def run_theme_switch(
     # the new render is conditioned on layout that's literally
     # unchanged, with only material / palette differing per the new
     # theme hint.
-    image_url = await _attach_render(
+    image_url, render_bytes, hotspots = await _attach_render(
         db,
         graph_version_id=version.id,
         prompt=base_prompt or new_style,
@@ -944,7 +1021,7 @@ async def run_theme_switch(
         "graph_data": updated_graph_data,
         "estimate": estimate,
         "image_url": image_url,
-        "objects_bbox": compute_object_bboxes(updated_graph_data),
+        "objects_bbox": await _resolve_bboxes(db, version.id, updated_graph_data, hotspots),
         "validation": validation,
         "mep_cost_estimate": mep_cost,
         "code_compliance_summary": compliance,
