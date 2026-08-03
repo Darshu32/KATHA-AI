@@ -22,6 +22,7 @@ from app.services.exporters import (
     pptx_exporter,
     psd_exporter,
     rhino_exporter,
+    speckle_exporter,
     step_exporter,
     xlsx_exporter,
 )
@@ -42,6 +43,7 @@ _REGISTRY = {
     "3dm": rhino_exporter,           # Rhino native (round-trips with importer)
     # Pass C — BIM / CAD exchange / specialist
     "ifc": ifc_exporter,             # BIM (IFC4 — Revit/ArchiCAD/Vectorworks ingest)
+    "speckle": speckle_exporter,     # geometry-true Speckle tree (live push via /export/speckle)
     "step": step_exporter,           # parametric solid CAD exchange (CATIA/NX/SW)
     "iges": iges_exporter,           # legacy CAD exchange (older CATIA/Pro-E)
     "gcode": gcode_exporter,         # CNC routing program — nested, multi-tool

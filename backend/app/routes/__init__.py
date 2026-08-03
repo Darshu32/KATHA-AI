@@ -19,6 +19,7 @@ from app.routes.design import router as design_router
 from app.routes.diagrams import router as diagrams_router
 from app.routes.drawings import router as drawings_router
 from app.routes.estimates import router as estimates_router
+from app.routes.exports import router as exports_router
 from app.routes.generation import router as generation_router
 from app.routes.images import router as images_router
 from app.routes.imports import router as imports_router
@@ -51,6 +52,8 @@ all_routers = [
     images_router,
     generation_router,
     estimates_router,
+    # Interop exports (Speckle → Revit/Rhino/Grasshopper/ArchiCAD)
+    exports_router,
     imports_router,
     knowledge_router,
     notes_router,

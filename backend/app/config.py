@@ -60,6 +60,14 @@ class Settings(BaseSettings):
     # Google Gemini for image generation.
     gemini_api_key: str = ""
 
+    # ── Interop / export ─────────────────────────────────
+    # Speckle push (Revit/Rhino/Grasshopper/ArchiCAD distribution wedge).
+    # All three blank = offline mode: the export still serializes a valid
+    # Speckle object tree, only the live server push is skipped.
+    speckle_server_url: str = ""
+    speckle_token: str = ""
+    speckle_project_id: str = ""
+
     # ── External APIs ────────────────────────────────────
     youtube_api_key: str = ""
 

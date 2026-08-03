@@ -3006,6 +3006,10 @@ const EXPORT_FAMILIES: {
     formats: [{ id: "ifc", label: "IFC4 (Revit-compatible)", ext: ".ifc" }],
   },
   {
+    family: "Interop",
+    formats: [{ id: "speckle", label: "Speckle (Revit · Rhino · Grasshopper)", ext: ".speckle.json" }],
+  },
+  {
     family: "CAD Exchange",
     formats: [
       { id: "step", label: "STEP", ext: ".step" },

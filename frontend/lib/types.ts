@@ -502,7 +502,7 @@ export interface SpecBundle {
 export type ExportFormat =
   | "pdf" | "docx" | "xlsx" | "psd"
   | "dxf" | "obj" | "gltf" | "3dm"
-  | "ifc" | "step" | "gcode";
+  | "ifc" | "speckle" | "step" | "gcode";
 
 export interface LayoutPreset {
   id: string;
