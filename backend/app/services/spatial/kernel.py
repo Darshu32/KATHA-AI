@@ -15,6 +15,8 @@ from dataclasses import dataclass, field
 import numpy as np
 from manifold3d import Manifold
 
+from app.services.wall_model import derive_wall_model
+
 # ── units ────────────────────────────────────────────────────────────────────
 _UNIT_TO_M = {"mm": 1e-3, "cm": 1e-2, "m": 1.0, "metre": 1.0, "meter": 1.0,
               "ft": 0.3048, "feet": 0.3048, "foot": 0.3048, "in": 0.0254}
@@ -139,6 +141,54 @@ def _room_dims(graph: dict) -> tuple[float, float, float]:
             _to_m(d.get("height"), unit) or _DEFAULT_ROOM_H)
 
 
+# Map wall_model sides to the kernel's cull tags (the renderer drops the near
+# walls facing the camera for the dollhouse interior view).
+_SIDE_TAG = {"south": "-z", "north": "+z", "west": "-x", "east": "+x"}
+
+
+def _wall_solids(graph: dict) -> tuple[list[Solid], set[str]]:
+    """Floor + four perimeter walls with REAL window/door openings cut in
+    (Manifold voids), from the shared ``derive_wall_model`` — the same source the
+    IFC export and section/elevation drawings read. Returns the solids plus the
+    set of opening object-ids so the caller can skip rendering those as boxes."""
+    wm = derive_wall_model(graph)
+    L = float(wm["room"]["length"])
+    W = float(wm["room"]["width"])
+    H = float(wm["room"]["height"])
+    t = float(wm["thickness"])
+    wc = _TYPE_DEFAULT["wall"]
+    out: list[Solid] = [
+        Solid("floor", "Floor", "floor", _TYPE_DEFAULT["floor"], _box(L, 0.05, W, L / 2, -0.05, W / 2)),
+    ]
+    opening_ids: set[str] = set()
+    for wall in wm["walls"]:
+        side = wall["side"]
+        if side == "south":
+            m = _box(L, H, t, L / 2, 0.0, 0.0)
+        elif side == "north":
+            m = _box(L, H, t, L / 2, 0.0, W)
+        elif side == "west":
+            m = _box(t, H, W, 0.0, 0.0, W / 2)
+        else:  # east
+            m = _box(t, H, W, L, 0.0, W / 2)
+        for op in wall["openings"]:
+            c = float(op["center"])
+            w = float(op["width"])
+            sill = float(op["sill"])
+            oh = max(float(op["head"]) - sill, 0.05)
+            if side in ("south", "north"):
+                at_z = 0.0 if side == "south" else W
+                m = m - _box(w, oh, t * 3, c, sill, at_z)  # void through the wall
+            else:
+                at_x = 0.0 if side == "west" else L
+                m = m - _box(t * 3, oh, w, at_x, sill, c)
+            sid = op.get("source_id")
+            if sid:
+                opening_ids.add(str(sid))
+        out.append(Solid(str(wall["id"]), "Wall", "wall", wc, m, side=_SIDE_TAG[side]))
+    return out, opening_ids
+
+
 def build_scene(graph: dict) -> tuple[list[Solid], tuple, str]:
     """Spec → (solids with meshes, scene AABB, kind) where kind∈{interior,exterior}."""
     materials_by_key: dict = {}
@@ -181,17 +231,11 @@ def build_scene(graph: dict) -> tuple[list[Solid], tuple, str]:
 
     solids: list[Solid] = []
 
+    opening_ids: set[str] = set()
     if interior:
-        # Floor slab (top at y=0) + four tagged perimeter walls.
-        solids.append(Solid("floor", "Floor", "floor", _TYPE_DEFAULT["floor"],
-                            _box(room_l, 0.05, room_w, room_l / 2, -0.05, room_w / 2)))
-        wc = _TYPE_DEFAULT["wall"]
-        solids += [
-            Solid("wall_-x", "Wall", "wall", wc, _box(_WALL_T, room_h, room_w, 0.0, 0.0, room_w / 2), side="-x"),
-            Solid("wall_+x", "Wall", "wall", wc, _box(_WALL_T, room_h, room_w, room_l, 0.0, room_w / 2), side="+x"),
-            Solid("wall_-z", "Wall", "wall", wc, _box(room_l, room_h, _WALL_T, room_l / 2, 0.0, 0.0), side="-z"),
-            Solid("wall_+z", "Wall", "wall", wc, _box(room_l, room_h, _WALL_T, room_l / 2, 0.0, room_w), side="+z"),
-        ]
+        # Floor + four perimeter walls with real window/door openings cut in.
+        wall_solids, opening_ids = _wall_solids(graph)
+        solids.extend(wall_solids)
     else:
         # Site-scale: a ground plane under the massing.
         cxz = _center_xz(body)
@@ -200,8 +244,13 @@ def build_scene(graph: dict) -> tuple[list[Solid], tuple, str]:
                             _box(2.4 * span, 0.05, 2.4 * span, cxz[0], -0.05, cxz[1])))
 
     for o, m in body:
+        oid = str(o.get("id") or o.get("name") or "obj")
+        # A window/door object is now a real void in a wall — don't also draw it
+        # as a floating box.
+        if interior and oid in opening_ids:
+            continue
         solids.append(Solid(
-            id=str(o.get("id") or o.get("name") or "obj"),
+            id=oid,
             name=str(o.get("name") or o.get("type") or "object"),
             type=str(o.get("type") or "object"),
             color=_color_for(o, materials_by_key), manifold=m,
