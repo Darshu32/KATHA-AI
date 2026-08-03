@@ -11,6 +11,7 @@
   "dependencies": {
     "@react-three/drei": "^10.7.7",
     "@react-three/fiber": "^9.6.0",
+    "@salusoft89/planegcs": "^1.2.0",
     "@types/three": "^0.183.1",
     "framer-motion": "^12.38.0",
     "jspdf": "^4.2.1",
