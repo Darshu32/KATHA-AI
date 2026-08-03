@@ -7,9 +7,14 @@
  * others so the constraints still hold — e.g. two pieces linked "align X" keep
  * the same X when either is moved. Verified headless in Node before wiring here.
  *
- * The wasm is served from /planegcs.wasm (public/) so no bundler config is
- * needed; the module + its glue are imported lazily on first solve (client
- * only) and cached. */
+ * Loading: the whole solver dist is vendored to public/planegcs/ and imported
+ * at RUNTIME (webpackIgnore) rather than bundled. @salusoft89/planegcs ships
+ * Emscripten glue with a dead Node-only branch (`await import("module")`,
+ * `new URL("./", import.meta.url)`) that Next's webpack statically parses and
+ * fails to resolve — which 500s the entire /design workspace. Served from
+ * /public the browser never bundles it: the Node branch doesn't run, and the
+ * wasm loads via locateFile. Imported lazily on first solve (client) + cached.
+ * To refresh on upgrade: `npm run sync:planegcs`. */
 
 type Vec = { x: number; z: number };
 type Obj = { id: string; x: number; z: number };
@@ -37,10 +42,19 @@ interface Loaded {
 let _mod: Promise<Loaded> | null = null;
 function getModule(): Promise<Loaded> {
   if (!_mod) {
-    _mod = import("@salusoft89/planegcs").then(async (m) => ({
-      wasm: (await m.init_planegcs_module({ locateFile: () => "/planegcs.wasm" })) as Loaded["wasm"],
-      GcsWrapper: m.GcsWrapper as unknown as Loaded["GcsWrapper"],
-    }));
+    // Runtime import from /public (see file header). `webpackIgnore` leaves this
+    // as a native import() so webpack never parses the Emscripten glue; the URL
+    // is held in a variable so TS doesn't try to resolve it at build time. Types
+    // still come from the package via the type-only `typeof import(...)` (erased).
+    const url = "/planegcs/index.js";
+    _mod = (import(/* webpackIgnore: true */ url) as Promise<typeof import("@salusoft89/planegcs")>).then(
+      async (m) => ({
+        wasm: (await m.init_planegcs_module({
+          locateFile: () => "/planegcs/planegcs_dist/planegcs.wasm",
+        })) as Loaded["wasm"],
+        GcsWrapper: m.GcsWrapper as unknown as Loaded["GcsWrapper"],
+      }),
+    );
   }
   return _mod;
 }

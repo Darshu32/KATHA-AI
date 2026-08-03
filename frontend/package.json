@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "next lint"
+    "lint": "next lint",
+    "sync:planegcs": "rm -rf public/planegcs && cp -R ../node_modules/@salusoft89/planegcs/dist public/planegcs && find public/planegcs \\( -name '*.d.ts' -o -name '*.map' \\) -delete"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.7",
