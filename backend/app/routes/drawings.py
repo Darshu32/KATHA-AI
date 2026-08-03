@@ -2,7 +2,7 @@
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -27,8 +27,19 @@ from app.services.drawings.section_view import render_section_view
 from app.services.drawings.isometric_view import render_isometric_view
 from app.services.drawings.detail_sheet import render_detail_sheet
 from app.services.view_fidelity import verify_graph_views
+# Geometry-true drawings — cut/projected from the real Manifold kernel solids.
+from app.services.spatial.drawings2d import (
+    elevation_svg as _geo_elevation,
+    plan_svg as _geo_plan,
+    section_svg as _geo_section,
+    sheet_dxf,
+    sheet_pdf,
+    sheet_svg,
+)
 
 router = APIRouter(prefix="/projects/{project_id}/drawings", tags=["drawings"])
+
+_GEO_VIEWS = {"plan": _geo_plan, "section": _geo_section, "elevation": _geo_elevation}
 
 # Scopes that mean "draw the furniture piece" rather than the room.
 PIECE_SCOPES = {"furniture", "product"}
@@ -272,3 +283,60 @@ async def get_view_fidelity(
         "version": target_version.version,
         **report,
     }
+
+
+@router.get("/sheet")
+async def geometry_sheet(
+    project_id: str,
+    format: str = Query("svg", pattern="^(svg|pdf|dxf)$"),
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Geometry-true general-arrangement sheet (plan + section + elevation),
+    cut and projected from the real 3D kernel solids. format = svg | pdf | dxf."""
+    project = await get_project(db, project_id)
+    _check_owner(project, user)
+    version = await get_latest_version(db, project_id)
+    if version is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No versions found")
+    graph = version.graph_data or {}
+    meta = {"project_name": project.name, "scale": "NTS", "sheet": "A-101"}
+    try:
+        if format == "pdf":
+            data, media = sheet_pdf(graph, meta), "application/pdf"
+        elif format == "dxf":
+            data, media = sheet_dxf(graph), "image/vnd.dxf"
+        else:
+            data, media = sheet_svg(graph, meta).encode("utf-8"), "image/svg+xml"
+    except Exception as exc:  # noqa: BLE001 — drawings must never 500 the app hard
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Sheet generation failed") from exc
+    headers = {"Cache-Control": "no-store"}
+    if format in ("pdf", "dxf"):
+        safe = "".join(c if c.isalnum() or c in "-_" else "-" for c in (project.name or "sheet"))
+        headers["Content-Disposition"] = f'attachment; filename="{safe}.{format}"'
+    return Response(content=data, media_type=media, headers=headers)
+
+
+@router.get("/geometry/{view}")
+async def geometry_view(
+    project_id: str,
+    view: str,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """A single geometry-true view SVG (view = plan | section | elevation)."""
+    fn = _GEO_VIEWS.get(view)
+    if fn is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown view")
+    project = await get_project(db, project_id)
+    _check_owner(project, user)
+    version = await get_latest_version(db, project_id)
+    if version is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No versions found")
+    try:
+        svg = fn(version.graph_data or {})
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                            detail="Drawing generation failed") from exc
+    return Response(content=svg, media_type="image/svg+xml", headers={"Cache-Control": "no-store"})
