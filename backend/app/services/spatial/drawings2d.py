@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from manifold3d import Manifold
 
+from app.services.spatial.code_checks import run_code_checks, tally
 from app.services.spatial.kernel import build_scene
 
 _INK = "#1A1A1A"
@@ -187,7 +188,7 @@ def sheet_svg(graph: dict, meta: dict | None = None) -> str:
     """Compose plan + section + elevation onto one titled A-ratio sheet."""
     meta = meta or {}
     W, H = 1500.0, 1060.0
-    tb = 92.0  # title-block height
+    tb = 118.0  # title-block height (room for a code-compliance line)
     body = f'<rect x="16" y="16" width="{W - 32:.0f}" height="{H - 32:.0f}" fill="none" stroke="{_INK}" stroke-width="1.5"/>'
 
     pw, ph = (W - 48) / 2, (H - 48 - tb) / 2
@@ -207,6 +208,20 @@ def sheet_svg(graph: dict, meta: dict | None = None) -> str:
     name = str(meta.get("project_name") or "KATHA Project")
     body += f'<text x="40" y="{ty + 34:.0f}" fill="{_INK}" font-size="24" font-weight="700" letter-spacing="2">{name}</text>'
     body += f'<text x="40" y="{ty + 60:.0f}" fill="{_PENCIL}" font-size="12" letter-spacing="1.5">GENERAL ARRANGEMENT · derived from 3D geometry</text>'
+    # code-compliance stamp
+    checks = run_code_checks(graph)
+    _p, _w, nf = tally(checks)
+    verdict = "PASS" if nf == 0 else "REVIEW"
+    vcol = "#2f7d4f" if nf == 0 else _PENCIL
+    body += (f'<text x="40" y="{ty + 94:.0f}" fill="{_MUTE}" font-size="10" letter-spacing="1">CODE</text>'
+             f'<rect x="80" y="{ty + 82:.0f}" width="64" height="16" rx="2" fill="{vcol}"/>'
+             f'<text x="112" y="{ty + 94:.0f}" text-anchor="middle" fill="#FFFFFF" font-size="10" font-weight="700">{verdict}</text>')
+    cx = 162.0
+    _COL = {"pass": "#2f7d4f", "warn": "#c98a2e", "fail": "#C8362D", "info": _MUTE}
+    for c in checks:
+        body += (f'<circle cx="{cx:.0f}" cy="{ty + 89:.0f}" r="4" fill="{_COL.get(c["status"], _MUTE)}"/>'
+                 f'<text x="{cx + 9:.0f}" y="{ty + 94:.0f}" fill="{_INK}" font-size="11">{c["label"]}</text>')
+        cx += 22 + len(c["label"]) * 6.6
     cells = [("SCALE", str(meta.get("scale") or "NTS")), ("DATE", str(meta.get("date") or "")),
              ("SHEET", str(meta.get("sheet") or "A-101")), ("REV", str(meta.get("rev") or "—"))]
     cw = 150.0
