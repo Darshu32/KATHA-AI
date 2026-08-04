@@ -72,3 +72,7 @@ manifold3d==3.5.2
 httpx==0.28.1
 pytest==8.3.4
 pytest-asyncio==0.25.3
+
+# Real-time collaborative editing (Yjs CRDT sync over websocket)
+pycrdt==0.14.2
+pycrdt-websocket==0.16.4

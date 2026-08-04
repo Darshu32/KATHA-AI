@@ -41,8 +41,14 @@ async def lifespan(_: FastAPI):
     The previous ``Base.metadata.create_all`` bootstrap was removed in
     Stage 0 — relying on it caused silent schema drift and broke
     audit/versioning guarantees.
+
+    Also runs the collaborative-editing Yjs sync server (``app.services.collab``)
+    for its lifetime so the ``/ws/design/{id}`` rooms have a running host.
     """
-    yield
+    from app.services.collab import websocket_server
+
+    async with websocket_server:
+        yield
 
 
 app = FastAPI(

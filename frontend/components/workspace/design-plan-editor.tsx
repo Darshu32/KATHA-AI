@@ -14,6 +14,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { design as designApi } from "@/lib/api-client";
 import { type GcsConstraint, preloadSolver, solveLayout } from "@/lib/gcs-solver";
 import { useAuthStore } from "@/lib/store";
+import { useDesignRoom } from "@/lib/use-design-room";
 
 type Vec = { x: number; y: number; z: number };
 type Dim = { length?: number; width?: number; height?: number; unit?: string };
@@ -42,6 +43,8 @@ export default function DesignPlanEditor({
   onSelectObject?: (id: string | null) => void;
 }) {
   const token = useAuthStore((s) => s.token);
+  // Real-time collaboration: shared positions + peer presence for this project.
+  const room = useDesignRoom(projectId, (token as string) ?? "", Boolean(projectId));
   const svgRef = useRef<SVGSVGElement>(null);
   // Live drag state lives in a ref (not React state) so pointerup reads the
   // final position synchronously — state updates are batched and would be stale.
@@ -68,7 +71,10 @@ export default function DesignPlanEditor({
     const d = o.dimensions ?? {};
     const l = toM(d.length, d.unit) || 0.5;
     const w = toM(d.width, d.unit) || 0.5;
-    const p = live[o.id!] ?? { x: o.position!.x ?? 0, z: o.position!.z ?? 0 };
+    // Position priority: my in-flight drag → shared-room value (local + remote
+    // edits) → the graph's saved position. So peers' drags appear live.
+    const rp = room.positions[o.id!];
+    const p = live[o.id!] ?? (rp ? { x: rp.x, z: rp.z } : { x: o.position!.x ?? 0, z: o.position!.z ?? 0 });
     return { id: o.id!, type: String(o.type ?? ""), l, w, x: p.x, z: p.z, structural: STRUCTURAL.has(String(o.type ?? "").toLowerCase()) };
   });
 
@@ -160,6 +166,7 @@ export default function DesignPlanEditor({
   const persist = (id: string, to: Vec) => {
     setLive((p) => ({ ...p, [id]: { x: to.x, z: to.z } }));
     designApi.updatePosition(token as string, projectId, id, to).catch(() => {});
+    room.setPosition(id, to); // broadcast to collaborators
   };
   const onUp = () => {
     const d = drag.current;
@@ -173,6 +180,7 @@ export default function DesignPlanEditor({
     setUndoStack((s) => [...s, { id: d.id, from, to }]);
     setRedoStack([]);
     designApi.updatePosition(token as string, projectId, d.id, to).catch(() => {});
+    room.setPosition(d.id, to); // broadcast to collaborators
     // Enforce any constraints on the dragged piece — linked pieces follow.
     void solveAndApply(constraints, d.id, { x: to.x, z: to.z });
   };
@@ -346,6 +354,15 @@ export default function DesignPlanEditor({
         <span className="pointer-events-none font-mono text-[9px] uppercase tracking-[0.12em] text-ink-mute/70">
           drag · shift-click to link
         </span>
+        {room.connected ? (
+          <span
+            className="pointer-events-none flex items-center gap-1 font-mono text-[9px] uppercase tracking-[0.12em] text-ink-soft"
+            title={`${room.peers} collaborator${room.peers === 1 ? "" : "s"} in this project`}
+          >
+            <span className="h-1.5 w-1.5 rounded-full bg-[#2f7d4f]" />
+            {room.peers > 1 ? `${room.peers} editing` : "live"}
+          </span>
+        ) : null}
       </div>
     </div>
   );

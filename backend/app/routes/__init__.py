@@ -14,6 +14,7 @@ from app.routes.assets import router as assets_router
 from app.routes.auth import router as auth_router
 from app.routes.brief import router as brief_router
 from app.routes.chat import router as chat_router
+from app.routes.collab import router as collab_router
 from app.routes.decisions import router as decisions_router
 from app.routes.design import router as design_router
 from app.routes.diagrams import router as diagrams_router
@@ -42,6 +43,8 @@ all_routers = [
     auth_router,
     brief_router,
     chat_router,
+    # Real-time collaborative editing (Yjs websocket) — /ws/design/{id}
+    collab_router,
     design_router,
     diagrams_router,
     drawings_router,
