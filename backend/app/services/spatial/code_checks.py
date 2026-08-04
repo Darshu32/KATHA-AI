@@ -70,12 +70,63 @@ def _chk(label: str, ok: bool, note: str, *, soft: bool = False) -> dict:
     return {"label": label, "status": "pass" if ok else ("warn" if soft else "fail"), "note": note}
 
 
+def _agg_check(label: str, rooms: list, ok_fn, note_ok, note_bad, *, soft: bool) -> dict:
+    """One check aggregated across every room: pass iff all rooms satisfy it,
+    else a warn (soft) or fail naming how many missed."""
+    fails = [rm for rm in rooms if not ok_fn(rm)]
+    if not fails:
+        return {"label": label, "status": "pass", "note": note_ok(len(rooms))}
+    return {"label": label, "status": "warn" if soft else "fail", "note": note_bad(fails, len(rooms))}
+
+
+def _multiroom_checks(sm, pack: dict, code: str) -> list[dict]:
+    """Habitable minimums checked over EVERY room and aggregated per criterion.
+
+    Ceiling height is universal (hard). Area / short-side stay soft — a small
+    service room (bath, utility) legitimately falls below the *habitable* minimum
+    and must not flip a whole plan to REVIEW. Opening-based checks (egress,
+    daylight) wait until openings are placed on multi-room walls.
+    """
+    rooms = sm.rooms
+    return [
+        _agg_check(
+            "Ceiling height", rooms,
+            lambda rm: rm.envelope.height >= pack["min_ceiling_m"],
+            lambda n: f"all {n} rooms ≥ {pack['min_ceiling_m']} m · {code}",
+            lambda fails, n: f"{len(fails)}/{n} rooms below {pack['min_ceiling_m']} m ceiling · {code}",
+            soft=False,
+        ),
+        _agg_check(
+            "Room area", rooms,
+            lambda rm: rm.area >= pack["min_area_m2"],
+            lambda n: f"all {n} rooms ≥ {pack['min_area_m2']} m² · {code}",
+            lambda fails, n: f"{len(fails)}/{n} below {pack['min_area_m2']} m² habitable (e.g. {fails[0].name}) · {code}",
+            soft=True,
+        ),
+        _agg_check(
+            "Min room dimension", rooms,
+            lambda rm: min(rm.envelope.length, rm.envelope.width) >= pack["min_short_side_m"],
+            lambda n: f"all {n} rooms ≥ {pack['min_short_side_m']} m short side · {code}",
+            lambda fails, n: f"{len(fails)}/{n} rooms below {pack['min_short_side_m']} m short side · {code}",
+            soft=True,
+        ),
+        {"label": "Openings", "status": "info",
+         "note": f"egress / daylight checked once openings are placed · {code}"},
+    ]
+
+
 def run_code_checks(graph: dict, region: str | None = None) -> list[dict]:
     """Return [{label, status: pass|warn|fail|info, note}] for the design, using
-    the minimums for ``region``'s jurisdiction (defaults to the home market)."""
+    the minimums for ``region``'s jurisdiction (defaults to the home market).
+
+    A solved multi-room plan is checked per-room and aggregated; a single room
+    keeps the full opening-aware check set below.
+    """
     sm = resolve_spatial_model(graph)
     pack = _pack_for(region)
     code = pack["code"]
+    if len(sm.rooms) >= 2:
+        return _multiroom_checks(sm, pack, code)
     if sm.kind != "interior" or sm.room is None:
         return [{"label": "Room code checks", "status": "info",
                  "note": f"{code} · site / exterior scope — N/A"}]

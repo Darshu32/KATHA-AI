@@ -29,6 +29,7 @@ from app.services.graph_render_reference import (
 )
 from app.services.image_service import generate_image, resolve_theme_visual_hint
 from app.services.knowledge_validator import validate_design_graph_async
+from app.services.layout_solver import maybe_solve_layout
 from app.services.standards.knowledge_service import resolve_standard as _resolve_standard
 from app.services.standards.mep_sizing import system_cost_estimate as _mep_system_cost
 from app.services.object_bboxes import compute_object_bboxes
@@ -318,24 +319,33 @@ def _mep_system_keys(project_type: str | None) -> dict[str, str]:
     }
 
 
-async def _mep_dimensions(graph_data: dict) -> dict:
-    """Extract room dimensions from a design graph, tolerant of both the
-    legacy top-level ``room`` shape and the serialised ``DesignGraph``
-    shape (which carries dims under ``spaces[0]``).
+def _total_floor_area_m2(graph_data: dict) -> float:
+    """Sum floor area (m²) over ALL rooms — multi-room aware.
 
-    The pipeline feeds ``DesignGraph.model_dump()`` here, which has NO
-    top-level ``room`` key — only ``spaces[]``. Reading ``room`` alone
-    silently returned no area, leaving the Cost tab empty. Fall back to
-    the first space so the MEP roll-up actually fires.
+    A single-room graph sums its one space (unchanged); a solved multi-room plan
+    sums every room, so MEP is costed on the whole footprint rather than just the
+    first space. Falls back to the legacy top-level ``room`` shape. Mirrors the
+    pipeline's mm-heuristic (a dimension > 20 is treated as millimetres).
     """
-    room = graph_data.get("room") or {}
-    dims = room.get("dimensions") or {}
-    if dims:
-        return dims
-    spaces = graph_data.get("spaces") or []
-    if spaces and isinstance(spaces[0], dict):
-        return spaces[0].get("dimensions") or {}
-    return {}
+
+    def _area(dims: dict) -> float:
+        try:
+            length = float(dims.get("length") or 0)
+            width = float(dims.get("width") or 0)
+        except (TypeError, ValueError):
+            return 0.0
+        length = length / 1000.0 if length > 20 else length
+        width = width / 1000.0 if width > 20 else width
+        return length * width if length > 0 and width > 0 else 0.0
+
+    total = 0.0
+    for space in graph_data.get("spaces") or []:
+        if isinstance(space, dict):
+            total += _area(space.get("dimensions") or {})
+    if total > 0:
+        return round(total, 4)
+    # Legacy single-room shape (top-level ``room``).
+    return round(_area((graph_data.get("room") or {}).get("dimensions") or {}), 4)
 
 
 async def _run_mep_cost(
@@ -353,20 +363,9 @@ async def _run_mep_cost(
     Returns ``None`` when there's no usable area — the cost terminal
     falls through to its no-MEP-cost-yet placeholder.
     """
-    dims = await _mep_dimensions(graph_data)
-    length = dims.get("length")
-    width = dims.get("width")
-    if not (length and width):
-        return None
-    try:
-        # Graph dims are in metres; if anything came through as mm it'd
-        # be >20, in which case treat as mm. The validator does this
-        # heuristic already; mirror it here to stay consistent.
-        l = float(length) / 1000.0 if float(length) > 20 else float(length)
-        w = float(width) / 1000.0 if float(width) > 20 else float(width)
-    except (TypeError, ValueError):
-        return None
-    area_m2 = l * w
+    # Sum floor area over ALL rooms so a multi-room plan is costed on its whole
+    # footprint, not just the first space.
+    area_m2 = _total_floor_area_m2(graph_data)
     if area_m2 <= 0:
         return None
 
@@ -769,6 +768,13 @@ async def run_initial_generation(
         drawing_type=drawing_type,
     )
     graph_data = design_graph.model_dump()
+
+    # Step 1b — Layout solve (Stage E). If the graph is a multi-room *program*
+    # (≥2 spaces, none placed), solve a non-overlapping floor plan so every
+    # downstream reader — kernel/drawings/IFC, estimate — sees real room
+    # positions. A deliberate no-op for single-room graphs (today's default),
+    # so existing behaviour is unchanged until program generation lands.
+    graph_data, _layout_solution = maybe_solve_layout(graph_data)
 
     # Step 2 — Persist (capture prompt so re-renders inherit context)
     version = await save_graph_version(

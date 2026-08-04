@@ -18,7 +18,7 @@ import ifcopenshell
 from ifcopenshell.api import run
 
 from app.services.graph_normalizer import normalize_graph
-from app.services.wall_model import derive_wall_model
+from app.services.wall_model import derive_multiroom_wall_model, derive_wall_model
 
 
 def _m(value) -> float:
@@ -170,6 +170,68 @@ def _add_walls_with_openings(model, body_context, storey, space, graph, room_h):
     return {"walls": len(walls_by_side), "openings": sum(len(w["openings"]) for w in model_walls["walls"])}
 
 
+def _placed_rooms(graph: dict) -> list[dict]:
+    """Spaces carrying an explicit position + dimensions → room dicts (metres).
+
+    Two or more switch ``export`` onto the multi-room path (one IfcSpace each).
+    Empty for a single unsolved room → the perimeter-wall path applies.
+    """
+    out: list[dict] = []
+    for i, s in enumerate(graph.get("spaces") or []):
+        if not isinstance(s, dict):
+            continue
+        pos, d = s.get("position"), s.get("dimensions")
+        if not (isinstance(pos, dict) and isinstance(d, dict)):
+            continue
+        L, Wd = _m(d.get("length")), _m(d.get("width"))
+        if L <= 0 or Wd <= 0:
+            continue
+        out.append({
+            "id": str(s.get("id") or s.get("name") or f"space_{i + 1}"),
+            "name": str(s.get("name") or s.get("id") or f"Room {i + 1}"),
+            "x": float(pos.get("x", 0) or 0), "z": float(pos.get("z", 0) or 0),
+            "length": L, "width": Wd, "height": _m(d.get("height")) or 3.0,
+        })
+    return out
+
+
+def _add_multiroom_spaces_and_walls(model, body_context, storey, rooms: list[dict]) -> dict:
+    """One IfcSpace per room + partition/exterior IfcWalls (Stage D), from the
+    shared ``derive_multiroom_wall_model``. Coordinates: graph x→IFC X, graph
+    z→IFC Y, height→IFC Z. Box profiles are centred on their placement, so a room
+    sits at its centre and a wall segment on its shared line."""
+    for r in rooms:
+        L, W, H = r["length"], r["width"], r["height"]
+        space = run("root.create_entity", model, ifc_class="IfcSpace", name=r["name"])
+        space.ObjectPlacement = _make_local_placement(
+            model, r["x"] + L / 2, r["z"] + W / 2, 0.0, relative_to=storey.ObjectPlacement
+        )
+        space.Representation = model.create_entity(
+            "IfcProductDefinitionShape",
+            Representations=[_box_body_rep(model, body_context, L, H, W)],
+        )
+        run("aggregate.assign_object", model, relating_object=storey, products=[space])
+        pset = run("pset.add_pset", model, product=space, name="KATHA_Design")
+        run("pset.edit_pset", model, pset=pset,
+            properties={"ObjectType": "room", "Room": r["id"], "Area_m2": round(L * W, 2), "Height_m": round(H, 3)})
+
+    segments = derive_multiroom_wall_model(rooms)
+    for seg in segments:
+        length = max(seg["end"] - seg["start"], 1e-3)
+        if seg["runs"] == "z":            # vertical wall: thin in X, long in Y
+            xdim, ydim, cx, cy = seg["thickness"], length, seg["at"], (seg["start"] + seg["end"]) / 2
+        else:                              # horizontal wall: long in X, thin in Y
+            xdim, ydim, cx, cy = length, seg["thickness"], (seg["start"] + seg["end"]) / 2, seg["at"]
+        wall = _place_box(model, body_context, storey, "IfcWall",
+                          f"Wall {'/'.join(seg['rooms'])}", (cx, cy, 0.0), xdim, ydim, seg["height"])
+        run("spatial.assign_container", model, relating_structure=storey, products=[wall])
+        pset = run("pset.add_pset", model, product=wall, name="KATHA_Design")
+        run("pset.edit_pset", model, pset=pset, properties={
+            "ObjectType": "wall", "Kind": seg["kind"], "Rooms": ",".join(seg["rooms"]),
+            "Thickness_m": round(seg["thickness"], 3), "Height_m": round(seg["height"], 3)})
+    return {"spaces": len(rooms), "walls": len(segments)}
+
+
 def export(spec: dict, graph: dict) -> dict:
     meta = spec.get("meta", {})
     project_name = meta.get("project_name") or "KATHA Project"
@@ -204,17 +266,23 @@ def export(spec: dict, graph: dict) -> dict:
     run("aggregate.assign_object", model, relating_object=site, products=[building])
     run("aggregate.assign_object", model, relating_object=building, products=[storey])
 
-    # Space (the room).
-    space = run("root.create_entity", model, ifc_class="IfcSpace", name=(room.get("type") or "Room"))
-    space.ObjectPlacement = _make_local_placement(model, 0, 0, 0, relative_to=storey.ObjectPlacement)
-    space.Representation = model.create_entity(
-        "IfcProductDefinitionShape",
-        Representations=[_box_body_rep(model, body_context, room_l, room_h, room_w)],
-    )
-    run("aggregate.assign_object", model, relating_object=storey, products=[space])
-
-    # Perimeter walls with real window/door voids (shared wall_model).
-    _add_walls_with_openings(model, body_context, storey, space, graph, room_h)
+    # Space(s) + walls. A solved multi-room plan (≥2 placed rooms) gets one
+    # IfcSpace per room and partition/exterior walls; otherwise the single room
+    # keeps its four perimeter walls with real window/door voids.
+    placed = _placed_rooms(graph)
+    if len(placed) >= 2:
+        _add_multiroom_spaces_and_walls(model, body_context, storey, placed)
+        container = storey  # furnishings attach to the storey
+    else:
+        space = run("root.create_entity", model, ifc_class="IfcSpace", name=(room.get("type") or "Room"))
+        space.ObjectPlacement = _make_local_placement(model, 0, 0, 0, relative_to=storey.ObjectPlacement)
+        space.Representation = model.create_entity(
+            "IfcProductDefinitionShape",
+            Representations=[_box_body_rep(model, body_context, room_l, room_h, room_w)],
+        )
+        run("aggregate.assign_object", model, relating_object=storey, products=[space])
+        _add_walls_with_openings(model, body_context, storey, space, graph, room_h)
+        container = space
 
     # Furnishings — one per object. Windows / doors / walls are handled by the
     # wall model above (as fillings / walls), so skip them here to avoid
@@ -238,13 +306,13 @@ def export(spec: dict, graph: dict) -> dict:
         cy = float(pos.get("z", 0))
         cz = float(pos.get("y", 0) or 0)
         item.ObjectPlacement = _make_local_placement(
-            model, cx - l / 2, cy - w / 2, cz, relative_to=space.ObjectPlacement
+            model, cx - l / 2, cy - w / 2, cz, relative_to=container.ObjectPlacement
         )
         item.Representation = model.create_entity(
             "IfcProductDefinitionShape",
             Representations=[_box_body_rep(model, body_context, l, h, w)],
         )
-        run("spatial.assign_container", model, relating_structure=space, products=[item])
+        run("spatial.assign_container", model, relating_structure=container, products=[item])
 
         # Property set with material + source.
         material_name = obj.get("material") or "unspecified"

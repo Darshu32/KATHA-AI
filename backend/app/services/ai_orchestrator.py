@@ -58,6 +58,34 @@ DESIGN_GRAPH_JSON_SCHEMA = {
                 "required": ["type", "dimensions"],
                 "additionalProperties": False,
             },
+            "rooms": {
+                "type": "array",
+                "description": (
+                    "Multi-room PROGRAM. Empty [] for a single-room design. For a "
+                    "multi-room design (apartment, house, office suite) list EACH "
+                    "room with a target floor area; a layout solver positions them."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "type": {"type": "string"},
+                        "area_sqm": {"type": "number"},
+                    },
+                    "required": ["id", "type", "area_sqm"],
+                    "additionalProperties": False,
+                },
+            },
+            "adjacencies": {
+                "type": "array",
+                "description": "Which rooms share a wall / connect, by room id. Empty [] for single-room.",
+                "items": {
+                    "type": "object",
+                    "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+                    "required": ["a", "b"],
+                    "additionalProperties": False,
+                },
+            },
             "style": {
                 "type": "object",
                 "properties": {
@@ -166,6 +194,8 @@ DESIGN_GRAPH_JSON_SCHEMA = {
         },
         "required": [
             "room",
+            "rooms",
+            "adjacencies",
             "style",
             "objects",
             "materials",
@@ -326,6 +356,40 @@ def _ai_response_to_design_graph(
     style_data = data.get("style", {})
     dims = room.get("dimensions", {})
 
+    # Multi-room program (Stage F): when the LLM emitted ≥2 rooms, build the
+    # spaces from that program — target areas, NO positions — and carry the
+    # adjacencies. The layout solver (pipeline seam) then places them. A single
+    # room falls through to the original one-space shape below.
+    program = [r for r in (data.get("rooms") or []) if isinstance(r, dict)]
+    if len(program) >= 2:
+        spaces: list[dict] = []
+        for i, r in enumerate(program):
+            rtype = str(r.get("type") or "room")
+            try:
+                area = float(r.get("area_sqm") or 0)
+            except (TypeError, ValueError):
+                area = 0.0
+            spaces.append({
+                "id": str(r.get("id") or f"room_{i + 1}"),
+                "name": rtype.replace("_", " ").title(),
+                "room_type": rtype,
+                "area": area if area > 0 else 12.0,
+            })
+        graph_adjacencies = [
+            {"a": str(a["a"]), "b": str(a["b"])}
+            for a in (data.get("adjacencies") or [])
+            if isinstance(a, dict) and a.get("a") and a.get("b")
+        ]
+    else:
+        spaces = [{
+            "id": "space_001",
+            "name": room.get("type", "Room"),
+            "room_type": room.get("type", "living_room"),
+            "dimensions": dims,
+            "objects": [obj["id"] for obj in data.get("objects", [])],
+        }]
+        graph_adjacencies = []
+
     # Knowledge validation — attached to constraints for downstream UI / UX.
     report = _run_knowledge_validation(data)
     try:
@@ -369,15 +433,8 @@ def _ai_response_to_design_graph(
             secondary=style_data.get("secondary", []),
         ),
         site=SiteInfo(unit="metric"),
-        spaces=[
-            {
-                "id": "space_001",
-                "name": room.get("type", "Room"),
-                "room_type": room.get("type", "living_room"),
-                "dimensions": dims,
-                "objects": [obj["id"] for obj in data.get("objects", [])],
-            }
-        ],
+        spaces=spaces,
+        adjacencies=graph_adjacencies,
         geometry=[],
         objects=data.get("objects", []),
         materials=data.get("materials", []),

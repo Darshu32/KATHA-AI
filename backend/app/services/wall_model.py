@@ -27,6 +27,7 @@ Coordinate model (post-normalization, metres):
 
 from __future__ import annotations
 
+from collections import defaultdict
 from typing import Any
 
 # Default wall thickness (metres) when the graph doesn't specify one. A neutral
@@ -190,3 +191,137 @@ def wall_by_side(model: dict, side: str) -> dict | None:
         if wall.get("side") == side:
             return wall
     return None
+
+
+# ── Multi-room walls (shared-partition aware) — Stage C of the layout cascade ──
+#
+# Given several *placed* rooms, emit wall SEGMENTS such that a wall shared by two
+# rooms appears ONCE — a "partition" tagged with both rooms, centered on the
+# shared line — and an edge facing outside is an "exterior" segment tagged with
+# its single room. A coordinate sweep (segment at every endpoint, then merge
+# equal-classification neighbours) makes T-junctions and partial overlaps come
+# out right. The single-room ``derive_wall_model`` above is deliberately left
+# untouched; this is the parallel path the multi-room consumers (Stage D) adopt.
+#
+# Convention: solved room rectangles are wall CENTERLINES — a partition sits on
+# the shared boundary line (``at``), so the footprint stays exact.
+
+
+def _snap(v: float) -> float:
+    return round(float(v), 3)
+
+
+def _covering(edges: list[tuple[float, float, dict]], a: float, b: float, eps: float = 1e-6) -> dict | None:
+    """The single room whose edge interval covers ``[a, b]`` (or None). Rooms in
+    a tiling never overlap on one side of a line, so at most one matches."""
+    for lo, hi, room in edges:
+        if lo <= a + eps and hi >= b - eps:
+            return room
+    return None
+
+
+def _merge_cells(cells: list[tuple]) -> list[list]:
+    """Coalesce contiguous cells sharing a (kind, room-set) classification."""
+    merged: list[list] = []
+    for kind, key, a, b, rooms in cells:
+        prev = merged[-1] if merged else None
+        if prev and prev[0] == kind and prev[1] == key and abs(prev[3] - a) < 1e-6:
+            prev[3] = b
+        else:
+            merged.append([kind, key, a, b, rooms])
+    return merged
+
+
+def _sweep_axis(rooms: list[dict], axis: str, thickness: float) -> list[dict]:
+    """Emit wall segments for one orientation. ``axis='z'`` → vertical walls
+    (run along z, fixed x); ``axis='x'`` → horizontal walls (run along x,
+    fixed z)."""
+    if axis == "z":
+        line_lo, line_ext = (lambda r: r["x"]), (lambda r: r["length"])
+        span_lo, span_ext = (lambda r: r["z"]), (lambda r: r["width"])
+    else:
+        line_lo, line_ext = (lambda r: r["z"]), (lambda r: r["width"])
+        span_lo, span_ext = (lambda r: r["x"]), (lambda r: r["length"])
+
+    # Group room edges by the line they sit on. "plus" = the room lies on the
+    # +line side of this coordinate (its low edge); "minus" = the -line side.
+    groups: dict[float, dict[str, list]] = defaultdict(lambda: {"plus": [], "minus": []})
+    for r in rooms:
+        lo, hi = _snap(line_lo(r)), _snap(line_lo(r) + line_ext(r))
+        a, b = _snap(span_lo(r)), _snap(span_lo(r) + span_ext(r))
+        groups[lo]["plus"].append((a, b, r))
+        groups[hi]["minus"].append((a, b, r))
+
+    segments: list[dict] = []
+    for lc in sorted(groups):
+        plus, minus = groups[lc]["plus"], groups[lc]["minus"]
+        breakpoints = sorted({p for edge in (plus + minus) for p in (edge[0], edge[1])})
+        cells: list[tuple] = []
+        for a, b in zip(breakpoints, breakpoints[1:]):
+            pr = _covering(plus, a, b)   # room on the +line side
+            mr = _covering(minus, a, b)  # room on the -line side
+            if pr and mr:
+                cells.append(("partition", frozenset((pr["id"], mr["id"])), a, b, [mr, pr]))
+            elif pr:
+                cells.append(("exterior", frozenset((pr["id"],)), a, b, [pr]))
+            elif mr:
+                cells.append(("exterior", frozenset((mr["id"],)), a, b, [mr]))
+            # neither → a gap in the tiling; nothing to build
+        for kind, _key, a, b, rms in _merge_cells(cells):
+            segments.append(
+                {
+                    "runs": axis,
+                    "at": lc,
+                    "start": a,
+                    "end": b,
+                    "height": round(max(rm["height"] for rm in rms), 4),
+                    "thickness": thickness,
+                    "kind": kind,
+                    "rooms": sorted({rm["id"] for rm in rms}),
+                    "openings": [],
+                }
+            )
+    return segments
+
+
+def derive_multiroom_wall_model(
+    rooms: list[dict],
+    thickness: float = WALL_THICKNESS_M,
+    default_height: float = 2.7,
+) -> list[dict]:
+    """Shared-partition-aware walls for a placed multi-room plan.
+
+    Each input room is ``{id, x, z, length, width, height?}`` (metres; ``x``/``z``
+    the min corner, ``length`` spanning x, ``width`` spanning z). Returns a flat
+    list of wall segments::
+
+        {id, runs: "x"|"z", at, start, end, height, thickness,
+         kind: "exterior"|"partition", rooms: [one or two ids], openings: []}
+
+    A single room yields its four exterior walls (no partitions), so this also
+    subsumes the single-room case. Opening assignment is intentionally deferred
+    (Stage C derives geometry; placing windows/doors into these segments is the
+    follow-on) — ``openings`` is always empty here.
+    """
+    norm: list[dict] = []
+    for r in rooms:
+        if not isinstance(r, dict):
+            continue
+        length, width = _num(r.get("length")), _num(r.get("width"))
+        if length <= 0 or width <= 0:
+            continue
+        norm.append(
+            {
+                "id": str(r.get("id") or f"room_{len(norm) + 1}"),
+                "x": _num(r.get("x")),
+                "z": _num(r.get("z")),
+                "length": length,
+                "width": width,
+                "height": _num(r.get("height")) or default_height,
+            }
+        )
+
+    segments = _sweep_axis(norm, "z", thickness) + _sweep_axis(norm, "x", thickness)
+    for i, seg in enumerate(segments):
+        seg["id"] = f"wall_{i + 1}"
+    return segments

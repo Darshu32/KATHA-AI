@@ -15,12 +15,14 @@ from app.models.spatial_spec import (
     Dimensions,
     Opening,
     RoomEnvelope,
+    RoomPlacement,
     SpatialModel,
     SpatialObject,
     Vec3,
     Wall,
+    WallSegment,
 )
-from app.services.wall_model import derive_wall_model
+from app.services.wall_model import derive_multiroom_wall_model, derive_wall_model
 
 _UNIT = {"mm": 1e-3, "cm": 1e-2, "m": 1.0, "metre": 1.0, "meter": 1.0,
          "ft": 0.3048, "feet": 0.3048, "in": 0.0254}
@@ -63,6 +65,56 @@ def _is_interior(graph: dict, length: float, width: float, height: float) -> boo
         if isinstance(o, dict) and str(o.get("type", "")).lower() in _SITE_TYPES:
             return False
     return True
+
+
+def _room_placements(graph: dict) -> list[RoomPlacement]:
+    """Every space carrying an explicit position + dimensions → a typed
+    placement. Populated once the layout solver has placed the rooms (via
+    ``layout_solver.apply_layout_to_graph``); empty for a single unsolved room or
+    an exterior/site graph, where the singular ``room`` still applies.
+    """
+    out: list[RoomPlacement] = []
+    for i, space in enumerate(graph.get("spaces") or []):
+        if not isinstance(space, dict):
+            continue
+        pos, dims = space.get("position"), space.get("dimensions")
+        if not (isinstance(pos, dict) and isinstance(dims, dict)):
+            continue
+        u = dims.get("unit")
+        length, width = _to_m(dims.get("length"), u), _to_m(dims.get("width"), u)
+        if length <= 0 or width <= 0:
+            continue
+        rid = str(space.get("id") or space.get("name") or f"space_{i + 1}")
+        out.append(
+            RoomPlacement(
+                id=rid,
+                name=str(space.get("name") or rid),
+                position=Vec3(x=_to_m(pos.get("x"), u), y=0.0, z=_to_m(pos.get("z"), u)),
+                envelope=RoomEnvelope(
+                    length=length, width=width, height=_to_m(dims.get("height"), u) or 2.8
+                ),
+            )
+        )
+    return out
+
+
+def _multiroom_walls(placements: list[RoomPlacement], thickness: float) -> list[WallSegment]:
+    """Partition-aware wall segments for the placed rooms (Stage C). Empty when
+    there are no placements — the single-room ``walls`` still apply."""
+    if not placements:
+        return []
+    room_dicts = [
+        {
+            "id": p.id,
+            "x": p.position.x,
+            "z": p.position.z,
+            "length": p.envelope.length,
+            "width": p.envelope.width,
+            "height": p.envelope.height,
+        }
+        for p in placements
+    ]
+    return [WallSegment(**seg) for seg in derive_multiroom_wall_model(room_dicts, thickness=thickness)]
 
 
 def _constraints(graph: dict) -> list[Constraint]:
@@ -136,11 +188,15 @@ def resolve_spatial_model(graph: dict) -> SpatialModel:
     # Basic circulation seed: every opening connects the room to the outside.
     adjacencies = [Adjacency(a="room", b="outside", via=o.source_id) for w in walls for o in w.openings]
 
+    placements = _room_placements(graph)
+
     return SpatialModel(
         kind="interior" if interior else "exterior",
         room=room,
+        rooms=placements,
         thickness=thickness,
         walls=walls,
+        wall_segments=_multiroom_walls(placements, thickness),
         objects=objects,
         adjacencies=adjacencies,
         constraints=_constraints(graph),
