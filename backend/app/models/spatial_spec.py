@@ -43,6 +43,27 @@ class RoomEnvelope(BaseModel):
     height: float
 
 
+class RoomPlacement(BaseModel):
+    """A room positioned within a multi-room plan.
+
+    ``position`` is the room's *minimum corner* in the floor plane (x = length
+    axis, z = depth axis, y = 0). The room occupies
+    ``[position.x, position.x + envelope.length]`` along x and
+    ``[position.z, position.z + envelope.width]`` along z. A single-room model
+    has one placement at the origin — equivalent to reading ``room`` directly.
+    """
+
+    id: str
+    name: str = ""
+    position: Vec3 = Field(default_factory=Vec3)
+    envelope: RoomEnvelope
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def area(self) -> float:
+        return self.envelope.length * self.envelope.width
+
+
 class Opening(BaseModel):
     """A window or door punched into a wall (voids it; not a floating box)."""
 
@@ -68,6 +89,31 @@ class Wall(BaseModel):
     height: float
     thickness: float
     openings: list[Opening] = Field(default_factory=list)
+
+
+class WallSegment(BaseModel):
+    """A wall in a *multi-room* plan (Stage C). Where the single-room ``Wall`` is
+    one of four named perimeter sides, a segment is either an ``exterior`` face
+    of one room or a ``partition`` shared by two rooms — emitted once, centered
+    on the shared line. ``runs`` is the axis it spans, ``at`` the fixed
+    coordinate, ``start``/``end`` its extent along ``runs``.
+    """
+
+    id: str
+    runs: Literal["x", "z"]
+    at: float
+    start: float
+    end: float
+    height: float
+    thickness: float
+    kind: Literal["exterior", "partition"]
+    rooms: list[str] = Field(default_factory=list)  # 1 room (exterior) or 2 (partition)
+    openings: list[Opening] = Field(default_factory=list)
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def length(self) -> float:
+        return abs(self.end - self.start)
 
 
 class SpatialObject(BaseModel):
@@ -107,8 +153,17 @@ class SpatialModel(BaseModel):
 
     kind: Literal["interior", "exterior"] = "interior"
     room: RoomEnvelope | None = None       # None for site-scale / exterior
+    # Multi-room plans (solved by app.services.layout_solver) populate this.
+    # ``room`` stays the primary (first) envelope so every existing single-room
+    # consumer — kernel, drawings, IFC — is unaffected until they opt in.
+    # Empty for a single unsolved room / exterior.
+    rooms: list[RoomPlacement] = Field(default_factory=list)
     thickness: float = 0.15
     walls: list[Wall] = Field(default_factory=list)
+    # Multi-room partition-aware walls (Stage C). Populated alongside ``rooms``;
+    # ``walls`` (the single-room 4-side perimeter) stays for existing consumers
+    # until Stage D migrates them. Empty for a single unsolved room / exterior.
+    wall_segments: list[WallSegment] = Field(default_factory=list)
     objects: list[SpatialObject] = Field(default_factory=list)
     adjacencies: list[Adjacency] = Field(default_factory=list)
     constraints: list[Constraint] = Field(default_factory=list)

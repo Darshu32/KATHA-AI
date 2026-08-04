@@ -74,6 +74,22 @@ You MUST follow these rules strictly:
 11. Do NOT hallucinate unknown architectural elements.
 12. Keep the design practical and buildable.
 
+13. SINGLE ROOM vs MULTI-ROOM:
+   * If the prompt describes ONE room (e.g. "a modern living room", "a bedroom"),
+     fill `room` with its type + dimensions, put the furniture in `objects`, and
+     leave `rooms` and `adjacencies` as EMPTY arrays [].
+   * If the prompt describes MULTIPLE rooms (an apartment, a house, "2BHK",
+     "3-bedroom", a clinic, an office with zones), then:
+       - List EVERY room in `rooms`, each with a unique `id` (e.g. "living",
+         "kitchen", "master", "bath1"), a `type`, and a realistic target
+         `area_sqm` that respects space standards.
+       - Include a circulation space (hall / corridor / foyer) and connect the
+         rooms through it in `adjacencies` (pairs of room ids that share a
+         wall / doorway, e.g. {"a":"hall","b":"living"}, {"a":"master","b":"bath1"}).
+       - Still fill `room` with the primary/largest room for compatibility.
+       - Do NOT assign room positions — a layout solver places them from the
+         program. `objects` (furniture) is optional for multi-room designs.
+
 Your goal is to create a structured design representation that can be used for:
 
 * 2D rendering

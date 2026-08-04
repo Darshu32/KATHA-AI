@@ -29,6 +29,9 @@ class DesignGraph(BaseModel):
     style: StyleProfile
     site: SiteInfo = Field(default_factory=SiteInfo)
     spaces: list[dict] = Field(default_factory=list)
+    # Multi-room programs carry which spaces connect (by space id) — the input
+    # the layout solver reads. Empty for a single-room design.
+    adjacencies: list[dict] = Field(default_factory=list)
     geometry: list[dict] = Field(default_factory=list)
     objects: list[dict] = Field(default_factory=list)
     materials: list[dict] = Field(default_factory=list)

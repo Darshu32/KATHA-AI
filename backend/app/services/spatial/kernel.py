@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 import numpy as np
 from manifold3d import Manifold
 
-from app.services.wall_model import derive_wall_model
+from app.services.wall_model import derive_multiroom_wall_model, derive_wall_model
 
 # ── units ────────────────────────────────────────────────────────────────────
 _UNIT_TO_M = {"mm": 1e-3, "cm": 1e-2, "m": 1.0, "metre": 1.0, "meter": 1.0,
@@ -189,6 +189,64 @@ def _wall_solids(graph: dict) -> tuple[list[Solid], set[str]]:
     return out, opening_ids
 
 
+def _placed_rooms(graph: dict) -> list[dict]:
+    """Spaces carrying an explicit position + dimensions → room dicts (metres).
+
+    Non-empty only for a *solved* plan (after ``layout_solver.apply_layout_to_graph``);
+    two or more of these switch ``build_scene`` onto the multi-room path.
+    """
+    out: list[dict] = []
+    for i, s in enumerate(graph.get("spaces") or []):
+        if not isinstance(s, dict):
+            continue
+        pos, d = s.get("position"), s.get("dimensions")
+        if not (isinstance(pos, dict) and isinstance(d, dict)):
+            continue
+        unit = d.get("unit")
+        L, Wd = _to_m(d.get("length"), unit), _to_m(d.get("width"), unit)
+        if L <= 0 or Wd <= 0:
+            continue
+        out.append({
+            "id": str(s.get("id") or s.get("name") or f"space_{i + 1}"),
+            "x": _to_m(pos.get("x"), unit), "z": _to_m(pos.get("z"), unit),
+            "length": L, "width": Wd,
+            "height": _to_m(d.get("height"), unit) or _DEFAULT_ROOM_H,
+        })
+    return out
+
+
+def _segment_box(seg: dict):
+    """A wall segment → a box centered on its line (centerline convention)."""
+    t = float(seg["thickness"])
+    h = float(seg["height"]) or _DEFAULT_ROOM_H
+    a, b, at = float(seg["start"]), float(seg["end"]), float(seg["at"])
+    length = max(b - a, 1e-3)
+    if seg["runs"] == "z":            # vertical wall: thin in x, long in z
+        return _box(t, h, length, at, 0.0, (a + b) / 2)
+    return _box(length, h, t, (a + b) / 2, 0.0, at)  # horizontal: long in x, thin in z
+
+
+def _multiroom_solids(rooms: list[dict]) -> list[Solid]:
+    """A floor slab per room + partition/exterior wall solids from the shared
+    ``derive_multiroom_wall_model``. Walls are solid (openings are a later
+    increment); each is tagged with the room(s) it bounds."""
+    solids: list[Solid] = []
+    fc = _TYPE_DEFAULT["floor"]
+    for r in rooms:
+        solids.append(Solid(
+            f"floor_{r['id']}", f"Floor · {r['id']}", "floor", fc,
+            _box(r["length"], 0.05, r["width"], r["x"] + r["length"] / 2, -0.05, r["z"] + r["width"] / 2),
+        ))
+    wc = _TYPE_DEFAULT["wall"]
+    # Use the shared default thickness so the 3D matches the IFC export exactly.
+    for seg in derive_multiroom_wall_model(rooms):
+        label = "/".join(seg["rooms"])
+        solids.append(Solid(
+            seg["id"], f"Wall · {label}", "wall", wc, _segment_box(seg), side=None,
+        ))
+    return solids
+
+
 def build_scene(graph: dict) -> tuple[list[Solid], tuple, str]:
     """Spec → (solids with meshes, scene AABB, kind) where kind∈{interior,exterior}."""
     materials_by_key: dict = {}
@@ -233,9 +291,14 @@ def build_scene(graph: dict) -> tuple[list[Solid], tuple, str]:
 
     opening_ids: set[str] = set()
     if interior:
-        # Floor + four perimeter walls with real window/door openings cut in.
-        wall_solids, opening_ids = _wall_solids(graph)
-        solids.extend(wall_solids)
+        placed = _placed_rooms(graph)
+        if len(placed) >= 2:
+            # Multi-room: floor-per-room + shared-partition walls (no openings yet).
+            solids.extend(_multiroom_solids(placed))
+        else:
+            # Single room: floor + four perimeter walls with real openings cut in.
+            wall_solids, opening_ids = _wall_solids(graph)
+            solids.extend(wall_solids)
     else:
         # Site-scale: a ground plane under the massing.
         cxz = _center_xz(body)
