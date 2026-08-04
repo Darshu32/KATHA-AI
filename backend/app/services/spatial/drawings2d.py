@@ -17,7 +17,7 @@ from __future__ import annotations
 
 from manifold3d import Manifold
 
-from app.services.spatial.code_checks import run_code_checks, tally
+from app.services.spatial.code_checks import code_label, run_code_checks, tally
 from app.services.spatial.kernel import build_scene
 
 _INK = "#1A1A1A"
@@ -207,9 +207,11 @@ def sheet_svg(graph: dict, meta: dict | None = None) -> str:
     body += f'<rect x="24" y="{ty:.0f}" width="{W - 48:.0f}" height="{tb:.0f}" fill="none" stroke="{_INK}" stroke-width="1.2"/>'
     name = str(meta.get("project_name") or "KATHA Project")
     body += f'<text x="40" y="{ty + 34:.0f}" fill="{_INK}" font-size="24" font-weight="700" letter-spacing="2">{name}</text>'
-    body += f'<text x="40" y="{ty + 60:.0f}" fill="{_PENCIL}" font-size="12" letter-spacing="1.5">GENERAL ARRANGEMENT · derived from 3D geometry</text>'
-    # code-compliance stamp
-    checks = run_code_checks(graph)
+    region = meta.get("region")
+    body += (f'<text x="40" y="{ty + 60:.0f}" fill="{_PENCIL}" font-size="12" letter-spacing="1.5">'
+             f'GENERAL ARRANGEMENT · derived from 3D geometry · checked to {code_label(region)}</text>')
+    # code-compliance stamp (jurisdiction-specific minimums)
+    checks = run_code_checks(graph, region=region)
     _p, _w, nf = tally(checks)
     verdict = "PASS" if nf == 0 else "REVIEW"
     vcol = "#2f7d4f" if nf == 0 else _PENCIL

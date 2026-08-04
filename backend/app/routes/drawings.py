@@ -300,7 +300,7 @@ async def geometry_sheet(
     if version is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No versions found")
     graph = version.graph_data or {}
-    meta = {"project_name": project.name, "scale": "NTS", "sheet": "A-101"}
+    meta = {"project_name": project.name, "scale": "NTS", "sheet": "A-101", "region": project.region}
     try:
         if format == "pdf":
             data, media = sheet_pdf(graph, meta), "application/pdf"
