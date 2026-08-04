@@ -798,6 +798,31 @@ export const design = {
     const blob = await res.blob();
     return { blob, filename, contentType };
   },
+
+  /** Download the geometry-true general-arrangement sheet (plan + section +
+   *  elevation with title block + code stamp) as a Blob. Cut/projected from the
+   *  real 3D kernel solids — distinct from the document/CAD exporters above. */
+  exportDrawingSheet: async (
+    token: string,
+    projectId: string,
+    format: "svg" | "pdf" | "dxf",
+  ): Promise<{ blob: Blob; filename: string; contentType: string }> => {
+    const res = await fetch(
+      `${API_BASE}/projects/${projectId}/drawings/sheet?format=${format}`,
+      { method: "GET", headers: token ? { Authorization: `Bearer ${token}` } : undefined },
+    );
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new ApiError(res.status, body);
+    }
+    const contentType = res.headers.get("Content-Type") ?? "application/octet-stream";
+    const disposition = res.headers.get("Content-Disposition") ?? "";
+    const match = disposition.match(/filename="([^"]+)"/);
+    // SVG renders inline server-side (no attachment header), so default a name.
+    const filename = match?.[1] ?? `${projectId}-sheet.${format}`;
+    const blob = await res.blob();
+    return { blob, filename, contentType };
+  },
 };
 
 // ── Notes (Phase 1 — per-conversation server-side notebooks) ───────────────

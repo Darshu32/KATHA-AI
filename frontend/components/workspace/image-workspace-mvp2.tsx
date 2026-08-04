@@ -2977,7 +2977,13 @@ function CostTab({
  * Data). Click triggers design.exportFile() and downloads the blob. */
 const EXPORT_FAMILIES: {
   family: string;
-  formats: { id: import("@/lib/types").ExportFormat | string; label: string; ext: string }[];
+  formats: {
+    id: import("@/lib/types").ExportFormat | string;
+    label: string;
+    ext: string;
+    // Geometry-true drawing sheets route to /drawings/sheet, not /export.
+    drawings?: "svg" | "pdf" | "dxf";
+  }[];
 }[] = [
   {
     family: "Documents",
@@ -2987,6 +2993,16 @@ const EXPORT_FAMILIES: {
       { id: "xlsx", label: "Excel",       ext: ".xlsx" },
       { id: "pptx", label: "PowerPoint",  ext: ".pptx" },
       { id: "html", label: "HTML Viewer", ext: ".html" },
+    ],
+  },
+  {
+    // Geometry-true general-arrangement sheet (plan + section + elevation,
+    // title block + code stamp) cut from the real kernel solids.
+    family: "Drawings",
+    formats: [
+      { id: "sheet:pdf", label: "GA Sheet", ext: ".pdf", drawings: "pdf" },
+      { id: "sheet:dxf", label: "GA Sheet (CAD)", ext: ".dxf", drawings: "dxf" },
+      { id: "sheet:svg", label: "GA Sheet (vector)", ext: ".svg", drawings: "svg" },
     ],
   },
   {
@@ -3068,7 +3084,7 @@ function ExportModal({
 
   if (!open) return null;
 
-  const download = async (format: string, label: string) => {
+  const download = async (format: string, label: string, drawings?: "svg" | "pdf" | "dxf") => {
     if (!projectId) {
       notify({
         type: "warning",
@@ -3079,12 +3095,14 @@ function ExportModal({
     }
     setDownloading(format);
     try {
-      const { blob, filename } = await designApi.exportFile(
-        token,
-        projectId,
-        format as import("@/lib/types").ExportFormat,
-        latestVersion ?? undefined,
-      );
+      const { blob, filename } = drawings
+        ? await designApi.exportDrawingSheet(token, projectId, drawings)
+        : await designApi.exportFile(
+            token,
+            projectId,
+            format as import("@/lib/types").ExportFormat,
+            latestVersion ?? undefined,
+          );
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
       a.href = url;
@@ -3144,14 +3162,16 @@ function ExportModal({
               </div>
               <div className="grid grid-cols-2 gap-2">
                 {g.formats.map((f) => {
-                  const isAvailable = !available || available.has(f.id);
+                  // Drawing sheets have their own endpoint, so they're always
+                  // available (not gated on the /export registry format list).
+                  const isAvailable = !!f.drawings || !available || available.has(f.id);
                   const isDownloading = downloading === f.id;
                   return (
                     <button
                       key={f.id}
                       type="button"
                       disabled={!isAvailable || isDownloading || !projectId}
-                      onClick={() => download(f.id, f.label)}
+                      onClick={() => download(f.id, f.label, f.drawings)}
                       className={`px-3 py-2 text-left border border-hairline rounded-md bg-paper hover:bg-paper-deep/40 hover:border-graphite transition-colors ${
                         !isAvailable || !projectId ? "opacity-40 cursor-not-allowed" : ""
                       }`}
