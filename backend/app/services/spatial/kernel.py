@@ -276,6 +276,11 @@ def build_scene(graph: dict) -> tuple[list[Solid], tuple, str]:
 
     room_l, room_w, room_h = _room_dims(graph)
     interior = _is_interior(graph, room_l, room_w, room_h)
+    # An explicit architectural / exterior / product scope forces the object
+    # render path (ground + solids), not the interior walls path.
+    scope = str(graph.get("design_type") or "").lower()
+    if scope in ("architecture", "exterior", "product"):
+        interior = False
 
     raw = []
     for obj in graph.get("objects") or []:
@@ -288,10 +293,11 @@ def build_scene(graph: dict) -> tuple[list[Solid], tuple, str]:
         h = _to_m(d.get("height"), unit) or 0.4
         p = obj.get("position") or {}
         cx, cz = float(p.get("x", 0) or 0), float(p.get("z", 0) or 0)
-        # Floor-place furniture; keep the authored height only for wall/ceiling
-        # items. (My multi-room furniture is already y=0, so this is a no-op for it.)
+        # Floor-place furniture in INTERIORS (the LLM's vertical coord is
+        # unreliable there). Keep the authored height for wall/ceiling items, and
+        # for exterior massing (multi-storey volumes must keep their level).
         otype = str(obj.get("type") or "").lower()
-        cy = float(p.get("y", 0) or 0) if otype in _WALL_MOUNTED else 0.0
+        cy = 0.0 if (interior and otype not in _WALL_MOUNTED) else float(p.get("y", 0) or 0)
         rot = (obj.get("rotation") or {}).get("y", 0) or 0
         raw.append((obj, _box(l, h, w, cx, cy, cz, float(rot))))
 
@@ -350,7 +356,7 @@ def build_scene(graph: dict) -> tuple[list[Solid], tuple, str]:
         if len(s.verts):
             lo = np.minimum(lo, s.verts.min(0))
             hi = np.maximum(hi, s.verts.max(0))
-    kind = "interior" if interior else "exterior"
+    kind = "product" if scope == "product" else ("interior" if interior else "exterior")
     return solids, (lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]), kind
 
 

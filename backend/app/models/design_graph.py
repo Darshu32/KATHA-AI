@@ -25,7 +25,7 @@ class AssetBundle(BaseModel):
 class DesignGraph(BaseModel):
     project_id: str
     version: int = 1
-    design_type: Literal["interior", "architecture"] = "interior"
+    design_type: Literal["interior", "architecture", "product"] = "interior"
     style: StyleProfile
     site: SiteInfo = Field(default_factory=SiteInfo)
     spaces: list[dict] = Field(default_factory=list)

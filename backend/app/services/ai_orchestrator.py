@@ -86,6 +86,77 @@ DESIGN_GRAPH_JSON_SCHEMA = {
                     "additionalProperties": False,
                 },
             },
+            "massing": {
+                "type": "array",
+                "description": (
+                    "Building MASSING for an EXTERIOR / architectural-form design "
+                    "(a building or house exterior, facade, or massing study). "
+                    "Empty [] for interior designs. Each entry is a volume — a "
+                    "floor, wing, block, or roof — positioned (metres) to form the "
+                    "building: stack floors by increasing y; place wings/garage "
+                    "beside the main mass."
+                ),
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "id": {"type": "string"},
+                        "type": {"type": "string"},
+                        "position": {
+                            "type": "object",
+                            "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "z": {"type": "number"}},
+                            "required": ["x", "y", "z"],
+                            "additionalProperties": False,
+                        },
+                        "dimensions": {
+                            "type": "object",
+                            "properties": {"length": {"type": "number"}, "width": {"type": "number"}, "height": {"type": "number"}},
+                            "required": ["length", "width", "height"],
+                            "additionalProperties": False,
+                        },
+                        "material": {"type": "string"},
+                    },
+                    "required": ["id", "type", "position", "dimensions", "material"],
+                    "additionalProperties": False,
+                },
+            },
+            "product": {
+                "type": "object",
+                "description": (
+                    "A single FURNITURE / PRODUCT design (a chair, table, lamp, "
+                    "sofa, etc.) as a set of PARTS. Leave ``parts`` empty [] for "
+                    "interior / architecture designs."
+                ),
+                "properties": {
+                    "type": {"type": "string"},
+                    "parts": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "id": {"type": "string"},
+                                "type": {"type": "string"},
+                                "position": {
+                                    "type": "object",
+                                    "properties": {"x": {"type": "number"}, "y": {"type": "number"}, "z": {"type": "number"}},
+                                    "required": ["x", "y", "z"],
+                                    "additionalProperties": False,
+                                },
+                                "dimensions": {
+                                    "type": "object",
+                                    "properties": {"length": {"type": "number"}, "width": {"type": "number"}, "height": {"type": "number"}},
+                                    "required": ["length", "width", "height"],
+                                    "additionalProperties": False,
+                                },
+                                "material": {"type": "string"},
+                            },
+                            "required": ["id", "type", "position", "dimensions", "material"],
+                            "additionalProperties": False,
+                        },
+                    },
+                },
+                "required": ["type", "parts"],
+                "additionalProperties": False,
+            },
             "style": {
                 "type": "object",
                 "properties": {
@@ -196,6 +267,8 @@ DESIGN_GRAPH_JSON_SCHEMA = {
             "room",
             "rooms",
             "adjacencies",
+            "massing",
+            "product",
             "style",
             "objects",
             "materials",
@@ -345,6 +418,81 @@ def _run_knowledge_validation(data: dict) -> dict | None:
         return None
 
 
+def _architecture_graph(data, project_id, massing, style_data, theme_changes):
+    """Build an exterior/architectural DesignGraph from massing volumes (no
+    interior rooms). ``design_type='architecture'`` routes the kernel to its
+    exterior massing render path."""
+    from app.models.design_graph import AssetBundle, DesignGraph, SiteInfo, StyleProfile
+
+    objects = []
+    for i, m in enumerate(massing):
+        mtype = str(m.get("type") or "building")
+        objects.append({
+            "id": str(m.get("id") or f"mass_{i + 1}"),
+            "type": mtype,
+            "name": mtype.replace("_", " ").title(),
+            "position": m.get("position") or {"x": 0, "y": 0, "z": 0},
+            "dimensions": m.get("dimensions") or {},
+            "material": m.get("material"),
+            "role": "massing",
+        })
+    constraints: list[dict] = []
+    if theme_changes:
+        constraints.append({
+            "id": "theme_applier_log", "type": "parametric_theme_changes",
+            "count": len(theme_changes), "changes": theme_changes,
+        })
+    return DesignGraph(
+        project_id=project_id, version=1, design_type="architecture",
+        style=StyleProfile(primary=style_data.get("primary", "modern"),
+                           secondary=style_data.get("secondary", [])),
+        site=SiteInfo(unit="metric"), spaces=[], adjacencies=[], geometry=[],
+        objects=objects, materials=data.get("materials", []), lighting=data.get("lighting", []),
+        constraints=constraints,
+        estimation={"status": "pending", "assumptions": ["Exterior massing — quantities pending."]},
+        assets=AssetBundle(render_2d=[], scene_3d=[], masks=[],
+                           render_prompt_2d=data.get("render_prompt_2d", ""),
+                           render_prompt_3d=data.get("render_prompt_3d", "")),
+    )
+
+
+def _product_graph(data, project_id, product, parts, style_data, theme_changes):
+    """Build a furniture/product DesignGraph from part volumes (no rooms).
+    ``design_type='product'`` routes the kernel to the product render path."""
+    from app.models.design_graph import AssetBundle, DesignGraph, SiteInfo, StyleProfile
+
+    objects = []
+    for i, p in enumerate(parts):
+        ptype = str(p.get("type") or "part")
+        objects.append({
+            "id": str(p.get("id") or f"part_{i + 1}"),
+            "type": ptype,
+            "name": ptype.replace("_", " ").title(),
+            "position": p.get("position") or {"x": 0, "y": 0, "z": 0},
+            "dimensions": p.get("dimensions") or {},
+            "material": p.get("material"),
+            "role": "product_part",
+        })
+    constraints: list[dict] = []
+    if theme_changes:
+        constraints.append({
+            "id": "theme_applier_log", "type": "parametric_theme_changes",
+            "count": len(theme_changes), "changes": theme_changes,
+        })
+    return DesignGraph(
+        project_id=project_id, version=1, design_type="product",
+        style=StyleProfile(primary=style_data.get("primary", "modern"),
+                           secondary=style_data.get("secondary", [])),
+        site=SiteInfo(unit="metric"), spaces=[], adjacencies=[], geometry=[],
+        objects=objects, materials=data.get("materials", []), lighting=data.get("lighting", []),
+        constraints=constraints,
+        estimation={"status": "pending", "assumptions": [f"{product.get('type') or 'Product'} — quantities pending."]},
+        assets=AssetBundle(render_2d=[], scene_3d=[], masks=[],
+                           render_prompt_2d=data.get("render_prompt_2d", ""),
+                           render_prompt_3d=data.get("render_prompt_3d", "")),
+    )
+
+
 def _ai_response_to_design_graph(
     data: dict,
     project_id: str,
@@ -355,6 +503,19 @@ def _ai_response_to_design_graph(
     room = data.get("room", {})
     style_data = data.get("style", {})
     dims = room.get("dimensions", {})
+
+    # Exterior / architectural form: the LLM emitted building massing volumes.
+    # Build a site-scale graph (no interior rooms) — the kernel renders it via
+    # the exterior massing path (orbit camera + ground plane).
+    massing = [m for m in (data.get("massing") or []) if isinstance(m, dict)]
+    if massing:
+        return _architecture_graph(data, project_id, massing, style_data, theme_changes)
+
+    # Furniture / product: the LLM emitted a single object as a set of parts.
+    product = data.get("product") if isinstance(data.get("product"), dict) else {}
+    parts = [p for p in (product.get("parts") or []) if isinstance(p, dict)]
+    if parts:
+        return _product_graph(data, project_id, product, parts, style_data, theme_changes)
 
     # Multi-room program (Stage F): when the LLM emitted ≥2 rooms, build the
     # spaces from that program — target areas, NO positions — and carry the

@@ -24,7 +24,7 @@ from app.config import get_settings
 logger = logging.getLogger(__name__)
 
 
-def build_finish_prompt(graph: dict, *, interior: bool) -> str:
+def build_finish_prompt(graph: dict, *, kind: str = "interior") -> str:
     """A material/style prompt derived from the spec — never generic. The model
     is told to keep the provided geometry EXACTLY and only render it."""
     dtype = str(graph.get("design_type") or graph.get("project_type") or "architectural project").replace("_", " ")
@@ -45,16 +45,24 @@ def build_finish_prompt(graph: dict, *, interior: bool) -> str:
                     mats.append(name.strip())
     mat_txt = ", ".join(mats[:10]) or "concrete, glass, timber, stone"
 
-    view = ("Photorealistic interior architectural render, natural eye-level dollhouse view"
-            if interior else
-            "Photorealistic architectural visualization, aerial three-quarter exterior view")
-    keep = ("keep the exact room shape, wall positions, and every furniture piece's position, "
-            "size and orientation precisely as shown" if interior else
-            "keep the exact building footprint, any courtyard/atrium void, all proportions, "
-            "and every element's position and size precisely as shown")
+    if kind == "product":
+        view = ("Photorealistic studio product photograph, the single object centred on a "
+                "seamless neutral background, soft studio lighting, three-quarter view. "
+                "Show ONLY this one object — no other furniture, no wall art, no plants, no "
+                "props, nothing else in the frame")
+        keep = ("keep the exact object shape, proportions, and every part's position, size and "
+                "orientation precisely as shown, with all parts joined into one solid object")
+    elif kind == "interior":
+        view = "Photorealistic interior architectural render, natural eye-level dollhouse view"
+        keep = ("keep the exact room shape, wall positions, and every furniture piece's position, "
+                "size and orientation precisely as shown")
+    else:  # exterior
+        view = "Photorealistic architectural visualization, aerial three-quarter exterior view"
+        keep = ("keep the exact building footprint, any courtyard/atrium void, all proportions, "
+                "and every element's position and size precisely as shown")
 
     return (
-        f"{view}. Turn the provided massing model into a finished photoreal render "
+        f"{view}. Turn the provided 3D model into a finished photoreal render "
         f"WITHOUT changing its geometry: {keep} in the image. "
         f"Project: {dtype}. " + (f"Design language: {style_txt}. " if style_txt else "") +
         f"Materials to render: {mat_txt}. "

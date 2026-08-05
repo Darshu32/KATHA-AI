@@ -97,7 +97,7 @@ async def render_design(graph: dict, *, width: int = 1200, height: int = 800,
         try:
             res = await finish_render(
                 base_png, depth_png,
-                build_finish_prompt(graph, interior=(kind == "interior")),
+                build_finish_prompt(graph, kind=kind),
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("finish pass failed: %s", exc)

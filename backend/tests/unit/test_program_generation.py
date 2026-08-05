@@ -69,6 +69,92 @@ def test_single_room_payload_stays_one_space():
 # ── End-to-end: program → theme applier → solver seam ─────────────────────
 
 
+def test_massing_payload_builds_architecture_graph():
+    data = {
+        "room": {"type": "building", "dimensions": {"length": 10, "width": 8, "height": 6}},
+        "rooms": [], "adjacencies": [],
+        "massing": [
+            {"id": "gf", "type": "building", "position": {"x": 0, "y": 0, "z": 0},
+             "dimensions": {"length": 10, "width": 8, "height": 3}, "material": "concrete"},
+            {"id": "uf", "type": "block", "position": {"x": 0, "y": 3, "z": 0},
+             "dimensions": {"length": 8, "width": 6, "height": 3}, "material": "glass"},
+        ],
+        "style": {"primary": "modern", "secondary": [], "color_palette": [], "materials": []},
+        "objects": [], "materials": [], "lighting": [],
+        "render_prompt_2d": "", "render_prompt_3d": "",
+    }
+    g = _ai_response_to_design_graph(data, "p1")
+    assert g.design_type == "architecture"
+    assert g.spaces == []                      # exterior: no interior rooms
+    assert [o["id"] for o in g.objects] == ["gf", "uf"]
+    assert all(o["role"] == "massing" for o in g.objects)
+
+
+def test_massing_graph_renders_via_exterior_path():
+    from app.services.spatial.kernel import build_scene
+    graph = {
+        "design_type": "architecture", "spaces": [],
+        "objects": [
+            {"id": "gf", "type": "building", "position": {"x": 0, "y": 0, "z": 0},
+             "dimensions": {"length": 10, "width": 8, "height": 3}},
+            {"id": "uf", "type": "block", "position": {"x": 0, "y": 3, "z": 0},
+             "dimensions": {"length": 8, "width": 6, "height": 3}},
+        ],
+        "materials": [],
+    }
+    solids, _bbox, kind = build_scene(graph)
+    assert kind == "exterior"                  # design_type routes to massing path
+    uf = next(s for s in solids if s.id == "uf")
+    assert uf.verts[:, 1].min() > 2.0          # upper floor kept its height (not floored)
+
+
+def test_product_payload_builds_product_graph():
+    data = {
+        "room": {"type": "chair", "dimensions": {"length": 0.6, "width": 0.6, "height": 0.9}},
+        "rooms": [], "adjacencies": [], "massing": [],
+        "product": {"type": "lounge_chair", "parts": [
+            {"id": "seat", "type": "seat", "position": {"x": 0, "y": 0.4, "z": 0},
+             "dimensions": {"length": 0.6, "width": 0.6, "height": 0.12}, "material": "walnut"},
+            {"id": "leg1", "type": "leg", "position": {"x": 0.25, "y": 0, "z": 0.25},
+             "dimensions": {"length": 0.05, "width": 0.05, "height": 0.4}, "material": "walnut"},
+        ]},
+        "style": {"primary": "modern", "secondary": [], "color_palette": [], "materials": []},
+        "objects": [], "materials": [], "lighting": [],
+        "render_prompt_2d": "", "render_prompt_3d": "",
+    }
+    g = _ai_response_to_design_graph(data, "p1")
+    assert g.design_type == "product"
+    assert g.spaces == []
+    assert [o["id"] for o in g.objects] == ["seat", "leg1"]
+    assert all(o["role"] == "product_part" for o in g.objects)
+
+
+def test_product_graph_renders_via_product_path():
+    from app.services.spatial.kernel import build_scene
+    graph = {
+        "design_type": "product", "spaces": [],
+        "objects": [
+            {"id": "seat", "type": "seat", "position": {"x": 0, "y": 0.4, "z": 0},
+             "dimensions": {"length": 0.6, "width": 0.6, "height": 0.12}},
+            {"id": "leg", "type": "leg", "position": {"x": 0.25, "y": 0, "z": 0.25},
+             "dimensions": {"length": 0.05, "width": 0.05, "height": 0.4}},
+        ],
+        "materials": [],
+    }
+    solids, _bbox, kind = build_scene(graph)
+    assert kind == "product"
+    seat = next(s for s in solids if s.id == "seat")
+    assert seat.verts[:, 1].min() > 0.3            # seat kept its height (not floored)
+
+
+def test_product_finish_prompt_is_studio_shot():
+    from app.services.spatial.finish import build_finish_prompt
+    p = build_finish_prompt({"design_type": "product", "style": {"primary": "modern"},
+                             "objects": [{"material": "walnut"}]}, kind="product")
+    assert "product" in p.lower()
+    assert "studio" in p.lower() or "neutral background" in p.lower()
+
+
 def test_program_survives_theme_applier_and_solves():
     data = _multiroom_data()
     themed = apply_parametric_theme(data, "modern")["graph"]

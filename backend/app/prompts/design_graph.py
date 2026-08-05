@@ -90,6 +90,46 @@ You MUST follow these rules strictly:
        - Do NOT assign room positions — a layout solver places them from the
          program. `objects` (furniture) is optional for multi-room designs.
 
+14. INTERIOR vs BUILDING EXTERIOR / FORM:
+   * For an INTERIOR design (a room, apartment interior, office interior), use
+     `room`/`rooms`/`objects` as above and leave `massing` as an EMPTY array [].
+   * For a BUILDING EXTERIOR / architectural form / massing study (e.g. "a modern
+     two-storey house exterior", "a villa's building form", "the facade massing"),
+     describe the building as `massing` — a set of VOLUMES that form it. Give each
+     a unique `id`, a `type` ("building"/"block"/"wing"/"roof"), a `position`
+     (metres; y = height off the ground, so STACK upper floors by increasing y),
+     `dimensions`, and a `material`. Place wings / garages beside the main mass.
+     Leave `room`, `rooms`, `adjacencies`, and `objects` empty for a pure
+     exterior. Keep the whole building within roughly 6–30 m per side.
+
+15. FURNITURE / PRODUCT (a single object):
+   * If the prompt describes a SINGLE piece of furniture or a product (e.g. "a
+     mid-century lounge chair", "a dining table", "a floor lamp", "a desk"), fill
+     `product` with its `type` and a `parts` array — the REAL PHYSICAL MEMBERS
+     that make up the object, each with a unique `id`, `type`, `position`,
+     `dimensions` (length = x, width/depth = z, height = y), and `material`.
+   * COORDINATES: `position` is the metric location of each part's BOTTOM-CENTRE —
+     x,z is the centre of its footprint, y is the height of its UNDERSIDE above the
+     floor. So a part rests directly on top of another when its y equals the other
+     part's (y + height). A part sitting on the floor has y = 0.
+   * A piece of furniture is defined by its members and the OPEN SPACE between
+     them. Author ONLY the actual members — never a single solid block that
+     encloses the whole object (that always reads as a cabinet/crate, not a
+     chair). Author each leg SEPARATELY: a 4-legged piece has four leg parts,
+     each a thin post (~4–6 cm square).
+   * Every part MUST physically touch a neighbour — nothing floats. Legs go under
+     the seat's corners; the backrest and arms RISE FROM the seat top (their y =
+     the seat's y + the seat's height).
+   * WORKED EXAMPLE — a lounge chair, seat centred at x=0,z=0, seat top ≈0.45 m:
+       - seat:     position (0, 0.40, 0),      dimensions L0.60 W0.60 H0.05
+       - leg ×4:   position (±0.27, 0, ±0.27), dimensions L0.05 W0.05 H0.40
+       - backrest: position (0, 0.45, -0.27),  dimensions L0.60 W0.05 H0.45  (rear edge)
+       - arm ×2:   position (±0.30, 0.45, 0),  dimensions L0.05 W0.55 H0.22  (side edges)
+     A table = a thin top + four legs directly under its corners. Nothing solid
+     in between.
+   * Keep it at furniture scale (roughly 0.3–2.5 m). Leave `room`, `rooms`,
+     `massing`, and `objects` empty. Otherwise leave `product.parts` empty [].
+
 Your goal is to create a structured design representation that can be used for:
 
 * 2D rendering
