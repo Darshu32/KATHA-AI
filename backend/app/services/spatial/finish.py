@@ -54,8 +54,10 @@ def build_finish_prompt(graph: dict, *, kind: str = "interior") -> str:
                 "orientation precisely as shown, with all parts joined into one solid object")
     elif kind == "interior":
         view = "Photorealistic interior architectural render, natural eye-level dollhouse view"
-        keep = ("keep the exact room shape, wall positions, and every furniture piece's position, "
-                "size and orientation precisely as shown")
+        keep = ("keep the exact room shape and wall positions precisely as shown, and keep every "
+                "furniture block at the same position, footprint and height — but render each block "
+                "AS the realistic furniture piece it represents (bed, sofa, armchair, table, wardrobe, "
+                "cabinet, kitchen counter, appliance), never leaving it as a plain box or clay volume")
     else:  # exterior
         view = "Photorealistic architectural visualization, aerial three-quarter exterior view"
         keep = ("keep the exact building footprint, any courtyard/atrium void, all proportions, "
@@ -93,6 +95,44 @@ async def _openai_edit(base_png: bytes, prompt: str, size: str) -> bytes | None:
         return None
 
 
+async def _gemini_edit(base_png: bytes, prompt: str) -> bytes | None:
+    """Nano Banana (Gemini 2.5 Flash Image) img2img finish — the clay render is
+    the attached reference the model must KEEP; it only paints materials + light.
+    Same provider ReRender-style tools use, and KATHA's target image stack."""
+    s = get_settings()
+    key = (getattr(s, "gemini_api_key", "") or "").strip()
+    if not key:
+        return None
+    model = getattr(s, "gemini_image_model", None) or "gemini-2.5-flash-image"
+    url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+           f"{model}:generateContent?key={key}")
+    payload = {
+        "contents": [{"parts": [
+            {"inlineData": {"mimeType": "image/png",
+                            "data": base64.b64encode(base_png).decode()}},
+            {"text": prompt},
+        ]}],
+        "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
+    }
+    try:
+        import httpx
+        async with httpx.AsyncClient(timeout=90.0) as client:
+            resp = await client.post(url, json=payload)
+            resp.raise_for_status()
+            data = resp.json()
+        for cand in data.get("candidates", []):
+            for part in cand.get("content", {}).get("parts", []):
+                inline = part.get("inlineData")
+                if inline and str(inline.get("mimeType", "")).startswith("image/"):
+                    b64 = inline.get("data")
+                    return base64.b64decode(b64) if b64 else None
+        logger.warning("gemini finish-pass returned no image parts")
+        return None
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("gemini finish-pass failed: %s", exc)
+        return None
+
+
 async def _controlnet_depth(base_png: bytes, depth_png: bytes | None, prompt: str) -> bytes | None:
     """PROD seam — Flux/SDXL ControlNet-depth via Replicate/Fal, using the depth
     map for an exact geometry lock. Enabled when a token is configured."""
@@ -102,14 +142,34 @@ async def _controlnet_depth(base_png: bytes, depth_png: bytes | None, prompt: st
     return None  # not exercised in the current environment
 
 
+# provider name → (coroutine factory, reported label)
+async def _run_provider(name: str, base_png: bytes, prompt: str, size: str) -> dict | None:
+    if name == "gemini":
+        out = await _gemini_edit(base_png, prompt)
+        return {"bytes": out, "provider": "gemini-2.5-flash-image"} if out else None
+    if name == "openai":
+        out = await _openai_edit(base_png, prompt, size)
+        return {"bytes": out, "provider": "openai-gpt-image-1"} if out else None
+    return None
+
+
 async def finish_render(base_png: bytes, depth_png: bytes | None, prompt: str,
-                        *, size: str = "1536x1024") -> dict | None:
+                        *, size: str = "1536x1024", provider: str | None = None) -> dict | None:
     """Return {'bytes', 'provider'} or None (caller falls back to the base render
-    or the legacy Gemini path)."""
+    or the legacy Gemini path).
+
+    Provider order: ControlNet-depth (hard geometry lock) when configured, then
+    the preferred image provider, then the other as automatic fallback. The
+    preference is ``provider`` (explicit, for A/B) or the ``spatial_finish_provider``
+    setting ("openai" | "gemini")."""
     out = await _controlnet_depth(base_png, depth_png, prompt)
     if out:
         return {"bytes": out, "provider": "controlnet-depth"}
-    out = await _openai_edit(base_png, prompt, size)
-    if out:
-        return {"bytes": out, "provider": "openai-gpt-image-1"}
+
+    pref = (provider or getattr(get_settings(), "spatial_finish_provider", "openai") or "openai").lower()
+    order = ["gemini", "openai"] if pref == "gemini" else ["openai", "gemini"]
+    for name in order:
+        res = await _run_provider(name, base_png, prompt, size)
+        if res:
+            return res
     return None

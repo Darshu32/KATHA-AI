@@ -59,6 +59,16 @@ class Settings(BaseSettings):
 
     # Google Gemini for image generation.
     gemini_api_key: str = ""
+    # Nano Banana (Gemini) image model — used for chat media and, when selected,
+    # the design finish pass. Bump to the Pro / "nano-banana-2" id when adopted.
+    gemini_image_model: str = "gemini-2.5-flash-image"
+    # Which provider finishes the geometry render into a photoreal image:
+    #   "gemini" — Nano Banana img2img (default; tightest geometry+camera lock,
+    #              cheaper/faster, EU-pinnable via Vertex — KATHA's target stack)
+    #   "openai" — gpt-image-1 image-edit (re-frames slightly; automatic fallback)
+    # ControlNet-depth still wins when a token is set; the other provider is the
+    # automatic fallback. Serves both prompt-mode and (later) upload-enhance.
+    spatial_finish_provider: str = "gemini"
 
     # ── Interop / export ─────────────────────────────────
     # Speckle push (Revit/Rhino/Grasshopper/ArchiCAD distribution wedge).
