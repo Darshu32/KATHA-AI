@@ -473,7 +473,13 @@ def _product_graph(data, project_id, product, parts, style_data, theme_changes):
             "material": p.get("material"),
             "role": "product_part",
         })
-    constraints: list[dict] = []
+    # Carry the whole-object type (e.g. "dining_table") so downstream — the spec
+    # sheet titleblock — can label the object; the DesignGraph has no dedicated
+    # field and `design_type` is the coarse "product" bucket.
+    constraints: list[dict] = [{
+        "id": "product_type", "type": "product_meta",
+        "value": str(product.get("type") or "product"),
+    }]
     if theme_changes:
         constraints.append({
             "id": "theme_applier_log", "type": "parametric_theme_changes",
