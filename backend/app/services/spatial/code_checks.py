@@ -27,6 +27,18 @@ _CODE_PACKS: dict[str, dict] = {
         "min_short_side_m": _nbc["habitable_room_min_short_side_m"],  # 2.4
         "min_door_w_m": 0.90,      # accessibility doorway clear width
         "min_light_ratio": 0.10,   # NBC: openings >= 1/10 of floor area
+        # Per-room-type minimums (NBC carries these) so a kitchen / bath / WC is
+        # judged against its own standard, not the habitable-room minimum.
+        "min_area_by_cat": {
+            "habitable": _nbc["habitable_room_min_area_m2"],  # 9.5
+            "kitchen": _nbc["kitchen_min_area_m2"],           # 4.5
+            "bathroom": _nbc["bathroom_min_area_m2"],         # 1.8
+            "wc": _nbc["wc_min_area_m2"],                     # 1.1
+        },
+        "min_short_by_cat": {
+            "habitable": _nbc["habitable_room_min_short_side_m"],  # 2.4
+            "kitchen": _nbc["kitchen_min_short_side_m"],           # 1.5
+        },
     },
     "international_ibc": {
         "code": "IBC / IRC 2021",
@@ -79,40 +91,113 @@ def _agg_check(label: str, rooms: list, ok_fn, note_ok, note_bad, *, soft: bool)
     return {"label": label, "status": "warn" if soft else "fail", "note": note_bad(fails, len(rooms))}
 
 
-def _multiroom_checks(sm, pack: dict, code: str) -> list[dict]:
-    """Habitable minimums checked over EVERY room and aggregated per criterion.
+_SERVICE_HINTS = ("hall", "corridor", "foyer", "lobby", "utility", "store",
+                  "balcony", "passage", "stair", "lift", "porch")
 
-    Ceiling height is universal (hard). Area / short-side stay soft — a small
-    service room (bath, utility) legitimately falls below the *habitable* minimum
-    and must not flip a whole plan to REVIEW. Opening-based checks (egress,
-    daylight) wait until openings are placed on multi-room walls.
+
+def _room_category(text: str) -> str:
+    """Classify a room from its name/type into an NBC category so it's judged
+    against the right minimum. Unknown → habitable (checked, conservative)."""
+    t = (text or "").lower()
+    if "kitchen" in t:
+        return "kitchen"
+    if "wc" in t or "toilet" in t or "powder" in t:
+        return "wc"
+    if any(k in t for k in ("bath", "shower", "washroom", "ensuite", "en-suite")):
+        return "bathroom"
+    if any(s in t for s in _SERVICE_HINTS):
+        return "service"
+    return "habitable"
+
+
+def _min_area(pack: dict, category: str) -> float | None:
+    """Floor-area minimum for a category, or None when the pack has no figure
+    for it (that room is then exempt from the area check)."""
+    by = pack.get("min_area_by_cat")
+    if by and category in by:
+        return by[category]
+    return pack["min_area_m2"] if category == "habitable" else None
+
+
+def _min_short(pack: dict, category: str) -> float | None:
+    by = pack.get("min_short_by_cat")
+    if by and category in by:
+        return by[category]
+    return pack["min_short_side_m"] if category == "habitable" else None
+
+
+def _multiroom_checks(sm, pack: dict, code: str) -> list[dict]:
+    """Per-room NBC checks, each room judged against the minimum for its TYPE.
+
+    Ceiling + egress are universal (hard). Area / short-side use the room's
+    category minimum (kitchen / bath / WC have their own; service rooms with no
+    figure are exempt) and stay soft. Daylight applies to habitable rooms only.
     """
     rooms = sm.rooms
-    return [
+    cat = {rm.id: _room_category(rm.name or rm.id) for rm in rooms}
+    n = len(rooms)
+
+    checks: list[dict] = [
         _agg_check(
             "Ceiling height", rooms,
             lambda rm: rm.envelope.height >= pack["min_ceiling_m"],
-            lambda n: f"all {n} rooms ≥ {pack['min_ceiling_m']} m · {code}",
-            lambda fails, n: f"{len(fails)}/{n} rooms below {pack['min_ceiling_m']} m ceiling · {code}",
+            lambda k: f"all {k} rooms ≥ {pack['min_ceiling_m']} m · {code}",
+            lambda fails, k: f"{len(fails)}/{k} rooms below {pack['min_ceiling_m']} m ceiling · {code}",
             soft=False,
         ),
-        _agg_check(
-            "Room area", rooms,
-            lambda rm: rm.area >= pack["min_area_m2"],
-            lambda n: f"all {n} rooms ≥ {pack['min_area_m2']} m² · {code}",
-            lambda fails, n: f"{len(fails)}/{n} below {pack['min_area_m2']} m² habitable (e.g. {fails[0].name}) · {code}",
-            soft=True,
-        ),
-        _agg_check(
-            "Min room dimension", rooms,
-            lambda rm: min(rm.envelope.length, rm.envelope.width) >= pack["min_short_side_m"],
-            lambda n: f"all {n} rooms ≥ {pack['min_short_side_m']} m short side · {code}",
-            lambda fails, n: f"{len(fails)}/{n} rooms below {pack['min_short_side_m']} m short side · {code}",
-            soft=True,
-        ),
-        {"label": "Openings", "status": "info",
-         "note": f"egress / daylight checked once openings are placed · {code}"},
     ]
+
+    area_fails = [rm for rm in rooms
+                  if _min_area(pack, cat[rm.id]) is not None and rm.area < _min_area(pack, cat[rm.id])]
+    checks.append({
+        "label": "Room area",
+        "status": "pass" if not area_fails else "warn",
+        "note": (f"all {n} rooms meet their type minimum · {code}" if not area_fails
+                 else f"{len(area_fails)}/{n} below type minimum (e.g. {area_fails[0].name}) · {code}"),
+    })
+
+    short_fails = [rm for rm in rooms
+                   if _min_short(pack, cat[rm.id]) is not None
+                   and min(rm.envelope.length, rm.envelope.width) < _min_short(pack, cat[rm.id])]
+    checks.append({
+        "label": "Min room dimension",
+        "status": "pass" if not short_fails else "warn",
+        "note": (f"all rooms meet their type short-side minimum · {code}" if not short_fails
+                 else f"{len(short_fails)}/{n} below type short-side minimum · {code}"),
+    })
+
+    # Openings → real egress (all rooms) + daylight (habitable rooms).
+    doors: dict[str, int] = {}
+    win_area: dict[str, float] = {}
+    for seg in sm.wall_segments:
+        for op in seg.openings:
+            if op.kind == "door":
+                for rid in seg.rooms:
+                    doors[rid] = doors.get(rid, 0) + 1
+            elif op.kind == "window":
+                for rid in seg.rooms:
+                    win_area[rid] = win_area.get(rid, 0.0) + op.width * op.height
+
+    # Soft: an auto-generated draft may leave a tight room without a door-width
+    # connection — a circulation refinement note, not a hard code stop.
+    no_door = [rm for rm in rooms if doors.get(rm.id, 0) == 0]
+    checks.append({
+        "label": "Egress",
+        "status": "pass" if not no_door else "warn",
+        "note": (f"all {n} rooms reached by a door · {code}" if not no_door
+                 else f"{len(no_door)}/{n} rooms need a door added (e.g. {no_door[0].name}) · {code}"),
+    })
+
+    ratio = pack["min_light_ratio"]
+    habitable = [rm for rm in rooms if cat[rm.id] == "habitable"]
+    dark = [rm for rm in habitable if (win_area.get(rm.id, 0.0) / rm.area if rm.area else 0.0) < ratio]
+    checks.append({
+        "label": "Natural light",
+        "status": "pass" if not dark else "warn",
+        "note": (f"all {len(habitable)} habitable rooms ≥ {int(ratio * 100)}% glazing · {code}" if not dark
+                 else f"{len(dark)}/{len(habitable)} habitable rooms below {int(ratio * 100)}% glazing · {code}"),
+    })
+    return checks
 
 
 def run_code_checks(graph: dict, region: str | None = None) -> list[dict]:

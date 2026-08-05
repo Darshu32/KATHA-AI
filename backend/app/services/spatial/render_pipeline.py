@@ -49,10 +49,19 @@ def _to_png(arr) -> bytes:
 def _build_and_raster(graph: dict, width: int, height: int):
     """CPU-bound: kernel + camera + rasterise. Runs in a worker thread."""
     solids, bbox, kind = build_scene(graph)
-    if not any(s.type not in _STRUCTURAL for s in solids):
-        return None  # nothing meaningful to show
+    floor_count = sum(1 for s in solids if s.type == "floor")
+    # Meaningful to show if there's furniture OR it's a multi-room plan (the
+    # rooms themselves are the subject, even before they're furnished).
+    if not any(s.type not in _STRUCTURAL for s in solids) and floor_count < 2:
+        return None
 
-    if kind == "interior":
+    if kind == "interior" and floor_count >= 2:
+        # Multi-room: frame the WHOLE plan as an elevated dollhouse looking down
+        # into the open-top rooms. The single-room ``interior_camera`` frames
+        # only ``spaces[0]``, which crops a multi-room apartment badly.
+        cam = orbit_camera(bbox, azimuth_deg=32.0, elev_deg=54.0, dist_factor=2.0, fov=40.0)
+        render_solids = solids
+    elif kind == "interior":
         rl, rw, rh = _room_dims(graph)
         cam, cull = interior_camera(rl, rw, rh)
         render_solids = [s for s in solids if s.side not in cull]

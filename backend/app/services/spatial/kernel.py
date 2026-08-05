@@ -226,10 +226,12 @@ def _segment_box(seg: dict):
     return _box(length, h, t, (a + b) / 2, 0.0, at)  # horizontal: long in x, thin in z
 
 
-def _multiroom_solids(rooms: list[dict]) -> list[Solid]:
+def _multiroom_solids(rooms: list[dict], adjacencies: list | None = None) -> list[Solid]:
     """A floor slab per room + partition/exterior wall solids from the shared
-    ``derive_multiroom_wall_model``. Walls are solid (openings are a later
-    increment); each is tagged with the room(s) it bounds."""
+    ``derive_multiroom_wall_model``, with **real openings cut in** — doors in
+    partitions between adjacent rooms, windows on exterior walls (Manifold
+    voids, the same way the single-room path cuts them). Each wall is tagged with
+    the room(s) it bounds."""
     solids: list[Solid] = []
     fc = _TYPE_DEFAULT["floor"]
     for r in rooms:
@@ -238,12 +240,21 @@ def _multiroom_solids(rooms: list[dict]) -> list[Solid]:
             _box(r["length"], 0.05, r["width"], r["x"] + r["length"] / 2, -0.05, r["z"] + r["width"] / 2),
         ))
     wc = _TYPE_DEFAULT["wall"]
-    # Use the shared default thickness so the 3D matches the IFC export exactly.
-    for seg in derive_multiroom_wall_model(rooms):
-        label = "/".join(seg["rooms"])
-        solids.append(Solid(
-            seg["id"], f"Wall · {label}", "wall", wc, _segment_box(seg), side=None,
-        ))
+    # Shared default thickness + adjacency-driven openings so the 3D matches the
+    # IFC export exactly.
+    for seg in derive_multiroom_wall_model(rooms, adjacencies):
+        m = _segment_box(seg)
+        t = float(seg["thickness"])
+        for op in seg.get("openings", []):
+            c = float(seg["start"]) + float(op["center"])   # absolute along the run axis
+            w = float(op["width"])
+            sill = float(op["sill"])
+            oh = max(float(op["head"]) - sill, 0.05)
+            if seg["runs"] == "z":       # wall thin in x → void through x
+                m = m - _box(t * 3, oh, w, float(seg["at"]), sill, c)
+            else:                         # wall thin in z → void through z
+                m = m - _box(w, oh, t * 3, c, sill, float(seg["at"]))
+        solids.append(Solid(seg["id"], f"Wall · {'/'.join(seg['rooms'])}", "wall", wc, m, side=None))
     return solids
 
 
@@ -293,8 +304,9 @@ def build_scene(graph: dict) -> tuple[list[Solid], tuple, str]:
     if interior:
         placed = _placed_rooms(graph)
         if len(placed) >= 2:
-            # Multi-room: floor-per-room + shared-partition walls (no openings yet).
-            solids.extend(_multiroom_solids(placed))
+            # Multi-room: floor-per-room + shared-partition walls with real
+            # doors (from adjacencies) and windows cut in.
+            solids.extend(_multiroom_solids(placed, graph.get("adjacencies")))
         else:
             # Single room: floor + four perimeter walls with real openings cut in.
             wall_solids, opening_ids = _wall_solids(graph)

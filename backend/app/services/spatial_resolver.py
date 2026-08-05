@@ -98,9 +98,12 @@ def _room_placements(graph: dict) -> list[RoomPlacement]:
     return out
 
 
-def _multiroom_walls(placements: list[RoomPlacement], thickness: float) -> list[WallSegment]:
-    """Partition-aware wall segments for the placed rooms (Stage C). Empty when
-    there are no placements — the single-room ``walls`` still apply."""
+def _multiroom_walls(
+    placements: list[RoomPlacement], thickness: float, adjacencies: list | None = None
+) -> list[WallSegment]:
+    """Partition-aware wall segments for the placed rooms, with openings (doors
+    from ``adjacencies``, windows on exterior walls). Empty when there are no
+    placements — the single-room ``walls`` still apply."""
     if not placements:
         return []
     room_dicts = [
@@ -114,7 +117,10 @@ def _multiroom_walls(placements: list[RoomPlacement], thickness: float) -> list[
         }
         for p in placements
     ]
-    return [WallSegment(**seg) for seg in derive_multiroom_wall_model(room_dicts, thickness=thickness)]
+    return [
+        WallSegment(**seg)
+        for seg in derive_multiroom_wall_model(room_dicts, adjacencies, thickness=thickness)
+    ]
 
 
 def _constraints(graph: dict) -> list[Constraint]:
@@ -196,7 +202,7 @@ def resolve_spatial_model(graph: dict) -> SpatialModel:
         rooms=placements,
         thickness=thickness,
         walls=walls,
-        wall_segments=_multiroom_walls(placements, thickness),
+        wall_segments=_multiroom_walls(placements, thickness, graph.get("adjacencies")),
         objects=objects,
         adjacencies=adjacencies,
         constraints=_constraints(graph),

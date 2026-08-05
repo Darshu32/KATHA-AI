@@ -82,8 +82,11 @@ def test_code_checks_are_per_room_and_aggregate():
     _p, _w, fails = tally(checks)
     assert fails == 0
 
-    openings = next(c for c in checks if c["label"] == "Openings")
-    assert openings["status"] == "info"         # egress/daylight pending openings
+    # openings now exist → real egress + daylight checks (replaced the old
+    # "pending" placeholder)
+    assert "Egress" in labels and "Natural light" in labels
+    egress = next(c for c in checks if c["label"] == "Egress")
+    assert egress["status"] == "pass"           # every room reached by a door (from adjacencies)
 
 
 def test_code_checks_single_room_still_opening_aware():
