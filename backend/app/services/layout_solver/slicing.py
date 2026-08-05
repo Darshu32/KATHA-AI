@@ -98,7 +98,10 @@ def adjacent(a: Rect, b: Rect, *, eps: float = 1e-6, min_share: float = 0.3) -> 
     """True when two rectangles share a wall *segment* (not merely a corner).
 
     ``min_share`` (metres) is the smallest shared edge that counts as an
-    adjacency — a doorway needs real wall, so corner-kisses don't qualify.
+    adjacency — kept loose so dense plans stay well-connected. Whether a shared
+    wall is wide enough to actually hang a door is a separate, stricter test
+    (``wall_model._MIN_DOOR_SEG``); a satisfied-but-narrow adjacency simply gets
+    no door, which the egress advisory then surfaces.
     """
     ax, az, al, aw = a
     bx, bz, bl, bw = b

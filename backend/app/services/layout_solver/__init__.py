@@ -12,6 +12,7 @@ See ``docs/how-this-works.md`` §4 (layout generation) and §8 (spec-first).
 from __future__ import annotations
 
 from .adapter import apply_layout_to_graph, program_from_graph
+from .furnish import furnish_rooms
 from .models import LayoutProgram, LayoutSolution, PlacedRoom, RoomSpec
 from .pipeline import maybe_solve_layout
 from .solver import solve_layout
@@ -27,4 +28,5 @@ __all__ = [
     "apply_layout_to_graph",
     "placements_from_solution",
     "maybe_solve_layout",
+    "furnish_rooms",
 ]

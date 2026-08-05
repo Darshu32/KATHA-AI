@@ -195,11 +195,12 @@ def _placed_rooms(graph: dict) -> list[dict]:
     return out
 
 
-def _add_multiroom_spaces_and_walls(model, body_context, storey, rooms: list[dict]) -> dict:
-    """One IfcSpace per room + partition/exterior IfcWalls (Stage D), from the
-    shared ``derive_multiroom_wall_model``. Coordinates: graph x→IFC X, graph
-    z→IFC Y, height→IFC Z. Box profiles are centred on their placement, so a room
-    sits at its centre and a wall segment on its shared line."""
+def _add_multiroom_spaces_and_walls(model, body_context, storey, rooms: list[dict], adjacencies=None) -> dict:
+    """One IfcSpace per room + partition/exterior IfcWalls (Stage D), with real
+    openings — doors in partitions between adjacent rooms, windows on exterior
+    walls, each an ``IfcOpeningElement`` voiding the wall and *filled* by an
+    ``IfcDoor``/``IfcWindow``. Coordinates: graph x→IFC X, graph z→IFC Y,
+    height→IFC Z. Box profiles are centred on their placement."""
     for r in rooms:
         L, W, H = r["length"], r["width"], r["height"]
         space = run("root.create_entity", model, ifc_class="IfcSpace", name=r["name"])
@@ -215,7 +216,8 @@ def _add_multiroom_spaces_and_walls(model, body_context, storey, rooms: list[dic
         run("pset.edit_pset", model, pset=pset,
             properties={"ObjectType": "room", "Room": r["id"], "Area_m2": round(L * W, 2), "Height_m": round(H, 3)})
 
-    segments = derive_multiroom_wall_model(rooms)
+    segments = derive_multiroom_wall_model(rooms, adjacencies)
+    openings = 0
     for seg in segments:
         length = max(seg["end"] - seg["start"], 1e-3)
         if seg["runs"] == "z":            # vertical wall: thin in X, long in Y
@@ -229,12 +231,36 @@ def _add_multiroom_spaces_and_walls(model, body_context, storey, rooms: list[dic
         run("pset.edit_pset", model, pset=pset, properties={
             "ObjectType": "wall", "Kind": seg["kind"], "Rooms": ",".join(seg["rooms"]),
             "Thickness_m": round(seg["thickness"], 3), "Height_m": round(seg["height"], 3)})
-    return {"spaces": len(rooms), "walls": len(segments)}
+
+        t = seg["thickness"]
+        for op in seg.get("openings", []):
+            c = seg["start"] + op["center"]        # absolute along the run axis
+            w, sill = op["width"], op["sill"]
+            oh = max(op["head"] - sill, 0.05)
+            if seg["runs"] == "z":                 # void through X (wall thin in X)
+                loc, void_x, void_y, fill_x, fill_y = (seg["at"], c, sill), t * 1.6, w, max(t * 0.4, 0.05), w
+            else:                                   # void through Y (wall thin in Y)
+                loc, void_x, void_y, fill_x, fill_y = (c, seg["at"], sill), w, t * 1.6, w, max(t * 0.4, 0.05)
+            opening = _place_box(model, body_context, storey, "IfcOpeningElement",
+                                 f"Opening {op['source_id']}", loc, void_x, void_y, oh)
+            run("feature.add_feature", model, feature=opening, element=wall)
+            fill_class = "IfcWindow" if op["kind"] == "window" else "IfcDoor"
+            filling = _place_box(model, body_context, storey, fill_class, op["source_id"], loc, fill_x, fill_y, oh)
+            run("feature.add_filling", model, opening=opening, element=filling)
+            fpset = run("pset.add_pset", model, product=filling, name="KATHA_Design")
+            run("pset.edit_pset", model, pset=fpset, properties={
+                "ObjectType": op["kind"], "Wall": seg["id"],
+                "Width_m": round(w, 3), "Sill_m": round(sill, 3), "Head_m": round(op["head"], 3)})
+            openings += 1
+    return {"spaces": len(rooms), "walls": len(segments), "openings": openings}
 
 
 def export(spec: dict, graph: dict) -> dict:
     meta = spec.get("meta", {})
     project_name = meta.get("project_name") or "KATHA Project"
+    # Capture adjacencies before normalization (which may not preserve them) so
+    # multi-room door placement survives.
+    adjacencies = (graph or {}).get("adjacencies")
     # Defensive, idempotent normalization so units/axes and the derived walls
     # are correct even for legacy or un-normalized graphs (mirrors the drawing
     # routes' read-time normalization).
@@ -271,7 +297,7 @@ def export(spec: dict, graph: dict) -> dict:
     # keeps its four perimeter walls with real window/door voids.
     placed = _placed_rooms(graph)
     if len(placed) >= 2:
-        _add_multiroom_spaces_and_walls(model, body_context, storey, placed)
+        _add_multiroom_spaces_and_walls(model, body_context, storey, placed, adjacencies)
         container = storey  # furnishings attach to the storey
     else:
         space = run("root.create_entity", model, ifc_class="IfcSpace", name=(room.get("type") or "Room"))

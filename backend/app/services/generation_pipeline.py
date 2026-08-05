@@ -29,7 +29,7 @@ from app.services.graph_render_reference import (
 )
 from app.services.image_service import generate_image, resolve_theme_visual_hint
 from app.services.knowledge_validator import validate_design_graph_async
-from app.services.layout_solver import maybe_solve_layout
+from app.services.layout_solver import furnish_rooms, maybe_solve_layout
 from app.services.standards.knowledge_service import resolve_standard as _resolve_standard
 from app.services.standards.mep_sizing import system_cost_estimate as _mep_system_cost
 from app.services.object_bboxes import compute_object_bboxes
@@ -775,6 +775,11 @@ async def run_initial_generation(
     # positions. A deliberate no-op for single-room graphs (today's default),
     # so existing behaviour is unchanged until program generation lands.
     graph_data, _layout_solution = maybe_solve_layout(graph_data)
+    if _layout_solution is not None:
+        # Multi-room plan solved → furnish each room in world coordinates
+        # (the LLM's furniture is authored single-room and lands in the wrong
+        # rooms). Replaces the mis-framed objects with grounded per-room pieces.
+        graph_data = furnish_rooms(graph_data)
 
     # Step 2 — Persist (capture prompt so re-renders inherit context)
     version = await save_graph_version(

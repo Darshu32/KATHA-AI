@@ -284,24 +284,84 @@ def _sweep_axis(rooms: list[dict], axis: str, thickness: float) -> list[dict]:
     return segments
 
 
+# Opening defaults (metres): doors in partitions between adjacent rooms, windows
+# on exterior walls. Kept as module constants — these are geometry parameters,
+# not architectural knowledge.
+_DOOR_W, _DOOR_H = 0.9, 2.1
+_WIN_W, _WIN_SILL, _WIN_HEAD = 1.2, 0.9, 2.1
+_MIN_DOOR_SEG = 0.9      # a partition must be at least this long to hang a door
+#                          (kept in step with the solver's adjacency min_share)
+_MIN_WINDOW_SEG = 1.6    # an exterior wall must be at least this long for a window
+
+
+def _adjacency_pairs(adjacencies) -> set[frozenset]:
+    """Normalise ``[{"a","b"}]`` or ``[[a, b]]`` into a set of unordered id pairs."""
+    pairs: set[frozenset] = set()
+    for a in adjacencies or []:
+        if isinstance(a, dict):
+            x, y = a.get("a"), a.get("b")
+        elif isinstance(a, (list, tuple)) and len(a) >= 2:
+            x, y = a[0], a[1]
+        else:
+            continue
+        if x and y:
+            pairs.add(frozenset((str(x), str(y))))
+    return pairs
+
+
+def _add_openings(segments: list[dict], adjacencies) -> None:
+    """Place a door in each partition between adjacent rooms (from the adjacency
+    graph, one per pair) and a window on each long-enough exterior wall. In-place.
+    ``center`` is measured from the segment start (0 … length)."""
+    adj = _adjacency_pairs(adjacencies)
+    doored: set[frozenset] = set()
+    for seg in segments:
+        length = seg["end"] - seg["start"]
+        if seg["kind"] == "partition":
+            pair = frozenset(seg["rooms"])
+            if pair in adj and pair not in doored and length >= _MIN_DOOR_SEG:
+                seg["openings"] = [{
+                    "source_id": f"door-{'-'.join(sorted(seg['rooms']))}",
+                    "kind": "door",
+                    "center": round(length / 2, 4),
+                    "width": round(min(_DOOR_W, length * 0.6), 4),
+                    "sill": 0.0,
+                    "head": round(min(_DOOR_H, seg["height"]), 4),
+                }]
+                doored.add(pair)
+        elif length >= _MIN_WINDOW_SEG:  # exterior wall
+            head = min(_WIN_HEAD, seg["height"])
+            sill = min(_WIN_SILL, max(head - 0.6, 0.0))
+            seg["openings"] = [{
+                "source_id": f"win-{seg['id']}",
+                "kind": "window",
+                "center": round(length / 2, 4),
+                "width": round(min(_WIN_W, length * 0.6), 4),
+                "sill": round(sill, 4),
+                "head": round(head, 4),
+            }]
+
+
 def derive_multiroom_wall_model(
     rooms: list[dict],
+    adjacencies: list | None = None,
     thickness: float = WALL_THICKNESS_M,
     default_height: float = 2.7,
 ) -> list[dict]:
-    """Shared-partition-aware walls for a placed multi-room plan.
+    """Shared-partition-aware walls for a placed multi-room plan, with openings.
 
     Each input room is ``{id, x, z, length, width, height?}`` (metres; ``x``/``z``
     the min corner, ``length`` spanning x, ``width`` spanning z). Returns a flat
     list of wall segments::
 
         {id, runs: "x"|"z", at, start, end, height, thickness,
-         kind: "exterior"|"partition", rooms: [one or two ids], openings: []}
+         kind: "exterior"|"partition", rooms: [one or two ids],
+         openings: [{source_id, kind, center, width, sill, head}, ...]}
 
-    A single room yields its four exterior walls (no partitions), so this also
-    subsumes the single-room case. Opening assignment is intentionally deferred
-    (Stage C derives geometry; placing windows/doors into these segments is the
-    follow-on) — ``openings`` is always empty here.
+    A single room yields its four exterior walls (no partitions). ``adjacencies``
+    (pairs of room ids) drives door placement — a door goes in the partition
+    between each connected pair; windows go on long-enough exterior walls. Pass
+    no adjacencies for walls-only (windows still placed).
     """
     norm: list[dict] = []
     for r in rooms:
@@ -324,4 +384,5 @@ def derive_multiroom_wall_model(
     segments = _sweep_axis(norm, "z", thickness) + _sweep_axis(norm, "x", thickness)
     for i, seg in enumerate(segments):
         seg["id"] = f"wall_{i + 1}"
+    _add_openings(segments, adjacencies)
     return segments
