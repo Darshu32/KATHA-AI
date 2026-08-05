@@ -82,6 +82,12 @@ def _color_for(obj: dict, materials_by_key: dict) -> tuple:
 
 # ── geometry ─────────────────────────────────────────────────────────────────
 _VOID_TYPES = {"atrium", "courtyard", "void", "shaft", "lightwell", "cutout"}
+# Object types that hang on a wall / ceiling and keep their authored height;
+# everything else is floor-placed (the LLM's vertical coordinate is unreliable —
+# often depth, which otherwise floats the piece metres off the floor).
+_WALL_MOUNTED = {"tv", "television", "light", "lamp", "chandelier", "pendant",
+                 "sconce", "painting", "mirror", "artwork", "clock", "wall_shelf",
+                 "shelf", "ac", "air_conditioner", "fan", "ceiling_fan"}
 _WALL_T = 0.1        # interior wall thickness (m)
 _DEFAULT_ROOM_H = 2.8
 
@@ -281,7 +287,11 @@ def build_scene(graph: dict) -> tuple[list[Solid], tuple, str]:
         w = _to_m(d.get("width"), unit) or 0.4
         h = _to_m(d.get("height"), unit) or 0.4
         p = obj.get("position") or {}
-        cx, cy, cz = float(p.get("x", 0) or 0), float(p.get("y", 0) or 0), float(p.get("z", 0) or 0)
+        cx, cz = float(p.get("x", 0) or 0), float(p.get("z", 0) or 0)
+        # Floor-place furniture; keep the authored height only for wall/ceiling
+        # items. (My multi-room furniture is already y=0, so this is a no-op for it.)
+        otype = str(obj.get("type") or "").lower()
+        cy = float(p.get("y", 0) or 0) if otype in _WALL_MOUNTED else 0.0
         rot = (obj.get("rotation") or {}).get("y", 0) or 0
         raw.append((obj, _box(l, h, w, cx, cy, cz, float(rot))))
 

@@ -39,16 +39,57 @@ _FURNITURE: dict[str, list] = {
         ("wc", (0.6, 0.5), 0.4, "corner"),
     ],
     "office": [
-        ("desk", (1.4, 0.7), 0.75, "back"),
+        ("desk", (1.6, 0.8), 0.75, "back"),
         ("chair", (0.5, 0.5), 0.9, "center"),
+        ("wardrobe", (1.2, 0.5), 1.9, "left"),   # storage cabinet
+    ],
+    # ── workplace / commercial ──────────────────────────────────────────────
+    "reception": [
+        ("reception_desk", (2.0, 0.7), 1.05, "back"),
+        ("sofa", (1.8, 0.8), 0.8, "front"),      # waiting seating
+    ],
+    "meeting": [
+        ("conference_table", (2.6, 1.2), 0.75, "center"),
+    ],
+    "workspace": [                               # open-plan → a row of desks
+        ("desk", (1.4, 0.7), 0.75, "left"),
+        ("desk", (1.4, 0.7), 0.75, "center"),
+        ("desk", (1.4, 0.7), 0.75, "right"),
+    ],
+    "waiting": [
+        ("sofa", (2.0, 0.9), 0.8, "back"),
+        ("coffee_table", (1.0, 0.6), 0.45, "center"),
+    ],
+    "retail": [
+        ("counter", (2.0, 0.6), 0.95, "back"),
+        ("shelf", (1.6, 0.5), 1.8, "left"),
+        ("shelf", (1.6, 0.5), 1.8, "right"),
     ],
 }
 
 
 def _category(text: str) -> str:
-    """Room name/type → furniture category. Unknown / service → '' (no furniture)."""
+    """Room name/type → furniture category. Unknown / service → '' (no furniture).
+
+    Workplace/commercial types are matched first (they're more specific), then
+    residential.
+    """
     t = (text or "").lower()
-    if "kitchen" in t:
+    # workplace / commercial
+    if "reception" in t:
+        return "reception"
+    if any(k in t for k in ("meeting", "conference", "boardroom")):
+        return "meeting"
+    if any(k in t for k in ("workspace", "workstation", "open plan", "open-plan", "bullpen", "cubicle")):
+        return "workspace"
+    if any(k in t for k in ("waiting", "lobby")):
+        return "waiting"
+    if any(k in t for k in ("retail", "shop", "showroom", "boutique", "storefront")):
+        return "retail"
+    if any(k in t for k in ("cafe", "restaurant", "canteen", "cafeteria")):
+        return "dining"
+    # residential
+    if "kitchen" in t or "pantry" in t:
         return "kitchen"
     if "wc" in t or "toilet" in t or "powder" in t:
         return "wc"
@@ -56,7 +97,7 @@ def _category(text: str) -> str:
         return "bathroom"
     if "dining" in t:
         return "dining"
-    if any(k in t for k in ("office", "study", "work")):
+    if any(k in t for k in ("office", "cabin", "study", "work")):
         return "office"
     if any(k in t for k in ("living", "lounge", "family", "drawing")):
         return "living"
