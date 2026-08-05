@@ -542,6 +542,14 @@ async def _compliance_advisories(
     """
     advisories: list[dict] = []
 
+    # These advisory targets are India-specific (ECBC envelope, NBC accessibility
+    # + fire slugs). Other regions have no seeded equivalents, and the standards
+    # resolver falls back to the India rows (stamping the requested jurisdiction),
+    # so showing them for a non-India project misreports the applicable code.
+    # Gate to India until region-specific advisory rows exist.
+    if jurisdiction != "india_nbc":
+        return advisories
+
     ecbc = await _resolve_standard(
         db,
         slug="code_ecbc_envelope_targets",

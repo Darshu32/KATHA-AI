@@ -52,6 +52,34 @@ def test_category_from_room_name():
     assert _category("Corridor") == ""
 
 
+def test_commercial_room_classification():
+    assert _category("Reception Area") == "reception"
+    assert _category("Meeting Room") == "meeting"
+    assert _category("Conference Room") == "meeting"
+    assert _category("Open Plan Workspace") == "workspace"
+    assert _category("Waiting Lobby") == "waiting"
+    assert _category("Retail Shop") == "retail"
+    assert _category("Private Office") == "office"
+
+
+def test_commercial_rooms_get_furnished():
+    graph = {
+        "spaces": [
+            {"id": "reception", "name": "Reception Area", "position": {"x": 0, "y": 0, "z": 0},
+             "dimensions": {"length": 5, "width": 4}},
+            {"id": "meeting", "name": "Meeting Room", "position": {"x": 5, "y": 0, "z": 0},
+             "dimensions": {"length": 5, "width": 4}},
+            {"id": "work", "name": "Open Plan Workspace", "position": {"x": 0, "y": 0, "z": 4},
+             "dimensions": {"length": 8, "width": 6}},
+        ],
+    }
+    out = furnish_rooms(graph)
+    types = [o["type"] for o in out["objects"]]
+    assert "reception_desk" in types
+    assert "conference_table" in types
+    assert types.count("desk") >= 2       # open-plan workspace → multiple desks
+
+
 # ── Placement ─────────────────────────────────────────────────────────────
 
 
