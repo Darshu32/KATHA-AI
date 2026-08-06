@@ -203,6 +203,7 @@ async def render_floorplan(
         },
         "render": render_payload,
         "plan_sheet": plan_sheet,
+        "graph": graph,                 # solved multi-room graph — editable ("open as project")
         "solved": solution is not None,
         "room_count": len(rooms),
         "total_area_sqm": round(sum(float(r.get("area_sqm") or 0) for r in rooms), 1),

@@ -593,11 +593,13 @@ export default function ImageWorkspaceMvp2() {
         open={modelOpen}
         onClose={() => setModelOpen(false)}
         token={token}
+        onOpened={(projectId, version, name) => setActiveProject(projectId, version, name)}
       />
       <FloorplanImportDialog
         open={floorplanOpen}
         onClose={() => setFloorplanOpen(false)}
         token={token}
+        onOpened={(projectId, version, name) => setActiveProject(projectId, version, name)}
       />
       <ProjectPicker
         open={pickerOpen}

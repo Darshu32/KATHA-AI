@@ -1,6 +1,9 @@
 """Project CRUD routes."""
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Query, status
+from pydantic import BaseModel, Field
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
@@ -16,9 +19,23 @@ from app.services.design_graph_service import (
     create_project,
     get_project,
     list_projects,
+    save_graph_version,
 )
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/projects", tags=["projects"])
+
+
+class ProjectImportIn(BaseModel):
+    """An upload-imported design to persist as a real, editable project."""
+
+    name: str = "Imported design"
+    graph: dict
+    render_image: str | None = None      # base64 data URL from the import dialog
+    hotspots: list[dict] = Field(default_factory=list)
+    project_type: str = "residential"
+    region: str = "india"
 
 
 @router.post("", response_model=ProjectOut, status_code=status.HTTP_201_CREATED)
@@ -38,6 +55,40 @@ async def create_project_route(
         region=payload.region,
     )
     return project
+
+
+@router.post("/import", status_code=status.HTTP_201_CREATED)
+async def import_as_project_route(
+    payload: ProjectImportIn,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Persist an upload-imported design (graph + render) as a real, editable
+    project version so the workspace can open it — the "open as project" wiring
+    for the floor-plan and 3D-reconstruct import paths. The graph flows through
+    the same normalize/validate chokepoint as generated designs."""
+    from app.services.generation_pipeline import _decode_data_url, _persist_render
+
+    project = await create_project(
+        db, owner_id=user.id, name=(payload.name or "Imported design"),
+        project_type=payload.project_type, region=payload.region,
+    )
+    version = await save_graph_version(
+        db, project.id, payload.graph, change_type="imported",
+        change_summary="Imported from an uploaded model / plan", prompt="(imported)",
+    )
+    if payload.render_image:
+        img, mime = _decode_data_url(payload.render_image)
+        if img:
+            try:
+                await _persist_render(
+                    db, graph_version_id=version.id, image_bytes=img,
+                    mime_type=(mime or "image/png"), source="katha-import",
+                    hotspots=(payload.hotspots or None), title="imported render",
+                )
+            except Exception as exc:  # noqa: BLE001 — the graph is already saved
+                logger.warning("import render persist failed: %s", exc)
+    return {"project_id": project.id, "version": version.version, "name": project.name}
 
 
 @router.get("", response_model=ProjectListOut)

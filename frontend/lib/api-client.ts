@@ -473,6 +473,7 @@ export interface FloorplanRenderResponse {
   };
   render: { image: string; provider: string; finished: boolean; kind: string } | null;
   plan_sheet: string | null;
+  graph: Record<string, unknown>;
   solved: boolean;
   room_count: number;
   total_area_sqm: number;
@@ -663,6 +664,26 @@ export const projects = {
       region?: string;
     },
   ) => request<ProjectOut>("/projects", "POST", body, token),
+
+  /* Persist an upload-imported design (graph + render) as a real, editable
+     project so the workspace can open it. Returns the new project id + version. */
+  importProject: (
+    token: string | undefined,
+    body: {
+      name: string;
+      graph: Record<string, unknown>;
+      render_image?: string | null;
+      hotspots?: unknown[];
+      project_type?: string;
+      region?: string;
+    },
+  ) =>
+    request<{ project_id: string; version: number; name: string }>(
+      "/projects/import",
+      "POST",
+      body,
+      token,
+    ),
 
   list: (token?: string) =>
     request<{ projects: ProjectOut[]; total: number }>(

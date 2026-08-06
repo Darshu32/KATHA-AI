@@ -12,6 +12,7 @@ import { useCallback, useRef, useState } from "react";
 import {
   ApiError,
   imports as importsApi,
+  projects as projectsApi,
   type FloorplanRenderResponse,
 } from "@/lib/api-client";
 
@@ -23,11 +24,14 @@ export function FloorplanImportDialog({
   open,
   onClose,
   token,
+  onOpened,
 }: {
   open: boolean;
   onClose: () => void;
   token: string | null | undefined;
+  onOpened?: (projectId: string, version: number, name: string) => void;
 }) {
+  const [saving, setSaving] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [preview, setPreview] = useState<string | null>(null);
   const [style, setStyle] = useState("");
@@ -80,6 +84,26 @@ export function FloorplanImportDialog({
       } else {
         setError("Couldn't reach the backend. Is uvicorn running on :8000?");
       }
+    }
+  };
+
+  const openAsProject = async () => {
+    if (!result) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const res = await projectsApi.importProject(token ?? undefined, {
+        name: (file?.name || "Imported plan").replace(/\.[^.]+$/, ""),
+        graph: result.graph,
+        render_image: result.render?.image ?? null,
+        project_type: "residential",
+      });
+      onOpened?.(res.project_id, res.version, res.name);
+      close();
+    } catch {
+      setError("Couldn't save as a project.");
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -245,6 +269,16 @@ export function FloorplanImportDialog({
             >
               Close
             </button>
+            {state === "done" && result ? (
+              <button
+                type="button"
+                onClick={openAsProject}
+                disabled={saving}
+                className="text-[12px] font-medium px-3 py-1.5 border border-graphite text-ink-deep hover:bg-paper-soft rounded-sm transition-colors disabled:opacity-40"
+              >
+                {saving ? "Opening…" : "Open as project"}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={run}
