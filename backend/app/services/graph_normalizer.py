@@ -25,7 +25,7 @@ Defects this layer corrects (root causes A–C from the drawing audit):
     A. Axis collapse — depth authored into ``position.y`` with ``z`` pinned to
        0, so every object stacks on one centreline. Detected by axis spread
        and corrected by swapping y<->z for positions.
-    B. Unit ambiguity — graphs carry no explicit unit, so renderers default to
+    B. Unit ambiguity — graphs carry no explicit unit, so renderers default to          
        "ft" while values are metres. Corrected by stamping ``unit="m"``.
     C. Oversized / out-of-bounds objects — footprints larger than the room or
        positioned outside the walls. Corrected by scaling to fit and clamping

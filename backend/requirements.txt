@@ -67,6 +67,9 @@ psd-tools==1.17.0
 # atrium voids) for app/services/spatial/*. The LLM emits the spec; this
 # builds the solids. numpy + Pillow (already deps) do the rasterise + encode.
 manifold3d==3.5.2
+# trimesh = load uploaded 3D models (OBJ/GLB/glTF/STL/PLY) into verts+tris for
+# the render path — Layer 5B, Tier 1 (upload → geometry). app/services/importers/mesh_geometry.py
+trimesh==5.0.0
 
 # ── Dev / Testing ───────────────────────────────────
 httpx==0.28.1

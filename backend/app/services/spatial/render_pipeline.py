@@ -18,7 +18,7 @@ import numpy as np
 from PIL import Image
 
 from app.services.spatial.finish import build_finish_prompt, finish_render
-from app.services.spatial.kernel import _room_dims, build_scene
+from app.services.spatial.kernel import Solid, _room_dims, build_scene
 from app.services.spatial.rasterizer import interior_camera, orbit_camera, render
 
 logger = logging.getLogger(__name__)
@@ -105,6 +105,68 @@ async def render_design(graph: dict, *, width: int = 1200, height: int = 800,
         if res:
             image_bytes = res["bytes"]
             provider = f"katha-kernel+{res['provider']}"
+            finished = True
+
+    return RenderResult(
+        image_bytes=image_bytes, hotspots=hotspots, base_bytes=base_png,
+        depth_bytes=depth_png, normal_bytes=normal_png, provider=provider,
+        kind=kind, finished=finished,
+    )
+
+
+# ── Imported-mesh path (Layer 5B, Tier 1: upload → geometry) ──────────────────
+def _raster_mesh(verts, tris, width: int, height: int):
+    """CPU-bound: wrap an imported mesh as a Solid, frame it, rasterise.
+
+    No kernel — the software rasteriser draws the triangles directly, so an
+    arbitrary (non-watertight) uploaded mesh renders without a Manifold."""
+    v = np.asarray(verts, np.float32)
+    t = np.asarray(tris, np.int32)
+    if not len(v) or not len(t):
+        return None
+    lo, hi = v.min(0), v.max(0)
+    bbox = (float(lo[0]), float(lo[1]), float(lo[2]), float(hi[0]), float(hi[1]), float(hi[2]))
+    longest = float((hi - lo).max()) or 1.0
+    kind = "product" if longest < 3.0 else "exterior"   # object vs building scale
+    solid = Solid(id="model", name="Imported model", type="model",
+                  color=(0.62, 0.60, 0.58), manifold=None, side=None, verts=v, tris=t)
+    cam = orbit_camera(bbox, elev_deg=26.0 if kind == "product" else 18.0)
+    rgb, depth, nrm, idbuf, hotspots = render([solid], cam, W=width, H=height)
+    coverage = float(np.count_nonzero(idbuf >= 0)) / idbuf.size
+    if coverage < 0.01:
+        logger.warning("mesh render coverage too low (%.3f)", coverage)
+        return None
+    return _to_png(rgb), _to_png(depth), _to_png(nrm), hotspots, kind
+
+
+async def render_mesh(verts, tris, *, width: int = 1200, height: int = 800,
+                      finish: bool = True, style: str | None = None) -> RenderResult | None:
+    """Imported mesh (verts (N,3), tris (M,3)) → RenderResult. Layer 5B Tier 1:
+    straight to the rasteriser + finish pass, no spec/kernel. ``style`` is an
+    optional material/finish hint (e.g. "walnut and tan leather") — an uploaded
+    mesh carries no materials, so without it the finish picks a neutral one.
+    Returns None when the mesh is degenerate (caller surfaces a friendly error)."""
+    try:
+        built = await asyncio.to_thread(_raster_mesh, verts, tris, width, height)
+    except Exception as exc:  # noqa: BLE001 — geometry must never break the request
+        logger.warning("mesh raster failed: %s", exc)
+        return None
+    if not built:
+        return None
+    base_png, depth_png, normal_png, hotspots, kind = built
+
+    image_bytes, provider, finished = base_png, "katha-mesh", False
+    if finish:
+        graph = {"design_type": kind, "style": {"primary": style} if style else {}}
+        try:
+            res = await finish_render(base_png, depth_png,
+                                      build_finish_prompt(graph, kind=kind))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("mesh finish failed: %s", exc)
+            res = None
+        if res:
+            image_bytes = res["bytes"]
+            provider = f"katha-mesh+{res['provider']}"
             finished = True
 
     return RenderResult(

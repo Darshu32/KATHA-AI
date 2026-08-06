@@ -12,12 +12,15 @@ Two stages:
 
 from __future__ import annotations
 
+import base64
 import logging
 
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.database import get_db
+from app.middleware import get_current_user
+from app.models.orm import User
 from app.models.schemas import ErrorResponse
 from app.services.import_advisor_service import (
     ImportAdvisorError,
@@ -27,6 +30,8 @@ from app.services.import_advisor_service import (
 )
 from app.services.importers import parse as parse_file
 from app.services.importers import supported_extensions
+from app.services.importers.mesh_geometry import load_mesh, supported_mesh_extensions
+from app.services.spatial.render_pipeline import render_mesh
 from app.services.themes import get_theme as _get_theme_db
 
 logger = logging.getLogger(__name__)
@@ -65,6 +70,61 @@ async def parse_uploads(files: list[UploadFile] = File(...)) -> dict:
                 "warnings": [f"parser_error: {exc}"],
             })
     return {"count": len(results), "imports": results}
+
+
+@router.get("/3d/formats")
+async def list_3d_formats() -> dict:
+    """3D-model formats accepted by the geometry import → render path (Layer 5B)."""
+    return {"extensions": sorted(supported_mesh_extensions())}
+
+
+@router.post("/3d/render")
+async def render_3d_model(
+    file: UploadFile = File(..., description="3D model: OBJ / GLB / glTF / STL / PLY / OFF"),
+    style: str = Form(
+        default="",
+        description="Optional material/finish hint, e.g. 'walnut and tan leather'. An uploaded "
+                    "mesh carries no materials, so this guides the photoreal finish.",
+    ),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Upload a 3D model → photoreal render + overall dimensions (Layer 5B, Tier 1
+    of upload→geometry). The mesh is framed by the real kernel camera + rasteriser
+    and finished by Nano Banana; no editable spec is reconstructed yet (Tier 2)."""
+    body = await file.read()
+    if not body:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ErrorResponse(error="empty_file", message="The uploaded file is empty.").model_dump())
+    try:
+        mesh = load_mesh(file.filename or "model", body)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ErrorResponse(error="bad_model", message=str(exc)).model_dump())
+
+    result = await render_mesh(mesh["verts"], mesh["tris"], style=(style.strip() or None))
+    if result is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=ErrorResponse(error="unrenderable",
+                                 message="The model produced no renderable geometry.").model_dump())
+
+    length, height, depth = mesh["dims"]
+    return {
+        "filename": file.filename,
+        "render": {
+            "image": f"data:{result.mime};base64,{base64.b64encode(result.image_bytes).decode()}",
+            "provider": result.provider,
+            "finished": result.finished,
+            "kind": result.kind,
+        },
+        "dimensions_m": {"length": round(length, 3), "height": round(height, 3), "depth": round(depth, 3)},
+        "units_known": mesh["units_known"],
+        "mesh": {"vertices": mesh["n_verts"], "triangles": mesh["n_tris"],
+                 "up_axis_flipped": mesh["up_axis_flipped"]},
+        "hotspots": result.hotspots,
+    }
 
 
 @router.post("/advisor/knowledge")
