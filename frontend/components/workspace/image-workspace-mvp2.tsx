@@ -34,6 +34,7 @@ import {
 import BackendHealthBanner from "@/components/primitives/backend-health-banner";
 import { ImportDialog } from "@/components/workspace/import-dialog";
 import { ModelImportDialog } from "@/components/workspace/model-import-dialog";
+import { FloorplanImportDialog } from "@/components/workspace/floorplan-import-dialog";
 import {
   ProjectPicker,
   type OpenedProject,
@@ -194,6 +195,7 @@ export default function ImageWorkspaceMvp2() {
   // text on apply, which gets appended to the prompt textarea.
   const [importOpen, setImportOpen] = useState(false);
   const [modelOpen, setModelOpen] = useState(false);
+  const [floorplanOpen, setFloorplanOpen] = useState(false);
 
   // ── Project picker open/close ──────────────────────────────────────
   // The picker owns its project-list state; the workspace receives an
@@ -572,6 +574,7 @@ export default function ImageWorkspaceMvp2() {
         terminalOpen={terminalOpen}
         onOpenImport={() => setImportOpen(true)}
         onOpenModel={() => setModelOpen(true)}
+        onOpenFloorplan={() => setFloorplanOpen(true)}
         onOpenProjects={() => setPickerOpen(true)}
       />
       <ImportDialog
@@ -589,6 +592,11 @@ export default function ImageWorkspaceMvp2() {
       <ModelImportDialog
         open={modelOpen}
         onClose={() => setModelOpen(false)}
+        token={token}
+      />
+      <FloorplanImportDialog
+        open={floorplanOpen}
+        onClose={() => setFloorplanOpen(false)}
         token={token}
       />
       <ProjectPicker
@@ -792,12 +800,14 @@ function TopBar({
   terminalOpen,
   onOpenImport,
   onOpenModel,
+  onOpenFloorplan,
   onOpenProjects,
 }: {
   onToggleTerminal: () => void;
   terminalOpen: boolean;
   onOpenImport: () => void;
   onOpenModel: () => void;
+  onOpenFloorplan: () => void;
   onOpenProjects: () => void;
 }) {
   return (
@@ -881,6 +891,29 @@ function TopBar({
               />
             </svg>
             3D model
+          </button>
+          <button
+            type="button"
+            onClick={onOpenFloorplan}
+            className="text-[12px] text-ink-soft hover:text-ink transition-colors px-2 py-1 inline-flex items-center gap-1"
+            aria-label="Import floor plan"
+            title="Upload a floor plan → multi-room design"
+          >
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 13 13"
+              fill="none"
+              aria-hidden="true"
+            >
+              <path
+                d="M1.5 1.5h10v10h-10z M1.5 6.5h6 M7.5 1.5v10 M7.5 6.5h4"
+                stroke="currentColor"
+                strokeWidth="1.2"
+                strokeLinejoin="round"
+              />
+            </svg>
+            Floor plan
           </button>
           <button
             type="button"

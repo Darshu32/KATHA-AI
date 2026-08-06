@@ -449,6 +449,20 @@ export interface Model3DRenderResponse {
   hotspots: unknown[];
 }
 
+export interface FloorplanRenderResponse {
+  filename: string | null;
+  program: {
+    rooms: { id: string; type: string; area_sqm: number }[];
+    adjacencies: { a: string; b: string }[];
+    notes?: string | null;
+  };
+  render: { image: string; provider: string; finished: boolean; kind: string } | null;
+  plan_sheet: string | null;
+  solved: boolean;
+  room_count: number;
+  total_area_sqm: number;
+}
+
 export const imports = {
   /** List the file extensions the deterministic parsers support. */
   formats: () =>
@@ -481,6 +495,30 @@ export const imports = {
       throw new ApiError(res.status, body);
     }
     return res.json() as Promise<Model3DRenderResponse>;
+  },
+
+  /** Upload a floor-plan image → a vision LLM reads its room program → a
+   *  multi-room design (render + GA plan sheet + room list). Multipart-only. */
+  renderFloorplan: async (
+    token: string | undefined,
+    file: File,
+    style?: string,
+  ): Promise<FloorplanRenderResponse> => {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    if (style && style.trim()) fd.append("style", style.trim());
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(`${API_BASE}/imports/floorplan/render`, {
+      method: "POST",
+      headers,
+      body: fd,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new ApiError(res.status, body);
+    }
+    return res.json() as Promise<FloorplanRenderResponse>;
   },
 
   /** Upload one or more files; backend runs each through its
