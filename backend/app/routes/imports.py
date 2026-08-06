@@ -32,8 +32,9 @@ from app.services.importers import parse as parse_file
 from app.services.importers import supported_extensions
 from app.services.floorplan_import import floorplan_to_design
 from app.services.importers.mesh_geometry import load_mesh, supported_mesh_extensions
-from app.services.spatial.drawings2d import mesh_spec_sheet_svg, sheet_svg
-from app.services.spatial.render_pipeline import render_design, render_mesh
+from app.services.mesh_reconstruct import reconstruct_from_mesh
+from app.services.spatial.drawings2d import mesh_spec_sheet_svg, sheet_svg, spec_sheet_svg
+from app.services.spatial.render_pipeline import render_design, render_mesh, render_parts
 from app.services.themes import get_theme as _get_theme_db
 from app.vision.base import VisionError
 
@@ -205,6 +206,66 @@ async def render_floorplan(
         "solved": solution is not None,
         "room_count": len(rooms),
         "total_area_sqm": round(sum(float(r.get("area_sqm") or 0) for r in rooms), 1),
+    }
+
+
+@router.post("/3d/reconstruct")
+async def reconstruct_3d_model(
+    file: UploadFile = File(..., description="3D model: OBJ / GLB / glTF / STL / PLY / OFF"),
+    style: str = Form(default="", description="Optional material/finish hint for the render."),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Upload a 3D model → decompose it into editable PARTS (Layer 5B, Tier 2).
+    Each connected component becomes a positioned/sized/typed object in an
+    editable DesignGraph — individually selectable (per-part hotspots), BIM-
+    exportable, and listed in the spec-sheet BOM. A welded single-mesh model
+    yields one part (true wall/room reconstruction is the deeper Tier 2b)."""
+    body = await file.read()
+    if not body:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ErrorResponse(error="empty_file", message="The uploaded file is empty.").model_dump())
+    try:
+        mesh = load_mesh(file.filename or "model", body)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ErrorResponse(error="bad_model", message=str(exc)).model_dump())
+
+    graph, parts = reconstruct_from_mesh(
+        mesh["verts"], mesh["tris"], "reconstruct", (style.strip() or None))
+    if not parts:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=ErrorResponse(error="unrenderable",
+                                 message="The model produced no parts.").model_dump())
+
+    result = await render_parts(parts, style=(style.strip() or None))
+    render_payload = None
+    if result and result.image_bytes:
+        render_payload = {
+            "image": f"data:{result.mime};base64,{base64.b64encode(result.image_bytes).decode()}",
+            "provider": result.provider, "finished": result.finished, "kind": result.kind,
+        }
+    spec_sheet = None
+    try:
+        svg = spec_sheet_svg(graph, {"project_name": file.filename or "Reconstructed model"})
+        spec_sheet = "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode()
+    except Exception as exc:  # noqa: BLE001 — parts already computed
+        logger.warning("reconstruct spec sheet failed for %s: %s", file.filename, exc)
+
+    return {
+        "filename": file.filename,
+        "part_count": len(parts),
+        "parts": [{
+            "id": p["id"], "type": p["type"],
+            "dimensions_mm": {k: round(v * 1000) for k, v in p["dimensions"].items()},
+        } for p in parts],
+        "graph": graph,                 # editable DesignGraph — objects = the parts
+        "render": render_payload,
+        "spec_sheet": spec_sheet,
+        "hotspots": result.hotspots if result else [],
+        "editable": True,
     }
 
 

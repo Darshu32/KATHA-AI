@@ -109,3 +109,76 @@ def _recentre_on_floor(verts: np.ndarray) -> np.ndarray:
     v[:, 2] -= (lo[2] + hi[2]) / 2.0
     v[:, 1] -= lo[1]
     return v
+
+
+# ── Tier 2: decompose a mesh into editable PARTS ──────────────────────────────
+def _part_type(dims: tuple[float, float, float]) -> str:
+    """Coarse type from a part's proportions (Tier-2 v1 heuristic)."""
+    length, height, depth = dims
+    foot = max(length, depth, 1e-6)
+    if height > 1.8 * foot and foot < 0.35:
+        return "leg"                          # tall + thin footprint
+    if height < 0.18 * foot:
+        return "panel"                        # flat slab / top
+    if height > 1.2 * foot:
+        return "upright"                      # taller than wide (backrest / door)
+    return "part"
+
+
+def decompose_mesh(verts, tris, max_parts: int = 64) -> list[dict]:
+    """Split a mesh into connected-component PARTS — the editable units.
+
+    Union-find over triangles' shared vertices (no graph-engine dependency, so
+    it works where ``trimesh.split`` can't). Each part is a self-contained
+    sub-mesh (local verts + tris) with a bounding box → position (bottom-centre)
+    + dimensions + a coarse type. A welded single-mesh model yields one part
+    (honest Tier-2 limit — true wall/room reconstruction is Tier 2b)."""
+    v = np.asarray(verts, np.float32)
+    t = np.asarray(tris, np.int64)
+    if not len(t):
+        return []
+
+    parent = list(range(len(v)))
+
+    def find(x: int) -> int:
+        root = x
+        while parent[root] != root:
+            root = parent[root]
+        while parent[x] != root:      # path compression
+            parent[x], x = root, parent[x]
+        return root
+
+    for tri in t:
+        a, b, c = int(tri[0]), int(tri[1]), int(tri[2])
+        ra, rb = find(a), find(b)
+        if ra != rb:
+            parent[rb] = ra
+        ra, rc = find(a), find(c)
+        if ra != rc:
+            parent[rc] = ra
+
+    from collections import defaultdict
+    groups: dict[int, list] = defaultdict(list)
+    for tri in t:
+        groups[find(int(tri[0]))].append(tri)
+
+    comps = sorted(groups.values(), key=len, reverse=True)[:max_parts]
+    parts: list[dict] = []
+    for i, comp_tris in enumerate(comps, 1):
+        ct = np.asarray(comp_tris, np.int64)
+        used = np.unique(ct)
+        remap = {int(old): new for new, old in enumerate(used)}
+        local_v = v[used].astype(np.float32)
+        local_t = np.array([[remap[int(x)] for x in tri] for tri in ct], np.int32)
+        lo, hi = local_v.min(0), local_v.max(0)
+        dims = (float(hi[0] - lo[0]), float(hi[1] - lo[1]), float(hi[2] - lo[2]))  # L,H,D
+        parts.append({
+            "id": f"part_{i}",
+            "type": _part_type(dims),
+            "position": {"x": float((lo[0] + hi[0]) / 2), "y": float(lo[1]),
+                         "z": float((lo[2] + hi[2]) / 2)},           # bottom-centre
+            "dimensions": {"length": dims[0], "width": dims[2], "height": dims[1]},
+            "verts": local_v,
+            "tris": local_t,
+        })
+    return parts

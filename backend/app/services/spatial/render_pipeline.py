@@ -174,3 +174,64 @@ async def render_mesh(verts, tris, *, width: int = 1200, height: int = 800,
         depth_bytes=depth_png, normal_bytes=normal_png, provider=provider,
         kind=kind, finished=finished,
     )
+
+
+# ── Decomposed-mesh path (Tier 2: per-part solids → per-part hotspots) ─────────
+def _raster_parts(parts, width: int, height: int):
+    """One Solid per part (real triangles) rendered together, so each part gets
+    its own id in the hotspot buffer → individually selectable."""
+    solids, los, his = [], [], []
+    for p in parts:
+        v = np.asarray(p["verts"], np.float32)
+        t = np.asarray(p["tris"], np.int32)
+        if not len(v) or not len(t):
+            continue
+        solids.append(Solid(id=p["id"], name=str(p.get("type") or "part"), type="part",
+                            color=(0.62, 0.60, 0.58), manifold=None, verts=v, tris=t))
+        los.append(v.min(0))
+        his.append(v.max(0))
+    if not solids:
+        return None
+    lo, hi = np.min(los, 0), np.max(his, 0)
+    bbox = (float(lo[0]), float(lo[1]), float(lo[2]), float(hi[0]), float(hi[1]), float(hi[2]))
+    longest = float((hi - lo).max()) or 1.0
+    kind = "product" if longest < 3.0 else "exterior"
+    cam = orbit_camera(bbox, elev_deg=26.0 if kind == "product" else 18.0)
+    rgb, depth, nrm, idbuf, hotspots = render(solids, cam, W=width, H=height)
+    coverage = float(np.count_nonzero(idbuf >= 0)) / idbuf.size
+    if coverage < 0.01:
+        return None
+    return _to_png(rgb), _to_png(depth), _to_png(nrm), hotspots, kind
+
+
+async def render_parts(parts, *, width: int = 1200, height: int = 800,
+                       finish: bool = True, style: str | None = None) -> RenderResult | None:
+    """Render a decomposed mesh (list of parts) with PER-PART hotspots — each
+    part is individually selectable. Same finish path as render_mesh (Tier 2)."""
+    try:
+        built = await asyncio.to_thread(_raster_parts, parts, width, height)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("parts raster failed: %s", exc)
+        return None
+    if not built:
+        return None
+    base_png, depth_png, normal_png, hotspots, kind = built
+
+    image_bytes, provider, finished = base_png, "katha-mesh", False
+    if finish:
+        graph = {"design_type": kind, "style": {"primary": style} if style else {}}
+        try:
+            res = await finish_render(base_png, depth_png, build_finish_prompt(graph, kind=kind))
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("parts finish failed: %s", exc)
+            res = None
+        if res:
+            image_bytes = res["bytes"]
+            provider = f"katha-mesh+{res['provider']}"
+            finished = True
+
+    return RenderResult(
+        image_bytes=image_bytes, hotspots=hotspots, base_bytes=base_png,
+        depth_bytes=depth_png, normal_bytes=normal_png, provider=provider,
+        kind=kind, finished=finished,
+    )

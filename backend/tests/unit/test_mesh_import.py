@@ -74,6 +74,30 @@ def test_silhouette_unions_to_real_outline():
     assert max(len(r) for r in rings) > 4                  # not the 4-pt bbox fallback
 
 
+def test_decompose_mesh_splits_connected_components():
+    from app.services.importers.mesh_geometry import decompose_mesh
+    obj, _ = _chair_obj_glb()                         # 6 disjoint boxes
+    g = load_mesh("chair.obj", obj)
+    parts = decompose_mesh(g["verts"], g["tris"])
+    assert len(parts) == 6                            # seat + 4 legs + backrest
+    assert sum(1 for p in parts if p["type"] == "leg") == 4
+    for p in parts:                                   # each part is self-contained
+        assert int(p["tris"].max()) < len(p["verts"])
+        assert p["dimensions"]["height"] > 0
+
+
+def test_reconstruct_builds_editable_part_graph():
+    from app.services.mesh_reconstruct import reconstruct_from_mesh
+    obj, _ = _chair_obj_glb()
+    g = load_mesh("chair.obj", obj)
+    graph, parts = reconstruct_from_mesh(g["verts"], g["tris"], "p1", "walnut")
+    assert len(parts) == 6
+    assert graph["design_type"] == "product"          # object scale
+    assert len(graph["objects"]) == 6
+    assert all(o["role"] == "imported_part" for o in graph["objects"])
+    assert all("position" in o and "dimensions" in o for o in graph["objects"])
+
+
 def test_mesh_spec_sheet_svg_wellformed_and_small():
     import xml.dom.minidom as minidom
 
