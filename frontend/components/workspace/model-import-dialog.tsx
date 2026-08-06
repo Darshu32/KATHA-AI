@@ -14,6 +14,7 @@ import {
   ApiError,
   imports as importsApi,
   projects as projectsApi,
+  type FloorplanRenderResponse,
   type Model3DRenderResponse,
   type Reconstruct3DResponse,
 } from "@/lib/api-client";
@@ -37,8 +38,10 @@ export function ModelImportDialog({
   const [file, setFile] = useState<File | null>(null);
   const [style, setStyle] = useState("");
   const [state, setState] = useState<State>("idle");
-  const [mode, setMode] = useState<"whole" | "parts">("whole");
-  const [result, setResult] = useState<Model3DRenderResponse | Reconstruct3DResponse | null>(null);
+  const [mode, setMode] = useState<"whole" | "parts" | "rooms">("whole");
+  const [result, setResult] = useState<
+    Model3DRenderResponse | Reconstruct3DResponse | FloorplanRenderResponse | null
+  >(null);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<"render" | "sheet">("render");
   const [isDragging, setIsDragging] = useState(false);
@@ -74,6 +77,8 @@ export function ModelImportDialog({
       const res =
         mode === "parts"
           ? await importsApi.reconstruct3d(token ?? undefined, file, style)
+          : mode === "rooms"
+          ? await importsApi.reconstructBuilding(token ?? undefined, file, style)
           : await importsApi.render3d(token ?? undefined, file, style);
       setResult(res);
       setView("render");
@@ -91,16 +96,17 @@ export function ModelImportDialog({
   };
 
   const openAsProject = async () => {
-    if (!result || !("part_count" in result)) return;
+    if (!result || !("graph" in result)) return;
     setSaving(true);
     setError(null);
     try {
+      const isRooms = "room_count" in result;
       const res = await projectsApi.importProject(token ?? undefined, {
         name: (file?.name || "Reconstructed model").replace(/\.[^.]+$/, ""),
         graph: result.graph,
         render_image: result.render?.image ?? null,
-        hotspots: result.hotspots,
-        project_type: "furniture",
+        hotspots: "hotspots" in result ? result.hotspots : [],
+        project_type: isRooms ? "residential" : "furniture",
       });
       onOpened?.(res.project_id, res.version, res.name);
       close();
@@ -121,6 +127,9 @@ export function ModelImportDialog({
 
   const whole = result && "dimensions_m" in result ? result : null;
   const parts = result && "part_count" in result ? result : null;
+  const rooms = result && "room_count" in result ? result : null;
+  const openable = result && "graph" in result ? result : null;   // parts | rooms → openable
+  const sheetUrl = whole?.spec_sheet ?? parts?.spec_sheet ?? rooms?.plan_sheet ?? null;
   const dims = whole?.dimensions_m;
   const uk = whole?.units_known;
   const fmt = (m: number) => (uk ? `${Math.round(m * 1000)} mm` : m.toFixed(3));
@@ -214,7 +223,7 @@ export function ModelImportDialog({
             <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-mute">
               Mode
             </span>
-            {(["whole", "parts"] as const).map((m) => (
+            {(["whole", "parts", "rooms"] as const).map((m) => (
               <button
                 key={m}
                 type="button"
@@ -229,7 +238,7 @@ export function ModelImportDialog({
                     : "text-ink-soft hover:text-ink border border-hairline"
                 }`}
               >
-                {m === "whole" ? "Render whole" : "Editable parts"}
+                {m === "whole" ? "Render whole" : m === "parts" ? "Editable parts" : "Building → rooms"}
               </button>
             ))}
           </div>
@@ -249,22 +258,26 @@ export function ModelImportDialog({
                 <button
                   type="button"
                   onClick={() => setView("sheet")}
-                  disabled={!result.spec_sheet}
+                  disabled={!sheetUrl}
                   className={`font-mono text-[10px] uppercase tracking-[0.12em] px-2 py-1 rounded-sm transition-colors disabled:opacity-30 ${
                     view === "sheet" ? "bg-ink-deep text-paper" : "text-ink-soft hover:text-ink"
                   }`}
                 >
-                  Spec sheet
+                  {rooms ? "Plan sheet" : "Spec sheet"}
                 </button>
                 <span className="ml-auto font-mono text-[10px] text-ink-mute">
-                  {parts ? `${parts.part_count} parts` : result.render?.kind}
+                  {parts
+                    ? `${parts.part_count} parts`
+                    : rooms
+                    ? `${rooms.room_count} rooms`
+                    : result.render?.kind}
                   {result.render && !result.render.finished ? " · clay" : ""}
                 </span>
               </div>
               <div className="bg-paper-soft flex items-center justify-center p-2">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={view === "sheet" && result.spec_sheet ? result.spec_sheet : (result.render?.image ?? "")}
+                  src={view === "sheet" && sheetUrl ? sheetUrl : (result.render?.image ?? "")}
                   alt={view === "sheet" ? "Model spec sheet" : "Model render"}
                   className="max-h-[42vh] w-auto object-contain"
                 />
@@ -281,6 +294,20 @@ export function ModelImportDialog({
                         <span className="text-ink-mute">
                           {p.dimensions_mm.length}×{p.dimensions_mm.width}×{p.dimensions_mm.height}
                         </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : rooms ? (
+                <div className="px-3 py-2 border-t border-hairline max-h-32 overflow-y-auto">
+                  <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute mb-1">
+                    {rooms.room_count} rooms · {rooms.total_area_sqm} m² · read from the model
+                  </div>
+                  <ul className="grid grid-cols-2 gap-x-6 gap-y-0.5 text-[11px] font-mono">
+                    {rooms.program.rooms.map((r) => (
+                      <li key={r.id} className="flex items-baseline justify-between">
+                        <span className="text-ink-deep">{r.type.replace(/_/g, " ")}</span>
+                        <span className="text-ink-mute">{r.area_sqm} m²</span>
                       </li>
                     ))}
                   </ul>
@@ -319,7 +346,7 @@ export function ModelImportDialog({
             >
               Close
             </button>
-            {parts ? (
+            {openable ? (
               <button
                 type="button"
                 onClick={openAsProject}

@@ -537,6 +537,30 @@ export const imports = {
     return res.json() as Promise<Reconstruct3DResponse>;
   },
 
+  /** Upload a BUILDING model → plan-slice → rooms (Tier 2b). Returns the
+   *  floor-plan-shaped multi-room result. Multipart-only. */
+  reconstructBuilding: async (
+    token: string | undefined,
+    file: File,
+    style?: string,
+  ): Promise<FloorplanRenderResponse> => {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    if (style && style.trim()) fd.append("style", style.trim());
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(`${API_BASE}/imports/3d/floorplan`, {
+      method: "POST",
+      headers,
+      body: fd,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new ApiError(res.status, body);
+    }
+    return res.json() as Promise<FloorplanRenderResponse>;
+  },
+
   /** Upload a floor-plan image → a vision LLM reads its room program → a
    *  multi-room design (render + GA plan sheet + room list). Multipart-only. */
   renderFloorplan: async (
