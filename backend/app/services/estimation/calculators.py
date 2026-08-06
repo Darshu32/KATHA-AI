@@ -16,14 +16,29 @@ from app.services.estimation.catalog import (
 from app.services.estimation.models import EstimateItem, round_money, to_decimal
 
 
+# Graph dimensions are authored in METRES (the spatial kernel + normalize_graph
+# enforce this), but the estimation rates are ₹/sqft and the defaults below are
+# in FEET. Convert metric dims → feet at every read so areas are TRUE square feet
+# (a room is not 16 sqft because it's 4×4 m — it's ~172 sqft).
+FEET_PER_M = Decimal("3.280839895")
+SQFT_PER_SQM = Decimal("10.763910417")
+
+
+def _ft(value, default_ft: str) -> Decimal:
+    """A present metric dimension → feet; the (feet) default when absent/zero."""
+    if not value:
+        return to_decimal(default_ft)
+    return to_decimal(value) * FEET_PER_M
+
+
 def calculate_area_summary(graph_data: dict) -> dict:
     total_sqft = Decimal("0")
     space_breakdown: list[dict] = []
 
-    for index, space in enumerate(graph_data.get("spaces", []), start=1):
+    for index, space in enumerate(graph_data.get("spaces") or [], start=1):
         dims = space.get("dimensions", {})
-        length = to_decimal(dims.get("length"), "12")
-        width = to_decimal(dims.get("width"), "15")
+        length = _ft(dims.get("length"), "12")
+        width = _ft(dims.get("width"), "15")
         floor_area = round_money(length * width)
         total_sqft += floor_area
         space_breakdown.append(
@@ -33,6 +48,23 @@ def calculate_area_summary(graph_data: dict) -> dict:
                 "sqft": float(floor_area),
             }
         )
+
+    # Fallback: a rooms PROGRAM (area_sqm per room) that was never solved into
+    # placed spaces — still cost it on the programmed floor area (m² → sqft).
+    if not space_breakdown:
+        for index, room in enumerate(graph_data.get("rooms") or [], start=1):
+            area_m2 = to_decimal(room.get("area_sqm"))
+            if area_m2 <= 0:
+                continue
+            floor_area = round_money(area_m2 * SQFT_PER_SQM)
+            total_sqft += floor_area
+            space_breakdown.append(
+                {
+                    "space_id": room.get("id", f"room_{index}"),
+                    "space_name": room.get("type", f"Room {index}"),
+                    "sqft": float(floor_area),
+                }
+            )
 
     return {
         "total_sqft": float(round_money(total_sqft)),
@@ -47,9 +79,9 @@ def calculate_material_items(graph_data: dict) -> tuple[list[EstimateItem], list
 
     for space in graph_data.get("spaces", []):
         dims = space.get("dimensions", {})
-        length = to_decimal(dims.get("length"), "12")
-        width = to_decimal(dims.get("width"), "15")
-        height = to_decimal(dims.get("height"), "10")
+        length = _ft(dims.get("length"), "12")
+        width = _ft(dims.get("width"), "15")
+        height = _ft(dims.get("height"), "10")
         space_name = space.get("name", "Room")
 
         if not dims.get("length") or not dims.get("width") or not dims.get("height"):
@@ -290,8 +322,8 @@ def _estimate_opening_area(objects: list[dict]) -> Decimal:
         if obj_type not in {"door", "window"}:
             continue
         dims = obj.get("dimensions", {})
-        width = to_decimal(dims.get("width"), "3")
-        height = to_decimal(dims.get("height"), "7" if obj_type == "door" else "4")
+        width = _ft(dims.get("width"), "3")
+        height = _ft(dims.get("height"), "7" if obj_type == "door" else "4")
         area += width * height
     return area
 

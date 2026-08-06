@@ -60,7 +60,9 @@ def test_total_floor_area_handles_mm():
 
 def test_estimate_area_sums_all_rooms():
     est = compute_estimate(_solved_apartment())
-    assert est["area"]["total_sqft"] == pytest.approx(57.0, abs=0.5)
+    # Rooms sum to 57 m²; the estimate reports TRUE square feet (m² → sqft, the
+    # graph is metric while the ₹/sqft rates are imperial).
+    assert est["area"]["total_sqft"] == pytest.approx(57.0 * 10.7639, rel=0.03)
 
 
 # ── Code checks run per-room ──────────────────────────────────────────────
