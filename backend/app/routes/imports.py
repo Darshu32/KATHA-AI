@@ -31,6 +31,7 @@ from app.services.import_advisor_service import (
 from app.services.importers import parse as parse_file
 from app.services.importers import supported_extensions
 from app.services.importers.mesh_geometry import load_mesh, supported_mesh_extensions
+from app.services.spatial.drawings2d import mesh_spec_sheet_svg
 from app.services.spatial.render_pipeline import render_mesh
 from app.services.themes import get_theme as _get_theme_db
 
@@ -110,6 +111,20 @@ async def render_3d_model(
             detail=ErrorResponse(error="unrenderable",
                                  message="The model produced no renderable geometry.").model_dump())
 
+    # Spec sheet — the fuller deliverable: front/side/top silhouettes + dims +
+    # model stats (upload analog of the product spec sheet). Best-effort.
+    sheet_meta = {
+        "filename": file.filename, "units_known": mesh["units_known"],
+        "n_tris": mesh["n_tris"], "n_verts": mesh["n_verts"],
+        "watertight": mesh["watertight"], "volume": mesh["volume"], "area": mesh["area"],
+    }
+    spec_sheet = None
+    try:
+        svg = mesh_spec_sheet_svg(mesh["verts"], mesh["tris"], sheet_meta)
+        spec_sheet = "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode()
+    except Exception as exc:  # noqa: BLE001 — the render already succeeded
+        logger.warning("mesh spec sheet failed for %s: %s", file.filename, exc)
+
     length, height, depth = mesh["dims"]
     return {
         "filename": file.filename,
@@ -119,10 +134,11 @@ async def render_3d_model(
             "finished": result.finished,
             "kind": result.kind,
         },
+        "spec_sheet": spec_sheet,
         "dimensions_m": {"length": round(length, 3), "height": round(height, 3), "depth": round(depth, 3)},
         "units_known": mesh["units_known"],
         "mesh": {"vertices": mesh["n_verts"], "triangles": mesh["n_tris"],
-                 "up_axis_flipped": mesh["up_axis_flipped"]},
+                 "watertight": mesh["watertight"], "up_axis_flipped": mesh["up_axis_flipped"]},
         "hotspots": result.hotspots,
     }
 

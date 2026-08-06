@@ -684,3 +684,227 @@ def spec_sheet_pdf(graph: dict, meta: dict | None = None) -> bytes:
     c.showPage()
     c.save()
     return buf.getvalue()
+
+
+# ── Imported-mesh spec sheet (Layer 5B: fuller deliverable for uploads) ────────
+def _silhouette(verts, tris, cols: tuple[int, int]) -> list:
+    """Union the projected triangles into silhouette rings — a small set of
+    outline polygons regardless of triangle count. Returns a list of (N,2)
+    arrays (exteriors + holes). Falls back to the bbox rectangle on any failure
+    or above a poly-count guard (keeps the sheet fast + small)."""
+    import numpy as np
+
+    v2 = np.asarray(verts, float)[:, list(cols)]
+    lo, hi = v2.min(0), v2.max(0)
+    bbox = [np.array([[lo[0], lo[1]], [hi[0], lo[1]], [hi[0], hi[1]], [lo[0], hi[1]]])]
+    if len(tris) == 0 or len(tris) > 60000:      # perf guard for very high-poly uploads
+        return bbox
+    try:
+        from shapely.geometry import Polygon
+        from shapely.ops import unary_union
+        polys = [Polygon(v2[tri]) for tri in tris]
+        polys = [p for p in polys if p.is_valid and p.area > 1e-9]
+        if not polys:
+            return bbox
+        sil = unary_union(polys)
+        geoms = list(sil.geoms) if sil.geom_type == "MultiPolygon" else [sil]
+        rings: list = []
+        for g in geoms:
+            rings.append(np.asarray(g.exterior.coords))
+            rings.extend(np.asarray(r.coords) for r in g.interiors)
+        return rings or bbox
+    except Exception:  # noqa: BLE001 — drawings must never break the request
+        return bbox
+
+
+def _mesh_view_panel(rings, bx, by, bw, bh, title, sub) -> tuple[str, float]:
+    import numpy as np
+    frame = (f'<rect x="{bx}" y="{by}" width="{bw}" height="{bh}" fill="none" stroke="{_HAIR}" stroke-width="1"/>'
+             f'<text x="{bx + 12}" y="{by + 20}" fill="{_INK}" font-size="14" font-weight="700" letter-spacing="1.5">{title}</text>'
+             f'<text x="{bx + bw - 12}" y="{by + 20}" text-anchor="end" fill="{_MUTE}" font-size="11">{sub}</text>')
+    if not rings:
+        return frame, 0.0
+    allp = np.vstack(rings)
+    minx, miny = allp.min(0)
+    maxx, maxy = allp.max(0)
+    w, h = (maxx - minx) or 1, (maxy - miny) or 1
+    m, top = 26.0, 34.0
+    iw, ih = bw - 2 * m, bh - m - top
+    sc = min(iw / w, ih / h)
+    ox = bx + m + (iw - w * sc) / 2
+    oy = by + top + (ih - h * sc) / 2
+
+    def pt(p):
+        return f"{ox + (p[0] - minx) * sc:.1f},{oy + (maxy - p[1]) * sc:.1f}"
+
+    d = " ".join("M" + " L".join(pt(p) for p in ring) + " Z" for ring in rings if len(ring) >= 3)
+    body = frame + f'<path d="{d}" fill="{_POCHE}" stroke="{_INK}" stroke-width="1.5" fill-rule="evenodd"/>'
+    return body, (1.0 / sc if sc else 0.0)
+
+
+def _kv_panel(bx, by, bw, bh, title, rows) -> str:
+    out = (f'<rect x="{bx}" y="{by}" width="{bw}" height="{bh}" fill="none" stroke="{_HAIR}" stroke-width="1"/>'
+           f'<text x="{bx + 12}" y="{by + 22}" fill="{_INK}" font-size="14" font-weight="700" letter-spacing="1.5">{title}</text>')
+    yy = by + 54
+    for label, val in rows:
+        out += (f'<text x="{bx + 12}" y="{yy:.0f}" fill="{_MUTE}" font-size="12">{_esc(label)}</text>'
+                f'<text x="{bx + bw - 12}" y="{yy:.0f}" text-anchor="end" fill="{_INK}" font-size="15" font-weight="700">{_esc(val)}</text>')
+        yy += 30
+    return out
+
+
+def _mesh_dim_rows(dims, meta) -> list:
+    uk = bool(meta.get("units_known"))
+    lm, hm, dm = dims
+
+    def fmt(x):
+        return f"{x * 1000:.0f} mm" if uk else f"{x:.3f}"
+    return [("Length", fmt(lm)), ("Depth", fmt(dm)), ("Height", fmt(hm))]
+
+
+def _mesh_stat_rows(meta) -> list:
+    uk = bool(meta.get("units_known"))
+    area, vol = meta.get("area"), meta.get("volume")
+    return [
+        ("Triangles", f"{int(meta['n_tris']):,}" if isinstance(meta.get("n_tris"), int) else "—"),
+        ("Vertices", f"{int(meta['n_verts']):,}" if isinstance(meta.get("n_verts"), int) else "—"),
+        ("Watertight", "yes" if meta.get("watertight") else "no"),
+        ("Surface area", "—" if area is None else (f"{area:.3f} m²" if uk else f"{area:.3f}")),
+        ("Volume", "—" if vol is None else (f"{vol:.4f} m³" if uk else f"{vol:.4f}")),
+    ]
+
+
+def mesh_spec_sheet_svg(verts, tris, meta: dict | None = None) -> str:
+    """Spec sheet for an IMPORTED mesh (Layer 5B): front/side/top orthographic
+    silhouettes + overall dimensions + model integrity stats. The upload analog
+    of ``spec_sheet_svg`` — a raw mesh has no parts, so there is no BOM; it has a
+    silhouette, a bounding box and mesh statistics."""
+    import numpy as np
+    meta = meta or {}
+    W, H = 1500.0, 1060.0
+    tb = 100.0
+    body = f'<rect x="16" y="16" width="{W - 32:.0f}" height="{H - 32:.0f}" fill="none" stroke="{_INK}" stroke-width="1.5"/>'
+
+    vw, vh = (W - 48) / 3.0, 470.0
+    fp, mpp = _mesh_view_panel(_silhouette(verts, tris, (0, 1)), 24, 24, vw, vh, "FRONT", "orthographic")
+    sp, _ = _mesh_view_panel(_silhouette(verts, tris, (2, 1)), 24 + vw, 24, vw, vh, "SIDE", "orthographic")
+    tp, _ = _mesh_view_panel(_silhouette(verts, tris, (0, 2)), 24 + 2 * vw, 24, vw, vh, "TOP", "orthographic")
+    body += fp + sp + tp + _scale_bar(40, 24 + vh - 22, mpp)
+
+    v = np.asarray(verts, float)
+    lo, hi = v.min(0), v.max(0)
+    dims = (float(hi[0] - lo[0]), float(hi[1] - lo[1]), float(hi[2] - lo[2]))
+    sy = 24 + vh + 16
+    sh = H - sy - 24 - tb - 16
+    half = (W - 48) / 2 - 8
+    body += _kv_panel(24, sy, half, sh, "OVERALL", _mesh_dim_rows(dims, meta))
+    body += _kv_panel(24 + half + 16, sy, half, sh, "MODEL", _mesh_stat_rows(meta))
+
+    ty = H - 24 - tb
+    body += f'<rect x="24" y="{ty:.0f}" width="{W - 48:.0f}" height="{tb:.0f}" fill="none" stroke="{_INK}" stroke-width="1.2"/>'
+    name = str(meta.get("filename") or "Imported model")
+    lm, hm, dm = dims
+    uk = bool(meta.get("units_known"))
+    body += f'<text x="40" y="{ty + 32:.0f}" fill="{_INK}" font-size="22" font-weight="700" letter-spacing="1.5">{_esc(name)}</text>'
+    body += (f'<text x="40" y="{ty + 58:.0f}" fill="{_PENCIL}" font-size="12" letter-spacing="1.5">'
+             f'IMPORTED 3D MODEL · silhouettes + dimensions from uploaded geometry</text>')
+    body += (f'<text x="40" y="{ty + 82:.0f}" fill="{_MUTE}" font-size="11">'
+             f'Bounding {lm:.3f} × {dm:.3f} × {hm:.3f} {"m" if uk else "units"} (L×D×H)'
+             + ("" if uk else " · scale unverified (no units in file)") + '</text>')
+    cells = [("SCALE", "NTS"), ("SHEET", str(meta.get("sheet") or "M-101")),
+             ("UNITS", "mm" if uk else "—")]
+    cw = 150.0
+    for i, (k, val) in enumerate(cells):
+        cx = W - 24 - cw * (len(cells) - i)
+        body += (f'<line x1="{cx:.0f}" y1="{ty:.0f}" x2="{cx:.0f}" y2="{ty + tb:.0f}" stroke="{_INK}" stroke-width="0.8"/>'
+                 f'<text x="{cx + 10:.0f}" y="{ty + 24:.0f}" fill="{_MUTE}" font-size="9" letter-spacing="1">{k}</text>'
+                 f'<text x="{cx + 10:.0f}" y="{ty + 50:.0f}" fill="{_INK}" font-size="15" font-weight="700">{_esc(val)}</text>')
+    return _wrap(body, W, H)
+
+
+def mesh_spec_sheet_pdf(verts, tris, meta: dict | None = None) -> bytes:
+    """Imported-mesh spec sheet as a landscape A3 PDF (front/side/top silhouettes
+    + overall dims + model stats)."""
+    import io
+
+    import numpy as np
+    from reportlab.lib.pagesizes import A3, landscape
+    from reportlab.pdfgen import canvas
+
+    meta = meta or {}
+    buf = io.BytesIO()
+    W, H = landscape(A3)
+    c = canvas.Canvas(buf, pagesize=(W, H))
+    c.setLineWidth(1.2)
+    c.rect(20, 20, W - 40, H - 40)
+
+    def panel(rings, bx, by, bw, bh, title):
+        c.setLineWidth(0.5)
+        c.setStrokeColorRGB(0.9, 0.89, 0.86)
+        c.rect(bx, by, bw, bh, stroke=1, fill=0)
+        c.setFillColorRGB(0.1, 0.1, 0.1)
+        c.setFont("Courier-Bold", 9)
+        c.drawString(bx + 8, by + bh - 14, title)
+        if not rings:
+            return
+        allp = np.vstack(rings)
+        minx, miny = allp.min(0)
+        maxx, maxy = allp.max(0)
+        w, h = (maxx - minx) or 1, (maxy - miny) or 1
+        m = 16.0
+        sc = min((bw - 2 * m) / w, (bh - 2 * m - 14) / h)
+        ox = bx + m + ((bw - 2 * m) - w * sc) / 2
+        oy = by + m + ((bh - 2 * m - 14) - h * sc) / 2
+        c.setFillColorRGB(0.85, 0.84, 0.82)
+        c.setStrokeColorRGB(0.1, 0.1, 0.1)
+        c.setLineWidth(1.0)
+        p = c.beginPath()
+        for ring in rings:
+            if len(ring) < 3:
+                continue
+            p.moveTo(ox + (ring[0][0] - minx) * sc, oy + (ring[0][1] - miny) * sc)
+            for q in ring[1:]:
+                p.lineTo(ox + (q[0] - minx) * sc, oy + (q[1] - miny) * sc)
+            p.close()
+        c.drawPath(p, stroke=1, fill=1)
+        c.setFillColorRGB(0, 0, 0)
+
+    tb = 92.0
+    top_h = (H - 56 - tb) * 0.52
+    vw = (W - 56) / 3.0
+    vy = H - 28 - top_h
+    panel(_silhouette(verts, tris, (0, 1)), 28, vy, vw, top_h, "FRONT")
+    panel(_silhouette(verts, tris, (2, 1)), 28 + vw, vy, vw, top_h, "SIDE")
+    panel(_silhouette(verts, tris, (0, 2)), 28 + 2 * vw, vy, vw, top_h, "TOP")
+
+    v = np.asarray(verts, float)
+    lo, hi = v.min(0), v.max(0)
+    dims = (float(hi[0] - lo[0]), float(hi[1] - lo[1]), float(hi[2] - lo[2]))
+    sy = 28 + tb
+    sh = vy - sy - 10
+    c.setStrokeColorRGB(0.9, 0.89, 0.86)
+    c.rect(28, sy, W - 56, sh)
+    c.setFillColorRGB(0.1, 0.1, 0.1)
+    c.setFont("Courier-Bold", 11)
+    c.drawString(40, sy + sh - 18, "OVERALL + MODEL")
+    c.setFont("Courier", 10)
+    yy = sy + sh - 42
+    for label, val in _mesh_dim_rows(dims, meta) + _mesh_stat_rows(meta):
+        c.drawString(40, yy, f"{label:<14}{val}".replace("²", "2").replace("³", "3"))
+        yy -= 18
+
+    c.setStrokeColorRGB(0.1, 0.1, 0.1)
+    c.setLineWidth(1)
+    c.rect(28, 28, W - 56, tb)
+    c.setFont("Courier-Bold", 16)
+    c.drawString(40, 28 + tb - 26, str(meta.get("filename") or "Imported model"))
+    c.setFillColorRGB(0.78, 0.21, 0.18)
+    c.setFont("Courier", 9)
+    c.drawString(40, 28 + tb - 44, "IMPORTED 3D MODEL - silhouettes + dimensions from uploaded geometry")
+    c.setFillColorRGB(0.1, 0.1, 0.1)
+    c.drawRightString(W - 40, 28 + 20,
+                      f"SCALE NTS    SHEET {meta.get('sheet') or 'M-101'}    "
+                      f"UNITS {'mm' if meta.get('units_known') else '-'}")
+    c.showPage()
+    c.save()
+    return buf.getvalue()

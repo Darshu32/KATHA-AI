@@ -64,6 +64,17 @@ def load_mesh(filename: str, payload: bytes) -> dict:
     if tris.ndim != 2 or tris.shape[1] != 3 or len(tris) == 0:
         raise ValueError("model has no triangle faces (point cloud or curves only)")
 
+    # Cheap integrity stats trimesh gives for free — surfaced on the spec sheet.
+    watertight = bool(getattr(loaded, "is_watertight", False))
+    try:
+        volume = float(abs(loaded.volume)) if watertight else None
+    except Exception:  # noqa: BLE001
+        volume = None
+    try:
+        area = float(loaded.area)
+    except Exception:  # noqa: BLE001
+        area = None
+
     verts, flipped = _to_y_up(verts)
     verts = _recentre_on_floor(verts)
     lo, hi = verts.min(0), verts.max(0)
@@ -73,6 +84,7 @@ def load_mesh(filename: str, payload: bytes) -> dict:
         "units_known": ext in {".glb", ".gltf"},   # glTF is metres; OBJ/STL/PLY unitless
         "n_verts": int(len(verts)), "n_tris": int(len(tris)),
         "up_axis_flipped": flipped,
+        "watertight": watertight, "volume": volume, "area": area,
     }
 
 
