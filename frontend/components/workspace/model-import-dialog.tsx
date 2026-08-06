@@ -14,6 +14,7 @@ import {
   ApiError,
   imports as importsApi,
   type Model3DRenderResponse,
+  type Reconstruct3DResponse,
 } from "@/lib/api-client";
 
 const ACCEPT = ".obj,.glb,.gltf,.stl,.ply,.off";
@@ -32,7 +33,8 @@ export function ModelImportDialog({
   const [file, setFile] = useState<File | null>(null);
   const [style, setStyle] = useState("");
   const [state, setState] = useState<State>("idle");
-  const [result, setResult] = useState<Model3DRenderResponse | null>(null);
+  const [mode, setMode] = useState<"whole" | "parts">("whole");
+  const [result, setResult] = useState<Model3DRenderResponse | Reconstruct3DResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [view, setView] = useState<"render" | "sheet">("render");
   const [isDragging, setIsDragging] = useState(false);
@@ -65,7 +67,10 @@ export function ModelImportDialog({
     setState("rendering");
     setError(null);
     try {
-      const res = await importsApi.render3d(token ?? undefined, file, style);
+      const res =
+        mode === "parts"
+          ? await importsApi.reconstruct3d(token ?? undefined, file, style)
+          : await importsApi.render3d(token ?? undefined, file, style);
       setResult(res);
       setView("render");
       setState("done");
@@ -89,8 +94,10 @@ export function ModelImportDialog({
 
   if (!open) return null;
 
-  const dims = result?.dimensions_m;
-  const uk = result?.units_known;
+  const whole = result && "dimensions_m" in result ? result : null;
+  const parts = result && "part_count" in result ? result : null;
+  const dims = whole?.dimensions_m;
+  const uk = whole?.units_known;
   const fmt = (m: number) => (uk ? `${Math.round(m * 1000)} mm` : m.toFixed(3));
 
   return (
@@ -178,6 +185,30 @@ export function ModelImportDialog({
             </span>
           </label>
 
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-mute">
+              Mode
+            </span>
+            {(["whole", "parts"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => {
+                  setMode(m);
+                  setResult(null);
+                  setState("idle");
+                }}
+                className={`font-mono text-[10px] uppercase tracking-[0.12em] px-2 py-1 rounded-sm transition-colors ${
+                  mode === m
+                    ? "bg-ink-deep text-paper"
+                    : "text-ink-soft hover:text-ink border border-hairline"
+                }`}
+              >
+                {m === "whole" ? "Render whole" : "Editable parts"}
+              </button>
+            ))}
+          </div>
+
           {state === "done" && result ? (
             <div className="border border-hairline rounded-md overflow-hidden">
               <div className="px-3 py-2 border-b border-hairline flex items-center gap-2">
@@ -201,26 +232,44 @@ export function ModelImportDialog({
                   Spec sheet
                 </button>
                 <span className="ml-auto font-mono text-[10px] text-ink-mute">
-                  {result.render.kind}
-                  {!result.render.finished ? " · clay" : ""}
+                  {parts ? `${parts.part_count} parts` : result.render?.kind}
+                  {result.render && !result.render.finished ? " · clay" : ""}
                 </span>
               </div>
               <div className="bg-paper-soft flex items-center justify-center p-2">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
-                  src={view === "sheet" && result.spec_sheet ? result.spec_sheet : result.render.image}
+                  src={view === "sheet" && result.spec_sheet ? result.spec_sheet : (result.render?.image ?? "")}
                   alt={view === "sheet" ? "Model spec sheet" : "Model render"}
                   className="max-h-[42vh] w-auto object-contain"
                 />
               </div>
-              <div className="px-3 py-2 border-t border-hairline grid grid-cols-2 gap-x-6 gap-y-1 text-[11px] font-mono">
-                <Row k="Length" v={dims ? fmt(dims.length) : "—"} />
-                <Row k="Triangles" v={result.mesh.triangles.toLocaleString()} />
-                <Row k="Depth" v={dims ? fmt(dims.depth) : "—"} />
-                <Row k="Watertight" v={result.mesh.watertight ? "yes" : "no"} />
-                <Row k="Height" v={dims ? fmt(dims.height) : "—"} />
-                <Row k="Scale" v={uk ? "metres (glTF)" : "unitless (OBJ)"} />
-              </div>
+              {parts ? (
+                <div className="px-3 py-2 border-t border-hairline max-h-32 overflow-y-auto">
+                  <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute mb-1">
+                    {parts.part_count} editable part{parts.part_count === 1 ? "" : "s"} · each selectable
+                  </div>
+                  <ul className="grid grid-cols-2 gap-x-6 gap-y-0.5 text-[11px] font-mono">
+                    {parts.parts.map((p) => (
+                      <li key={p.id} className="flex items-baseline justify-between">
+                        <span className="text-ink-deep">{p.type}</span>
+                        <span className="text-ink-mute">
+                          {p.dimensions_mm.length}×{p.dimensions_mm.width}×{p.dimensions_mm.height}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ) : whole ? (
+                <div className="px-3 py-2 border-t border-hairline grid grid-cols-2 gap-x-6 gap-y-1 text-[11px] font-mono">
+                  <Row k="Length" v={dims ? fmt(dims.length) : "—"} />
+                  <Row k="Triangles" v={whole.mesh.triangles.toLocaleString()} />
+                  <Row k="Depth" v={dims ? fmt(dims.depth) : "—"} />
+                  <Row k="Watertight" v={whole.mesh.watertight ? "yes" : "no"} />
+                  <Row k="Height" v={dims ? fmt(dims.height) : "—"} />
+                  <Row k="Scale" v={uk ? "metres (glTF)" : "unitless (OBJ)"} />
+                </div>
+              ) : null}
             </div>
           ) : null}
 

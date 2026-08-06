@@ -449,6 +449,21 @@ export interface Model3DRenderResponse {
   hotspots: unknown[];
 }
 
+export interface Reconstruct3DResponse {
+  filename: string | null;
+  part_count: number;
+  parts: {
+    id: string;
+    type: string;
+    dimensions_mm: { length: number; width: number; height: number };
+  }[];
+  graph: Record<string, unknown>;
+  render: { image: string; provider: string; finished: boolean; kind: string } | null;
+  spec_sheet: string | null;
+  hotspots: unknown[];
+  editable: boolean;
+}
+
 export interface FloorplanRenderResponse {
   filename: string | null;
   program: {
@@ -495,6 +510,30 @@ export const imports = {
       throw new ApiError(res.status, body);
     }
     return res.json() as Promise<Model3DRenderResponse>;
+  },
+
+  /** Upload a 3D model → decompose it into editable PARTS (Tier 2): an editable
+   *  graph + per-part hotspots + render. Multipart-only. */
+  reconstruct3d: async (
+    token: string | undefined,
+    file: File,
+    style?: string,
+  ): Promise<Reconstruct3DResponse> => {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    if (style && style.trim()) fd.append("style", style.trim());
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(`${API_BASE}/imports/3d/reconstruct`, {
+      method: "POST",
+      headers,
+      body: fd,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new ApiError(res.status, body);
+    }
+    return res.json() as Promise<Reconstruct3DResponse>;
   },
 
   /** Upload a floor-plan image → a vision LLM reads its room program → a
