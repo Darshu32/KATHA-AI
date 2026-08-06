@@ -30,10 +30,13 @@ from app.services.spatial.gltf import scene_to_gltf
 from app.services.storage import key_to_url
 from app.services.generation_pipeline import (
     _persist_render,
+    _run_mep_cost,
+    _stamp_display_currency,
     run_initial_generation,
     run_local_edit,
     run_theme_switch,
 )
+from app.services.estimation_engine import compute_estimate
 from app.services.diagrams import (
     generate_all as generate_all_diagrams,
     generate_one as generate_one_diagram,
@@ -350,10 +353,32 @@ async def get_latest_route(
     render = await get_latest_render_for_version(db, version.id)
     image_url = key_to_url(render.storage_key) if render and render.storage_key else None
 
+    # Cost was historically only returned in the generate/edit/theme RESPONSE and
+    # never persisted on the version, so re-opening a project showed an empty Cost
+    # tab. Recompute it from the saved graph on load — compute_estimate is
+    # deterministic + fast — so EVERY project (including ones generated before this
+    # fix) shows cost. MEP system cost is rolled up the same way.
+    graph = version.graph_data or {}
+    estimate = None
+    try:
+        estimate = compute_estimate(graph)
+        _stamp_display_currency(estimate, project.region)
+        graph = {**graph, "estimation": estimate}
+    except Exception as exc:  # noqa: BLE001 — never 500 the re-open
+        logger.warning("estimate recompute failed for project %s: %s", project_id, exc)
+    mep_cost = None
+    try:
+        mep_cost = await _run_mep_cost(
+            db, graph_data=graph, project_type=project.project_type, region=project.region)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("MEP recompute failed for project %s: %s", project_id, exc)
+
     return {
         "id": version.id,
         "version": version.version,
-        "graph_data": version.graph_data,
+        "graph_data": graph,
+        "estimate": estimate,
+        "mep_cost_estimate": mep_cost,
         "prompt": version.prompt,
         "image_url": image_url,
         # Prefer vision-grounded hotspots persisted at generation time
