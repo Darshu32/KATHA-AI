@@ -31,7 +31,11 @@ from app.services.import_advisor_service import (
 from app.services.importers import parse as parse_file
 from app.services.importers import supported_extensions
 from app.services.floorplan_import import floorplan_to_design
-from app.services.importers.mesh_geometry import load_mesh, supported_mesh_extensions
+from app.services.importers.mesh_geometry import (
+    load_mesh,
+    slice_to_plan_image,
+    supported_mesh_extensions,
+)
 from app.services.mesh_reconstruct import reconstruct_from_mesh
 from app.services.spatial.drawings2d import mesh_spec_sheet_svg, sheet_svg, spec_sheet_svg
 from app.services.spatial.render_pipeline import render_design, render_mesh, render_parts
@@ -267,6 +271,72 @@ async def reconstruct_3d_model(
         "spec_sheet": spec_sheet,
         "hotspots": result.hotspots if result else [],
         "editable": True,
+    }
+
+
+@router.post("/3d/floorplan")
+async def mesh_to_floorplan(
+    file: UploadFile = File(..., description="Building 3D model: OBJ / GLB / glTF / STL / PLY / OFF"),
+    style: str = Form(default="", description="Optional style/theme for the reconstruction."),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Upload a BUILDING model → a horizontal plan-cut recovers its wall lines →
+    the floor-plan → rooms vision pipeline turns that into an editable multi-room
+    design (Layer 5B, Tier 2b). Best for building meshes with real walls; a solid
+    or furniture model won't slice into a usable plan."""
+    body = await file.read()
+    if not body:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ErrorResponse(error="empty_file", message="The uploaded file is empty.").model_dump())
+    try:
+        mesh = load_mesh(file.filename or "model", body)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ErrorResponse(error="bad_model", message=str(exc)).model_dump())
+
+    plan_png = slice_to_plan_image(mesh["verts"], mesh["tris"])
+    if plan_png is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=ErrorResponse(error="no_plan",
+                                 message="Couldn't slice a floor plan from this model — is it a building with walls?").model_dump())
+    try:
+        graph, program, solution = await floorplan_to_design(
+            plan_png, "image/png", "mesh_floorplan", (style.strip() or None))
+    except VisionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=ErrorResponse(error="vision_failed",
+                                 message=f"Couldn't read the sliced plan: {exc}").model_dump())
+
+    render_payload = None
+    result = await render_design(graph)
+    if result and result.image_bytes:
+        render_payload = {
+            "image": f"data:{result.mime};base64,{base64.b64encode(result.image_bytes).decode()}",
+            "provider": result.provider, "finished": result.finished, "kind": result.kind,
+        }
+    plan_sheet = None
+    try:
+        svg = sheet_svg(graph, {"project_name": file.filename or "Imported building"})
+        plan_sheet = "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode()
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("mesh-floorplan plan sheet failed: %s", exc)
+
+    rooms = [r for r in (program.get("rooms") or []) if isinstance(r, dict)]
+    return {
+        "filename": file.filename,
+        "cut_plan": "data:image/png;base64," + base64.b64encode(plan_png).decode(),
+        "program": {"rooms": rooms, "adjacencies": program.get("adjacencies") or [],
+                    "notes": program.get("notes")},
+        "render": render_payload,
+        "plan_sheet": plan_sheet,
+        "graph": graph,
+        "solved": solution is not None,
+        "room_count": len(rooms),
+        "total_area_sqm": round(sum(float(r.get("area_sqm") or 0) for r in rooms), 1),
     }
 
 

@@ -98,6 +98,28 @@ def test_reconstruct_builds_editable_part_graph():
     assert all("position" in o and "dimensions" in o for o in graph["objects"])
 
 
+def test_slice_to_plan_image_from_building():
+    from app.services.importers.mesh_geometry import slice_to_plan_image
+
+    def box(e, c):
+        return trimesh.creation.box(extents=e, transform=trimesh.transformations.translation_matrix(c))
+    walls = [box((8, 2.8, 0.15), (4, 1.4, 0.075)), box((8, 2.8, 0.15), (4, 1.4, 5.925)),
+             box((0.15, 2.8, 6), (0.075, 1.4, 3)), box((0.15, 2.8, 6), (7.925, 1.4, 3)),
+             box((0.15, 2.8, 6), (4, 1.4, 3))]
+    g = load_mesh("building.glb", trimesh.util.concatenate(walls).export(file_type="glb"))
+    png = slice_to_plan_image(g["verts"], g["tris"])       # horizontal plan-cut
+    assert png is not None and png[:8] == b"\x89PNG\r\n\x1a\n"
+
+
+def test_slice_returns_none_for_flat_mesh():
+    import numpy as np
+
+    from app.services.importers.mesh_geometry import slice_to_plan_image
+    verts = np.array([[0, 0, 0], [1, 0, 0], [1, 0, 1], [0, 0, 1]], np.float32)  # flat at y=0
+    tris = np.array([[0, 1, 2], [0, 2, 3]], np.int32)
+    assert slice_to_plan_image(verts, tris, at_y=0.5) is None   # nothing crosses the cut
+
+
 def test_mesh_spec_sheet_svg_wellformed_and_small():
     import xml.dom.minidom as minidom
 

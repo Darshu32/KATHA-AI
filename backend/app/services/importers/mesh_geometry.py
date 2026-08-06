@@ -32,7 +32,7 @@ def _ext(filename: str) -> str:
     return ("." + filename.rsplit(".", 1)[-1].lower()) if "." in (filename or "") else ""
 
 
-def load_mesh(filename: str, payload: bytes) -> dict:
+def load_mesh(filename: str, payload: bytes, *, up_flip: bool = False) -> dict:
     """Parse a 3D model into render-ready geometry.
 
     Returns ``{verts (N,3) float32, tris (M,3) int32, dims (L,H,D) metres,
@@ -75,7 +75,12 @@ def load_mesh(filename: str, payload: bytes) -> dict:
     except Exception:  # noqa: BLE001
         area = None
 
-    verts, flipped = _to_y_up(verts)
+    # Trust the file's Y-up (glTF standard) by default. The old always-on Z-up
+    # flip mis-fired on wide-but-short shapes (a room-scale building or a low
+    # table reads as "z-dominant" and would be tipped onto its side). Opt-in only.
+    flipped = False
+    if up_flip:
+        verts, flipped = _to_y_up(verts)
     verts = _recentre_on_floor(verts)
     lo, hi = verts.min(0), verts.max(0)
     dims = (float(hi[0] - lo[0]), float(hi[1] - lo[1]), float(hi[2] - lo[2]))  # L(x), H(y), D(z)
@@ -182,3 +187,57 @@ def decompose_mesh(verts, tris, max_parts: int = 64) -> list[dict]:
             "tris": local_t,
         })
     return parts
+
+
+def slice_to_plan_image(verts, tris, at_y: float | None = None,
+                        size: int = 1000, line: int = 6) -> bytes | None:
+    """Tier 2b — horizontal cut of a building mesh at height ``at_y`` → a floor-
+    plan image: the wall lines where the mesh crosses the plane, rasterised
+    black-on-white. That plan then feeds the floor-plan → rooms vision pipeline.
+
+    Dependency-free triangle-plane intersection. Returns None when the cut is
+    empty (not a building model, or wrong height)."""
+    v = np.asarray(verts, np.float32)
+    t = np.asarray(tris, np.int64)
+    if not len(t):
+        return None
+    lo, hi = v.min(0), v.max(0)
+    if at_y is None:
+        at_y = float(lo[1] + (hi[1] - lo[1]) * 0.4)      # ~standard plan-cut height
+
+    segs: list = []
+    for tri in t:
+        p = v[tri]                                        # (3,3)
+        above = p[:, 1] > at_y
+        if above.all() or not above.any():
+            continue                                      # triangle doesn't cross the plane
+        pts = []
+        for i in range(3):
+            a, b = p[i], p[(i + 1) % 3]
+            if (a[1] > at_y) != (b[1] > at_y):
+                s = (at_y - a[1]) / (b[1] - a[1])
+                pts.append((float(a[0] + s * (b[0] - a[0])), float(a[2] + s * (b[2] - a[2]))))
+        if len(pts) >= 2:
+            segs.append((pts[0], pts[1]))
+    if not segs:
+        return None
+
+    import io
+    from PIL import Image, ImageDraw
+    xs = [q[0] for s in segs for q in s]
+    zs = [q[1] for s in segs for q in s]
+    minx, maxx, minz, maxz = min(xs), max(xs), min(zs), max(zs)
+    w, h = (maxx - minx) or 1.0, (maxz - minz) or 1.0
+    m = 48.0
+    sc = min((size - 2 * m) / w, (size - 2 * m) / h)
+    im = Image.new("RGB", (size, size), "white")
+    d = ImageDraw.Draw(im)
+
+    def px(q):
+        return (m + (q[0] - minx) * sc, m + (q[1] - minz) * sc)
+
+    for a, b in segs:
+        d.line([px(a), px(b)], fill="black", width=line)
+    buf = io.BytesIO()
+    im.save(buf, "PNG")
+    return buf.getvalue()
