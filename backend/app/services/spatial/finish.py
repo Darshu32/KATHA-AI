@@ -134,12 +134,56 @@ async def _gemini_edit(base_png: bytes, prompt: str) -> bytes | None:
 
 
 async def _controlnet_depth(base_png: bytes, depth_png: bytes | None, prompt: str) -> bytes | None:
-    """PROD seam — Flux/SDXL ControlNet-depth via Replicate/Fal, using the depth
-    map for an exact geometry lock. Enabled when a token is configured."""
+    """PROD finish lock — a Flux/SDXL **depth-ControlNet** via Replicate,
+    conditioned on the kernel DEPTH MAP for the tightest possible geometry lock
+    (a hard constraint, vs the img2img composition-lock of Gemini/OpenAI).
+
+    Active only when BOTH ``replicate_api_token`` and ``controlnet_depth_model``
+    are configured; otherwise dormant. Any failure returns None so the caller
+    falls back to the img2img providers — this never breaks the finish."""
     s = get_settings()
-    if not (getattr(s, "replicate_api_token", "") or getattr(s, "fal_key", "")) or depth_png is None:
+    token = (getattr(s, "replicate_api_token", "") or "").strip()
+    model = (getattr(s, "controlnet_depth_model", "") or "").strip()
+    if not token or not model or depth_png is None:
         return None
-    return None  # not exercised in the current environment
+
+    import asyncio
+
+    import httpx
+    control = "data:image/png;base64," + base64.b64encode(depth_png).decode()
+    url = f"https://api.replicate.com/v1/models/{model}/predictions"
+    auth = {"Authorization": f"Bearer {token}"}
+    try:
+        async with httpx.AsyncClient(timeout=180.0) as client:
+            resp = await client.post(
+                url,
+                json={"input": {"prompt": prompt, "control_image": control}},
+                headers={**auth, "Content-Type": "application/json", "Prefer": "wait"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            status = data.get("status")
+            get_url = (data.get("urls") or {}).get("get")
+            # 'Prefer: wait' usually resolves synchronously; poll as a fallback.
+            for _ in range(60):
+                if status in ("succeeded", "failed", "canceled") or not get_url:
+                    break
+                await asyncio.sleep(2)
+                r = await client.get(get_url, headers=auth)
+                data = r.json()
+                status = data.get("status")
+            if status != "succeeded":
+                return None
+            out = data.get("output")
+            img_url = out[0] if isinstance(out, list) and out else (out if isinstance(out, str) else None)
+            if not img_url:
+                return None
+            img = await client.get(img_url)
+            img.raise_for_status()
+            return img.content
+    except Exception as exc:  # noqa: BLE001 — never break the finish
+        logger.warning("controlnet-depth finish failed: %s", exc)
+        return None
 
 
 # provider name → (coroutine factory, reported label)

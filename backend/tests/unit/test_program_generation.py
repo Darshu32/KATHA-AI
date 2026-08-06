@@ -155,6 +155,14 @@ def test_product_finish_prompt_is_studio_shot():
     assert "studio" in p.lower() or "neutral background" in p.lower()
 
 
+async def test_controlnet_depth_dormant_without_config():
+    # The depth-ControlNet finish lock activates only when replicate_api_token +
+    # controlnet_depth_model are set; unconfigured it returns None so the finish
+    # falls back to the img2img providers (never breaks the pipeline).
+    from app.services.spatial.finish import _controlnet_depth
+    assert await _controlnet_depth(b"clay-bytes", b"depth-bytes", "photoreal render") is None
+
+
 def test_program_survives_theme_applier_and_solves():
     data = _multiroom_data()
     themed = apply_parametric_theme(data, "modern")["graph"]

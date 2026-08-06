@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     # ControlNet-depth still wins when a token is set; the other provider is the
     # automatic fallback. Serves both prompt-mode and (later) upload-enhance.
     spatial_finish_provider: str = "gemini"
+    # Optional PROD finish lock — ControlNet-depth via Replicate. When BOTH the
+    # token and the model are set, the finish pass conditions on the kernel DEPTH
+    # MAP (Flux/SDXL depth-ControlNet) for the tightest possible geometry lock,
+    # ahead of the img2img providers above. Dormant (falls back) when either is
+    # blank — so it's a config switch, not a code change.
+    replicate_api_token: str = ""
+    controlnet_depth_model: str = ""     # e.g. "owner/model" — a depth-ControlNet
 
     # ── Interop / export ─────────────────────────────────
     # Speckle push (Revit/Rhino/Grasshopper/ArchiCAD distribution wedge).
