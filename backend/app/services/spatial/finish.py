@@ -144,13 +144,17 @@ async def _controlnet_depth(base_png: bytes, depth_png: bytes | None, prompt: st
     s = get_settings()
     token = (getattr(s, "replicate_api_token", "") or "").strip()
     model = (getattr(s, "controlnet_depth_model", "") or "").strip()
-    if not token or not model or depth_png is None:
+    if not token or not model or base_png is None:
         return None
 
     import asyncio
 
     import httpx
-    control = "data:image/png;base64," + base64.b64encode(depth_png).decode()
+    # flux-depth-dev extracts depth from the control image internally, so we hand
+    # it the CLAY render (which already encodes the exact kernel geometry) — that
+    # is the geometry lock. (For a model that takes a raw depth map directly,
+    # swap in depth_png here.)
+    control = "data:image/png;base64," + base64.b64encode(base_png).decode()
     url = f"https://api.replicate.com/v1/models/{model}/predictions"
     auth = {"Authorization": f"Bearer {token}"}
     try:

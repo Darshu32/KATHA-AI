@@ -75,7 +75,10 @@ class Settings(BaseSettings):
     # ahead of the img2img providers above. Dormant (falls back) when either is
     # blank — so it's a config switch, not a code change.
     replicate_api_token: str = ""
-    controlnet_depth_model: str = ""     # e.g. "owner/model" — a depth-ControlNet
+    # Official Flux depth model — great for architecture (preserves geometry,
+    # restyles materials). Extracts depth from the clay render internally. Ready
+    # to use the moment replicate_api_token is set; blank token = dormant.
+    controlnet_depth_model: str = "black-forest-labs/flux-depth-dev"
 
     # ── Interop / export ─────────────────────────────────
     # Speckle push (Revit/Rhino/Grasshopper/ArchiCAD distribution wedge).
