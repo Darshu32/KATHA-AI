@@ -30,10 +30,12 @@ from app.services.import_advisor_service import (
 )
 from app.services.importers import parse as parse_file
 from app.services.importers import supported_extensions
+from app.services.floorplan_import import floorplan_to_design
 from app.services.importers.mesh_geometry import load_mesh, supported_mesh_extensions
-from app.services.spatial.drawings2d import mesh_spec_sheet_svg
-from app.services.spatial.render_pipeline import render_mesh
+from app.services.spatial.drawings2d import mesh_spec_sheet_svg, sheet_svg
+from app.services.spatial.render_pipeline import render_design, render_mesh
 from app.services.themes import get_theme as _get_theme_db
+from app.vision.base import VisionError
 
 logger = logging.getLogger(__name__)
 
@@ -140,6 +142,69 @@ async def render_3d_model(
         "mesh": {"vertices": mesh["n_verts"], "triangles": mesh["n_tris"],
                  "watertight": mesh["watertight"], "up_axis_flipped": mesh["up_axis_flipped"]},
         "hotspots": result.hotspots,
+    }
+
+
+@router.post("/floorplan/render")
+async def render_floorplan(
+    file: UploadFile = File(..., description="Floor-plan image (PNG / JPG / WEBP)"),
+    style: str = Form(
+        default="",
+        description="Optional style/theme for the reconstruction, e.g. 'modern', 'scandinavian'.",
+    ),
+    user: User = Depends(get_current_user),
+) -> dict:
+    """Upload a floor-plan image → a vision LLM reads its ROOM PROGRAM (rooms +
+    areas + adjacencies), which flows into the multi-room layout solver + kernel:
+    a modelled, furnished, dimensioned multi-room design + GA sheet. Spec-first
+    reconstruction (the program is recovered and re-laid-out), not a pixel trace."""
+    body = await file.read()
+    if not body:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ErrorResponse(error="empty_file", message="The uploaded file is empty.").model_dump())
+    mime = (file.content_type or "image/png").lower()
+    if not mime.startswith("image/"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=ErrorResponse(error="not_image",
+                                 message="Upload a floor-plan IMAGE (PNG/JPG/WEBP).").model_dump())
+    try:
+        graph, program, solution = await floorplan_to_design(
+            body, mime, "floorplan_import", (style.strip() or None))
+    except VisionError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=ErrorResponse(error="vision_failed",
+                                 message=f"Couldn't read the floor plan: {exc}").model_dump())
+
+    render_payload = None
+    result = await render_design(graph)
+    if result and result.image_bytes:
+        render_payload = {
+            "image": f"data:{result.mime};base64,{base64.b64encode(result.image_bytes).decode()}",
+            "provider": result.provider, "finished": result.finished, "kind": result.kind,
+        }
+    plan_sheet = None
+    try:
+        svg = sheet_svg(graph, {"project_name": file.filename or "Imported plan"})
+        plan_sheet = "data:image/svg+xml;base64," + base64.b64encode(svg.encode()).decode()
+    except Exception as exc:  # noqa: BLE001 — the render already succeeded
+        logger.warning("floorplan plan sheet failed: %s", exc)
+
+    rooms = [r for r in (program.get("rooms") or []) if isinstance(r, dict)]
+    return {
+        "filename": file.filename,
+        "program": {
+            "rooms": rooms,
+            "adjacencies": program.get("adjacencies") or [],
+            "notes": program.get("notes"),
+        },
+        "render": render_payload,
+        "plan_sheet": plan_sheet,
+        "solved": solution is not None,
+        "room_count": len(rooms),
+        "total_area_sqm": round(sum(float(r.get("area_sqm") or 0) for r in rooms), 1),
     }
 
 
