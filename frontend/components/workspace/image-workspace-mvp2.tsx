@@ -33,6 +33,7 @@ import {
 } from "@/components/primitives";
 import BackendHealthBanner from "@/components/primitives/backend-health-banner";
 import { ImportDialog } from "@/components/workspace/import-dialog";
+import { ModelImportDialog } from "@/components/workspace/model-import-dialog";
 import {
   ProjectPicker,
   type OpenedProject,
@@ -192,6 +193,7 @@ export default function ImageWorkspaceMvp2() {
   // workspace just toggles visibility and receives the parsed brief
   // text on apply, which gets appended to the prompt textarea.
   const [importOpen, setImportOpen] = useState(false);
+  const [modelOpen, setModelOpen] = useState(false);
 
   // ── Project picker open/close ──────────────────────────────────────
   // The picker owns its project-list state; the workspace receives an
@@ -569,6 +571,7 @@ export default function ImageWorkspaceMvp2() {
         onToggleTerminal={toggleTerminal}
         terminalOpen={terminalOpen}
         onOpenImport={() => setImportOpen(true)}
+        onOpenModel={() => setModelOpen(true)}
         onOpenProjects={() => setPickerOpen(true)}
       />
       <ImportDialog
@@ -581,6 +584,11 @@ export default function ImageWorkspaceMvp2() {
           // prompt outright.
           setPrompt(prompt.trim() ? `${prompt.trim()}\n\n${briefText}` : briefText);
         }}
+        token={token}
+      />
+      <ModelImportDialog
+        open={modelOpen}
+        onClose={() => setModelOpen(false)}
         token={token}
       />
       <ProjectPicker
@@ -783,11 +791,13 @@ function TopBar({
   onToggleTerminal,
   terminalOpen,
   onOpenImport,
+  onOpenModel,
   onOpenProjects,
 }: {
   onToggleTerminal: () => void;
   terminalOpen: boolean;
   onOpenImport: () => void;
+  onOpenModel: () => void;
   onOpenProjects: () => void;
 }) {
   return (
@@ -848,6 +858,29 @@ function TopBar({
               />
             </svg>
             Import
+          </button>
+          <button
+            type="button"
+            onClick={onOpenModel}
+            className="text-[12px] text-ink-soft hover:text-ink transition-colors px-2 py-1 inline-flex items-center gap-1"
+            aria-label="Import 3D model"
+            title="Upload a 3D model → render + spec sheet"
+          >
+            <svg
+              width="13"
+              height="13"
+              viewBox="0 0 13 13"
+              fill="none"
+              aria-hidden="true"
+            >
+              <path
+                d="M6.5 1.2 11 3.6v5.8L6.5 11.8 2 9.4V3.6z M2 3.6 6.5 6 11 3.6 M6.5 6v5.8"
+                stroke="currentColor"
+                strokeWidth="1.2"
+                strokeLinejoin="round"
+              />
+            </svg>
+            3D model
           </button>
           <button
             type="button"

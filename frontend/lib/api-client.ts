@@ -434,10 +434,54 @@ export interface ImportParseResponse {
   imports: ImportedFilePayload[];
 }
 
+export interface Model3DRenderResponse {
+  filename: string | null;
+  render: { image: string; provider: string; finished: boolean; kind: string };
+  spec_sheet: string | null;
+  dimensions_m: { length: number; height: number; depth: number };
+  units_known: boolean;
+  mesh: {
+    vertices: number;
+    triangles: number;
+    watertight: boolean;
+    up_axis_flipped: boolean;
+  };
+  hotspots: unknown[];
+}
+
 export const imports = {
   /** List the file extensions the deterministic parsers support. */
   formats: () =>
     request<{ extensions: string[] }>("/imports/formats"),
+
+  /** 3D-model formats accepted by the geometry render path (Layer 5B). */
+  formats3d: () =>
+    request<{ extensions: string[] }>("/imports/3d/formats"),
+
+  /** Upload a single 3D model (OBJ/GLB/glTF/STL/PLY/OFF) → photoreal render
+   *  + spec sheet + overall dimensions. Multipart-only; bypasses the JSON
+   *  request helper. `style` is an optional material/finish hint. */
+  render3d: async (
+    token: string | undefined,
+    file: File,
+    style?: string,
+  ): Promise<Model3DRenderResponse> => {
+    const fd = new FormData();
+    fd.append("file", file, file.name);
+    if (style && style.trim()) fd.append("style", style.trim());
+    const headers: Record<string, string> = {};
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetch(`${API_BASE}/imports/3d/render`, {
+      method: "POST",
+      headers,
+      body: fd,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      throw new ApiError(res.status, body);
+    }
+    return res.json() as Promise<Model3DRenderResponse>;
+  },
 
   /** Upload one or more files; backend runs each through its
    *  importer and returns the structured payload. Multipart-only;
