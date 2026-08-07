@@ -61,9 +61,13 @@ DESIGN_GRAPH_JSON_SCHEMA = {
             "rooms": {
                 "type": "array",
                 "description": (
-                    "Multi-room PROGRAM. Empty [] for a single-room design. For a "
-                    "multi-room design (apartment, house, office suite) list EACH "
-                    "room with a target floor area; a layout solver positions them."
+                    "Multi-room PROGRAM — ONE entry per room. Empty [] ONLY for a "
+                    "genuine single-room design. ANY home with bedroom(s) (any "
+                    "'BHK', 'N-bedroom', flat, apartment, house, villa) is "
+                    "multi-room: list EACH room separately — every bedroom, the "
+                    "living, the kitchen, every bathroom. 'Open-plan' merges ONLY "
+                    "living+dining+kitchen into one room; bedrooms and bathrooms "
+                    "stay separate. A layout solver positions them."
                 ),
                 "items": {
                     "type": "object",

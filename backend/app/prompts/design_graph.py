@@ -75,13 +75,23 @@ You MUST follow these rules strictly:
 12. Keep the design practical and buildable.
 
 13. SINGLE ROOM vs MULTI-ROOM:
-   * If the prompt describes ONE room (e.g. "a modern living room", "a bedroom"),
-     fill `room` with its type + dimensions, put the furniture in `objects`, and
-     leave `rooms` and `adjacencies` as EMPTY arrays [].
-   * If the prompt describes MULTIPLE rooms (an apartment, a house, "2BHK",
-     "3-bedroom", a clinic, an office with zones), then:
+   * If the prompt describes exactly ONE room (e.g. "a modern living room", "a
+     bedroom", "a studio"), fill `room` with its type + dimensions, put the
+     furniture in `objects`, and leave `rooms` and `adjacencies` as EMPTY [].
+   * A HOME OR MULTI-SPACE PROGRAM IS ALWAYS MULTI-ROOM. Any residence that has
+     one or more bedrooms — "1BHK"/"2BHK"/"3BHK"/"4BHK", "N-bedroom", "N BR", a
+     flat, apartment, house, villa, or bungalow — and any clinic / office / suite
+     with distinct zones MUST use `rooms` with a SEPARATE entry per room. NEVER
+     collapse a whole home into one space.
+       - Decompose "N BHK" / "N-bedroom" as: N separate BEDROOMS + a living room
+         + a kitchen + bathroom(s) (≈1 per 1–2 bedrooms) + any dining / study /
+         utility / balcony mentioned. So a 3BHK is ≥6 rooms.
+       - "OPEN-PLAN" IS NOT ONE GIANT ROOM. It ONLY means the living, dining and
+         kitchen share one open space — emit THAT as a single room (id
+         "living_dining_kitchen", type "open_plan_living"). BEDROOMS and
+         BATHROOMS are ALWAYS separate enclosed rooms, never merged into it.
        - List EVERY room in `rooms`, each with a unique `id` (e.g. "living",
-         "kitchen", "master", "bath1"), a `type`, and a realistic target
+         "kitchen", "master", "bed2", "bath1"), a `type`, and a realistic target
          `area_sqm` that respects space standards.
        - Include a circulation space (hall / corridor / foyer) and connect the
          rooms through it in `adjacencies` (pairs of room ids that share a
@@ -89,6 +99,9 @@ You MUST follow these rules strictly:
        - Still fill `room` with the primary/largest room for compatibility.
        - Do NOT assign room positions — a layout solver places them from the
          program. `objects` (furniture) is optional for multi-room designs.
+   * Worked example — "contemporary 3BHK, open-plan living-dining-kitchen, three
+     bedrooms, master en-suite": `rooms` = open_plan_living, master, bed2, bed3,
+     bath_master, bath_common, hall → SEVEN rooms, NOT a single open-plan space.
 
 14. INTERIOR vs BUILDING EXTERIOR / FORM:
    * For an INTERIOR design (a room, apartment interior, office interior), use
