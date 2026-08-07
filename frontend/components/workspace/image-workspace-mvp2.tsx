@@ -734,6 +734,7 @@ export default function ImageWorkspaceMvp2() {
           codeCompliance={latestGeneration?.codeCompliance}
           validation={latestGeneration?.validation}
           mepCost={latestGeneration?.mepCostEstimate}
+          estimate={latestGeneration?.estimate}
           activeProjectId={activeProjectId}
           latestVersion={latestGeneration?.version ?? null}
           token={token ?? ""}
@@ -2504,6 +2505,7 @@ function RightSummary({
   codeCompliance,
   validation,
   mepCost,
+  estimate,
   activeProjectId,
   latestVersion,
   token,
@@ -2524,6 +2526,7 @@ function RightSummary({
   codeCompliance?: import("@/lib/types").CodeComplianceEntry[];
   validation?: import("@/lib/types").ValidationReport;
   mepCost?: import("@/lib/types").MepCostEstimate;
+  estimate?: unknown;
   activeProjectId: string | null;
   latestVersion: number | null;
   token: string;
@@ -2648,7 +2651,7 @@ function RightSummary({
             scope={scope}
           />
         ) : tab === "cost" ? (
-          <CostTab hasDesign={hasDesign} mepCost={mepCost} />
+          <CostTab hasDesign={hasDesign} estimate={estimate} mepCost={mepCost} />
         ) : tab === "specs" ? (
           <SpecsTab
             hasActiveProject={!!activeProjectId && hasDesign}
@@ -2932,11 +2935,32 @@ function ViewModal({
  * fetch needed); falls back to a friendly placeholder when no design
  * is loaded yet. Sensitivity ±10% lands in Day 4 alongside the
  * recommendations panel — the placeholder strip below holds its slot. */
+type EstimateShape = {
+  status?: string;
+  area?: { total_sqft?: number; cost_per_sqft?: number };
+  pricing_adjustments?: { final_total?: number };
+  estimate?: Record<string, { total_cost?: number } | undefined>;
+  total_low?: number;
+  total_high?: number;
+  confidence?: { score?: number; level?: string };
+  currency?: string;
+  display?: {
+    currency?: string;
+    currency_symbol?: string;
+    region?: string;
+    locale?: string;
+    final_total?: number;
+    cost_per_sqft?: number;
+  };
+};
+
 function CostTab({
   hasDesign,
+  estimate,
   mepCost,
 }: {
   hasDesign: boolean;
+  estimate?: unknown;
   mepCost?: import("@/lib/types").MepCostEstimate;
 }) {
   if (!hasDesign) {
@@ -2954,7 +2978,11 @@ function CostTab({
       </div>
     );
   }
-  if (!mepCost) {
+  const est = estimate as EstimateShape | undefined;
+  const estFinalTotal = est?.pricing_adjustments?.final_total ?? 0;
+  const hasEstimate = !!est && est.status === "computed" && estFinalTotal > 0;
+
+  if (!hasEstimate && !mepCost) {
     return (
       <div className="space-y-3">
         <SectionTag>Cost</SectionTag>
@@ -2966,75 +2994,178 @@ function CostTab({
     );
   }
 
-  const total = mepCost.total_inr;
   const formatINR = (n?: number) =>
     n == null ? "—" : `₹${Math.round(n).toLocaleString("en-IN")}`;
 
   return (
     <div className="space-y-5">
-      {/* Headline band — total cost range, area, and jurisdiction
-          carry the BRD §4 framing in one glance. */}
-      <section>
-        <SectionTag>Total estimate</SectionTag>
-        <div className="mt-2 border border-hairline rounded-md bg-paper p-3">
-          <div className="font-mono text-[20px] text-ink-deep tnum tracking-tight">
-            {formatINR(total.low)}
-            <span className="text-ink-mute mx-1.5">→</span>
-            {formatINR(total.high)}
-          </div>
-          <div className="mt-1 flex items-center justify-between font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
-            <span>{mepCost.area_m2.toFixed(1)} m² · {mepCost.currency}</span>
-            <span>{mepCost.jurisdiction || "—"}</span>
-          </div>
-        </div>
-      </section>
+      {/* Project estimate — the full build cost from the estimation engine
+          (compute_estimate). Surfaces for EVERY design type: interior fit-out,
+          architecture shell on built-up area, and per-unit products. */}
+      {hasEstimate
+        ? (() => {
+            const d = est!.display;
+            const sym = d?.currency_symbol || "₹";
+            const locale = d?.locale || "en-IN";
+            const fmt = (n?: number) =>
+              n == null
+                ? "—"
+                : `${sym}${Math.round(n).toLocaleString(locale)}`;
+            const displayTotal = d?.final_total ?? estFinalTotal;
+            const totalSqft = est!.area?.total_sqft ?? 0;
+            const costPerSqft = d?.cost_per_sqft ?? est!.area?.cost_per_sqft;
+            const region = d?.region;
+            const cats = est!.estimate || {};
+            const catRows = (
+              [
+                ["Materials", cats.materials?.total_cost],
+                ["Furniture", cats.furniture?.total_cost],
+                ["Labour", cats.labor?.total_cost],
+                ["Services", cats.services?.total_cost],
+                ["Misc", cats.misc?.total_cost],
+              ] as [string, number | undefined][]
+            ).filter((r): r is [string, number] => (r[1] ?? 0) > 0);
+            const conf = est!.confidence;
+            return (
+              <>
+                <section>
+                  <SectionTag>Project estimate</SectionTag>
+                  <div className="mt-2 border border-hairline rounded-md bg-paper p-3">
+                    <div className="font-mono text-[22px] text-ink-deep tnum tracking-tight">
+                      {fmt(displayTotal)}
+                    </div>
+                    <div className="mt-1 flex items-center justify-between font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
+                      <span>
+                        {totalSqft > 0
+                          ? `${Math.round(totalSqft).toLocaleString(locale)} sqft${
+                              costPerSqft != null
+                                ? ` · ${fmt(costPerSqft)}/sqft`
+                                : ""
+                            }`
+                          : "per-unit"}
+                      </span>
+                      <span>
+                        {region
+                          ? region.replace(/_/g, " ")
+                          : d?.currency || est!.currency || "INR"}
+                      </span>
+                    </div>
+                    {est!.total_low != null &&
+                    est!.total_high != null &&
+                    est!.total_high > 0 ? (
+                      <div className="mt-1.5 font-mono text-[10.5px] text-ink-mute tnum">
+                        range {formatINR(est!.total_low)}
+                        <span className="mx-1">→</span>
+                        {formatINR(est!.total_high)}
+                      </div>
+                    ) : null}
+                  </div>
+                </section>
 
-      {/* Per-system breakdown — HVAC / Electrical / Plumbing / Fire-fighting.
-          Each row shows the system, its rate band per m², and total band. */}
-      <section>
-        <SectionTag>By system</SectionTag>
-        <div className="mt-2 border-t border-hairline">
-          {mepCost.systems.map((s) => (
-            <div
-              key={s.system + s.key}
-              className="py-2 border-b border-hairline last:border-b-0 flex items-baseline justify-between gap-2"
-            >
-              <div className="min-w-0">
-                <div className="text-[12.5px] text-ink-deep font-medium capitalize">
-                  {s.system.replace(/_/g, " ")}
-                </div>
-                <div className="font-mono text-[10.5px] text-ink-mute tnum">
-                  {formatINR(s.rate_inr_m2.low)}/m²
-                  <span className="mx-1">→</span>
-                  {formatINR(s.rate_inr_m2.high)}/m²
-                </div>
+                {catRows.length > 0 ? (
+                  <section>
+                    <SectionTag>By category</SectionTag>
+                    <div className="mt-2 border-t border-hairline">
+                      {catRows.map(([label, val]) => (
+                        <div
+                          key={label}
+                          className="py-2 border-b border-hairline last:border-b-0 flex items-baseline justify-between gap-2"
+                        >
+                          <div className="text-[12.5px] text-ink-deep font-medium">
+                            {label}
+                          </div>
+                          <div className="text-right shrink-0 font-mono text-[12px] text-ink tnum">
+                            {formatINR(val)}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </section>
+                ) : null}
+
+                {conf?.level ? (
+                  <section className="flex items-baseline justify-between">
+                    <SectionTag>Confidence</SectionTag>
+                    <span className="font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
+                      {conf.level}
+                      {conf.score != null
+                        ? ` · ${Math.round(conf.score * 100)}%`
+                        : ""}
+                    </span>
+                  </section>
+                ) : null}
+              </>
+            );
+          })()
+        : null}
+
+      {/* Building systems (MEP) — HVAC / Electrical / Plumbing / Fire, per m².
+          A secondary block when a project estimate is present; the sole total
+          for legacy versions that only carried an MEP estimate. */}
+      {mepCost ? (
+        <>
+          <section>
+            <SectionTag>
+              {hasEstimate ? "Building systems (MEP)" : "Total estimate"}
+            </SectionTag>
+            <div className="mt-2 border border-hairline rounded-md bg-paper p-3">
+              <div className="font-mono text-[20px] text-ink-deep tnum tracking-tight">
+                {formatINR(mepCost.total_inr.low)}
+                <span className="text-ink-mute mx-1.5">→</span>
+                {formatINR(mepCost.total_inr.high)}
               </div>
-              <div className="text-right shrink-0 font-mono text-[12px] text-ink tnum">
-                {formatINR(s.total_inr.low)}
-                <span className="text-ink-mute mx-1">→</span>
-                {formatINR(s.total_inr.high)}
+              <div className="mt-1 flex items-center justify-between font-mono text-[10.5px] uppercase tracking-tagged text-ink-mute">
+                <span>
+                  {mepCost.area_m2.toFixed(1)} m² · {mepCost.currency}
+                </span>
+                <span>{mepCost.jurisdiction || "—"}</span>
               </div>
             </div>
-          ))}
-        </div>
-      </section>
+          </section>
 
-      {/* Sensitivity placeholder — slot reserved for Day 4 wiring of
-          /sensitivity. The 4 BRD what-ifs (material/labor/overhead ±10%)
-          + volume curves (1·5·10 pieces) will land here. */}
-      <section>
-        <div className="flex items-baseline justify-between mb-2">
-          <SectionTag>Sensitivity</SectionTag>
-          <span className="font-mono text-[10px] uppercase tracking-tagged text-pencil">
-            Day 4
-          </span>
-        </div>
-        <p className="text-[11.5px] text-ink-soft leading-snug">
-          ±10% shocks on material · labor · overhead and volume curves
-          at 1 / 5 / 10 pieces land in Day 4 — wires to{" "}
-          <span className="font-mono text-[11px]">/sensitivity</span>.
-        </p>
-      </section>
+          <section>
+            <SectionTag>By system</SectionTag>
+            <div className="mt-2 border-t border-hairline">
+              {mepCost.systems.map((s) => (
+                <div
+                  key={s.system + s.key}
+                  className="py-2 border-b border-hairline last:border-b-0 flex items-baseline justify-between gap-2"
+                >
+                  <div className="min-w-0">
+                    <div className="text-[12.5px] text-ink-deep font-medium capitalize">
+                      {s.system.replace(/_/g, " ")}
+                    </div>
+                    <div className="font-mono text-[10.5px] text-ink-mute tnum">
+                      {formatINR(s.rate_inr_m2.low)}/m²
+                      <span className="mx-1">→</span>
+                      {formatINR(s.rate_inr_m2.high)}/m²
+                    </div>
+                  </div>
+                  <div className="text-right shrink-0 font-mono text-[12px] text-ink tnum">
+                    {formatINR(s.total_inr.low)}
+                    <span className="text-ink-mute mx-1">→</span>
+                    {formatINR(s.total_inr.high)}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </section>
+
+          <section>
+            <div className="flex items-baseline justify-between mb-2">
+              <SectionTag>Sensitivity</SectionTag>
+              <span className="font-mono text-[10px] uppercase tracking-tagged text-pencil">
+                Day 4
+              </span>
+            </div>
+            <p className="text-[11.5px] text-ink-soft leading-snug">
+              ±10% shocks on material · labor · overhead and volume curves
+              at 1 / 5 / 10 pieces land in Day 4 — wires to{" "}
+              <span className="font-mono text-[11px]">/sensitivity</span>.
+            </p>
+          </section>
+        </>
+      ) : null}
     </div>
   );
 }
