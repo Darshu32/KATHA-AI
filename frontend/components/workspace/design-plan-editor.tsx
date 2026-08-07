@@ -19,7 +19,12 @@ import { useDesignRoom } from "@/lib/use-design-room";
 type Vec = { x: number; y: number; z: number };
 type Dim = { length?: number; width?: number; height?: number; unit?: string };
 type Obj = { id?: string; type?: string; position?: Partial<Vec>; dimensions?: Dim };
-type Graph = { objects?: Obj[] } | null | undefined;
+type Space = { id?: string; name?: string; type?: string; position?: Partial<Vec>; dimensions?: Dim };
+type Graph = { objects?: Obj[]; spaces?: Space[] } | null | undefined;
+// A room to draw: corner (x,z) + size (l,w) in metres, matching the kernel's
+// `_placed_rooms` convention — the same world coords the furniture uses, so
+// pieces land inside their rooms with no extra transform.
+type Room = { id: string; name: string; x: number; z: number; l: number; w: number; area: number };
 
 const UNIT: Record<string, number> = { mm: 1e-3, cm: 1e-2, m: 1, metre: 1, meter: 1, ft: 0.3048, feet: 0.3048 };
 function toM(v: unknown, unit?: string): number {
@@ -62,10 +67,50 @@ export default function DesignPlanEditor({
     preloadSolver();
   }, []);
 
-  const objects = useMemo(
-    () => ((graph as Graph)?.objects ?? []).filter((o) => o?.id && o.position),
-    [graph],
-  );
+  const objects = useMemo(() => {
+    // De-dupe by id: a graph that accumulated a duplicate object (e.g. over many
+    // edit rounds) would otherwise draw the same footprint + label twice, which
+    // reads as "garbled" doubled text. One draw per id.
+    const seen = new Set<string>();
+    return ((graph as Graph)?.objects ?? []).filter((o) => {
+      if (!o?.id || !o.position) return false;
+      if (seen.has(o.id)) return false;
+      seen.add(o.id);
+      return true;
+    });
+  }, [graph]);
+
+  // Rooms from the spec's spaces — walls + name + area. A solved multi-room plan
+  // carries an explicit corner position per space; a single room defaults to the
+  // origin shell (0,0)→(L,W), matching the kernel. Same world metres as objects.
+  const rooms: Room[] = useMemo(() => {
+    const sp = (graph as Graph)?.spaces;
+    if (!Array.isArray(sp)) return [];
+    const withDims = sp.filter((s) => {
+      const d = s?.dimensions ?? {};
+      return toM(d.length, d.unit) > 0 && toM(d.width, d.unit) > 0;
+    });
+    if (withDims.length === 0) return [];
+    const positioned = withDims.filter((s) => s?.position?.x != null && s?.position?.z != null);
+    // A *solved* plan → draw every placed room at its position. Otherwise draw
+    // only the primary space as the single room shell at the origin — never
+    // stack multiple position-less spaces on top of each other (which would
+    // pile their walls + labels into an unreadable blob).
+    const src = positioned.length > 0 ? positioned : [withDims[0]];
+    return src.map((s, i) => {
+      const d = s?.dimensions ?? {};
+      const L = toM(d.length, d.unit);
+      const W = toM(d.width, d.unit);
+      const pos = s?.position;
+      const x = pos && pos.x != null ? toM(pos.x, d.unit) : 0;
+      const z = pos && pos.z != null ? toM(pos.z, d.unit) : 0;
+      return {
+        id: String(s?.id ?? s?.name ?? `room_${i + 1}`),
+        name: String(s?.name ?? s?.type ?? `Room ${i + 1}`),
+        x, z, l: L, w: W, area: L * W,
+      };
+    });
+  }, [graph]);
 
   const foot = objects.map((o) => {
     const d = o.dimensions ?? {};
@@ -78,17 +123,26 @@ export default function DesignPlanEditor({
     return { id: o.id!, type: String(o.type ?? ""), l, w, x: p.x, z: p.z, structural: STRUCTURAL.has(String(o.type ?? "").toLowerCase()) };
   });
 
-  // World bounds → viewBox (1 SVG unit = 1 metre).
-  const xs = foot.flatMap((f) => [f.x - f.l / 2, f.x + f.l / 2]);
-  const zs = foot.flatMap((f) => [f.z - f.w / 2, f.z + f.w / 2]);
-  const pad = 1.5;
+  // World bounds → viewBox (1 SVG unit = 1 metre). Frame the ROOMS (+ any
+  // furniture that spills past them), so the plan reads as a floor plan.
+  const xs = [
+    ...foot.flatMap((f) => [f.x - f.l / 2, f.x + f.l / 2]),
+    ...rooms.flatMap((r) => [r.x, r.x + r.l]),
+  ];
+  const zs = [
+    ...foot.flatMap((f) => [f.z - f.w / 2, f.z + f.w / 2]),
+    ...rooms.flatMap((r) => [r.z, r.z + r.w]),
+  ];
+  const pad = 1.2;
   const minX = (xs.length ? Math.min(...xs) : 0) - pad;
   const maxX = (xs.length ? Math.max(...xs) : 10) + pad;
   const minZ = (zs.length ? Math.min(...zs) : 0) - pad;
   const maxZ = (zs.length ? Math.max(...zs) : 10) + pad;
   const vbW = maxX - minX;
   const vbH = maxZ - minZ;
-  const font = Math.max(vbW, vbH) * 0.022;
+  // Capped so labels stay legible whether the plan is a 3 m nook or a 20 m floor.
+  const font = Math.min(Math.max(vbW, vbH) * 0.02, 0.3);
+  const roomFont = Math.min(Math.max(vbW, vbH) * 0.028, 0.44);
 
   const toWorld = (clientX: number, clientY: number) => {
     const svg = svgRef.current;
@@ -255,14 +309,61 @@ export default function DesignPlanEditor({
         onPointerLeave={onUp}
         onClick={() => onSelectObject?.(null)}
       >
+        {/* Rooms — perimeter walls + name + area, from the spec's spaces. Drawn
+            first, so the furniture footprints sit on top, inside their rooms. */}
+        {rooms.map((r) => {
+          // Fit the name to the room width so a long name ("open-plan living and
+          // dining") shrinks to fit instead of overflowing/cramping the label.
+          const nameFont = Math.max(
+            0.12,
+            Math.min(roomFont, (r.l * 0.92) / Math.max(r.name.length * 0.5, 1)),
+          );
+          return (
+            <g key={`room-${r.id}`} style={{ pointerEvents: "none" }}>
+              <rect
+                x={r.x}
+                y={r.z}
+                width={r.l}
+                height={r.w}
+                fill="rgba(26,26,26,0.015)"
+                stroke="#1A1A1A"
+                strokeWidth={2.5}
+                vectorEffect="non-scaling-stroke"
+              />
+              <text
+                x={r.x + r.l / 2}
+                y={r.z + nameFont * 1.3}
+                fontSize={nameFont}
+                textAnchor="middle"
+                fill="#1A1A1A"
+                fontWeight={600}
+                style={{ userSelect: "none" }}
+              >
+                {r.name}
+              </text>
+              <text
+                x={r.x + r.l / 2}
+                y={r.z + nameFont * 2.55}
+                fontSize={nameFont * 0.78}
+                textAnchor="middle"
+                fill="#6b7280"
+                style={{ userSelect: "none" }}
+              >
+                {r.area.toFixed(1)} m²
+              </text>
+            </g>
+          );
+        })}
         {foot.map((f) => {
           const sel = f.id === selectedObjectId;
           const fill = f.structural
             ? "rgba(26,26,26,0.035)"
             : sel
               ? "rgba(200,54,45,0.14)"
-              : "rgba(26,26,26,0.07)";
-          const stroke = sel ? "#C8362D" : f.structural ? "#9a9a95" : "#1A1A1A";
+              : "rgba(26,26,26,0.06)";
+          // Furniture reads lighter than the room walls above, so the plan's
+          // structure dominates and the pieces are clearly secondary.
+          const stroke = sel ? "#C8362D" : f.structural ? "#c9c9c4" : "#6f6f6a";
           return (
             <g
               key={f.id}
@@ -280,19 +381,30 @@ export default function DesignPlanEditor({
                 strokeWidth={sel ? 2 : 1}
                 vectorEffect="non-scaling-stroke"
               />
-              {!f.structural ? (
-                <text
-                  x={f.x}
-                  y={f.z}
-                  fontSize={font}
-                  textAnchor="middle"
-                  dominantBaseline="middle"
-                  fill="#1A1A1A"
-                  style={{ pointerEvents: "none", userSelect: "none" }}
-                >
-                  {f.type}
-                </text>
-              ) : null}
+              {!f.structural ? (() => {
+                const label = f.type.replace(/_/g, " ");
+                // Shrink the label to fit inside its own footprint so it never
+                // overflows the box or collides with the neighbour — the real
+                // cause of the unreadable doubled-up text. Too small → drop it
+                // (the room context still identifies the piece).
+                const fit = Math.max(
+                  0.05,
+                  Math.min(font, (f.l * 0.9) / Math.max(label.length * 0.55, 1), f.w * 0.62),
+                );
+                return fit >= 0.09 ? (
+                  <text
+                    x={f.x}
+                    y={f.z}
+                    fontSize={fit}
+                    textAnchor="middle"
+                    dominantBaseline="middle"
+                    fill="#3f3f46"
+                    style={{ pointerEvents: "none", userSelect: "none" }}
+                  >
+                    {label}
+                  </text>
+                ) : null;
+              })() : null}
             </g>
           );
         })}
