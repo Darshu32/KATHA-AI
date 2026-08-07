@@ -62,6 +62,16 @@ export default function ProjectBriefPanel({
     !!status &&
     SECTION_ORDER.every((s) => (status[s.key] ?? "pending") === "confirmed");
 
+  // Handoff is allowed once every section has at least been TOUCHED (partial or
+  // confirmed) — not only when all five are fully confirmed. The backend
+  // /brief/intake accepts optional fields and validates the brief, so a
+  // reasonable brief shouldn't be stranded because the LLM left a secondary
+  // field (site conditions, budget, climatic zone) at `partial`. Only a
+  // still-`pending` section — one never discussed at all — holds the button.
+  const readyToDesign =
+    !!status &&
+    SECTION_ORDER.every((s) => (status[s.key] ?? "pending") !== "pending");
+
   return (
     <section className="px-4 py-3 border-b border-hairline bg-paper-soft/40">
       <header className="flex items-center justify-between mb-2">
@@ -107,21 +117,23 @@ export default function ProjectBriefPanel({
       <button
         type="button"
         onClick={onReadyToDesign}
-        disabled={!allConfirmed || readyDisabled || !onReadyToDesign}
+        disabled={!readyToDesign || readyDisabled || !onReadyToDesign}
         className={
           "mt-3 w-full inline-flex items-center justify-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium transition-colors " +
-          (allConfirmed && !readyDisabled
+          (readyToDesign && !readyDisabled
             ? "bg-ink-deep text-paper hover:bg-ink"
             : "bg-paper-deep text-ink-mute cursor-not-allowed")
         }
         title={
-          allConfirmed
-            ? "Send this brief to the design workspace"
-            : "All 5 sections must be confirmed first"
+          readyToDesign
+            ? allConfirmed
+              ? "Send this brief to the design workspace"
+              : "Send to design — you can refine the partial sections there"
+            : "Discuss all 5 sections first (at least briefly)"
         }
       >
-        {allConfirmed ? "Ready to design" : "Brief in progress…"}
-        {allConfirmed && <ArrowRight size={12} />}
+        {readyToDesign ? "Ready to design" : "Brief in progress…"}
+        {readyToDesign && <ArrowRight size={12} />}
       </button>
     </section>
   );

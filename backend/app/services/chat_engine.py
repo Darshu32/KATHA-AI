@@ -109,6 +109,8 @@ Guide toward the next logical architecture action — generate a floor plan, cre
 
 If — and only if — the user is briefing a real design project (intent to design/build something specific, not a general knowledge question), capture what they have said into the 5-section BRD design brief and emit it in the `brief` field of the metadata JSON. Never invent values; fill only what the user actually said.
 
+**Keep the brief alive across turns.** Once briefing has begun (an earlier turn in this conversation captured a brief), CONTINUE capturing on EVERY following turn: merge any new detail the user gives — dimensions, site conditions, budget, materials, location, floor level, ventilation — into the brief, then re-emit the FULL updated brief (all sections seen so far, not just the new one) with refreshed `brief_status` and `brief_missing`. Do NOT emit `brief: null` on a follow-up turn inside an active briefing just because the latest message is a short answer or a detail rather than a fresh "design X" request — that would discard the brief and strand the user. Only omit the brief when the conversation has no design-briefing intent at all.
+
 The 5 sections (all keys are optional inside each section — fill what you have):
 
 1. **project_type** — `{type, sub_type, scale}`. type ∈ residential / commercial / hospitality / institutional / retail / office / mixed_use / industrial / custom.
@@ -119,9 +121,10 @@ The 5 sections (all keys are optional inside each section — fill what you have
 
 Alongside the brief itself, emit two helper fields:
 
-- **brief_status** — one entry per section: `pending` (not discussed), `partial` (some fields captured, more needed), or `confirmed` (all required fields captured).
-  - Required for `partial → confirmed`: project_type.type; theme.theme (+ custom_spec if custom); space.dimensions.{length,width,unit}; requirements has ≥1 of functional_needs/aesthetic_preferences/narrative; regulatory has country OR city.
-- **brief_missing** — array of dotted paths still pending (e.g. `["space.dimensions.height", "requirements.budget", "regulatory.climatic_zone"]`).
+- **brief_status** — one entry per section: `pending` (not discussed), `partial` (touched but a REQUIRED field is still missing), or `confirmed` (all of that section's REQUIRED fields captured).
+  - Required for `confirmed`: project_type.type; theme.theme (+ custom_spec if custom); space.dimensions.{length,width,unit}; requirements has ≥1 of functional_needs/aesthetic_preferences/narrative; regulatory has country OR city.
+  - A section is `confirmed` the MOMENT its required fields above are present. Optional fields being absent — `space.site_conditions.*`, `space.dimensions.height`, `space.constraints`, `requirements.budget`, `requirements.timeline_weeks`, `regulatory.climatic_zone`, `regulatory.building_codes` — must NEVER hold a section at `partial`. They are enrichments, not blockers.
+- **brief_missing** — dotted paths still worth asking for (optional or required). This is advisory only; it does NOT gate confirmation. When every section's required fields are in, all 5 should read `confirmed` even if `brief_missing` is non-empty.
 
 If the user is asking a knowledge question (no project intent), omit `brief`, `brief_status`, and `brief_missing` entirely.
 
@@ -147,9 +150,9 @@ Rules for the JSON:
 - **brief_status**: status map (one of pending / partial / confirmed per section). `null` when brief is null.
 - **brief_missing**: array of dotted field paths still pending (empty if no brief or all confirmed).
 
-Example when the user IS briefing a project ("design a small mid-century office in Mumbai, 8x10m, three workstations"):
+Example when the user IS briefing a project ("design a small mid-century office in Mumbai, 8x10m, three workstations"). Note every section is `confirmed` — its required fields are all present — even though `brief_missing` still lists helpful optional fields:
 ```json
-{"suggestions": ["..."], "image_prompt": "...", "youtube_query": "...", "research_query": "...", "reference_links": [], "brief": {"project_type": {"type": "office", "scale": "small"}, "theme": {"theme": "mid_century_modern"}, "space": {"dimensions": {"length": 10, "width": 8, "unit": "m"}}, "requirements": {"functional_needs": ["three workstations"]}, "regulatory": {"city": "Mumbai", "country": "India"}}, "brief_status": {"project_type": "confirmed", "theme": "confirmed", "space": "partial", "requirements": "partial", "regulatory": "partial"}, "brief_missing": ["space.dimensions.height", "requirements.budget", "regulatory.climatic_zone"]}
+{"suggestions": ["..."], "image_prompt": "...", "youtube_query": "...", "research_query": "...", "reference_links": [], "brief": {"project_type": {"type": "office", "scale": "small"}, "theme": {"theme": "mid_century_modern"}, "space": {"dimensions": {"length": 10, "width": 8, "unit": "m"}}, "requirements": {"functional_needs": ["three workstations"]}, "regulatory": {"city": "Mumbai", "country": "India"}}, "brief_status": {"project_type": "confirmed", "theme": "confirmed", "space": "confirmed", "requirements": "confirmed", "regulatory": "confirmed"}, "brief_missing": ["space.dimensions.height", "requirements.budget", "regulatory.climatic_zone"]}
 ```"""
 
 
