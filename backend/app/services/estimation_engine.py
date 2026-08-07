@@ -27,7 +27,9 @@ from app.services.estimation import (
     calculate_labor_items,
     calculate_material_items,
     calculate_misc_items,
+    calculate_product_items,
     calculate_service_items,
+    calculate_structure_items,
     emit_audit_logs,
     generate_scenarios,
     load_pricing_config,
@@ -132,8 +134,15 @@ def _compute_estimate(graph_data: dict) -> dict:
 
     material_items, assumptions = calculate_material_items(graph_data)
     furniture_items = calculate_furniture_items(graph_data)
+    # Type-aware primary cost for the non-interior design types (interior returns
+    # nothing from these — its cost comes from per-room surfaces above):
+    #   architecture → structure/shell on built-up area; product → per-unit price.
+    structure_items = calculate_structure_items(graph_data, area_summary)
+    product_items = calculate_product_items(graph_data)
 
-    priced_goods = apply_pricing_to_items(material_items + furniture_items, pricing_context, pricing_config)
+    priced_goods = apply_pricing_to_items(
+        material_items + furniture_items + structure_items + product_items,
+        pricing_context, pricing_config)
     for item in priced_goods:
         logger.info("pricing_rule_applied: item=%s category=%s", item.item, item.category)
     goods_total = _subtotal(priced_goods)
@@ -301,7 +310,15 @@ def _apply_fallback_if_needed(
     if not fallback_enabled:
         return fallback_state, assumptions, []
 
-    has_catalog_gap = len(graph_data.get("materials", [])) == 0 or len(graph_data.get("objects", [])) == 0
+    # Architecture/product carry their PRIMARY cost via the typed calculators
+    # (structure on built-up area / per-unit product price), not a materials[]
+    # catalog — their empty materials list is expected, not a gap. Excluding them
+    # here prevents the per-sqft fallback from double-charging on top of the real
+    # structure line. (If they genuinely produced no items, has_no_items still
+    # trips the fallback below.)
+    typed_primary = str(graph_data.get("design_type")) in ("architecture", "product")
+    has_catalog_gap = not typed_primary and (
+        len(graph_data.get("materials", [])) == 0 or len(graph_data.get("objects", [])) == 0)
     has_no_items = len(existing_items) == 0
     total_sqft = to_decimal(area_summary.get("total_sqft"))
 

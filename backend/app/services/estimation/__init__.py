@@ -8,7 +8,9 @@ from app.services.estimation.calculators import (
     calculate_labor_items,
     calculate_material_items,
     calculate_misc_items,
+    calculate_product_items,
     calculate_service_items,
+    calculate_structure_items,
 )
 from app.services.estimation.catalog_handler import build_catalog_metadata
 from app.services.estimation.confidence import build_confidence_score
@@ -65,6 +67,8 @@ __all__ = [
     "calculate_furniture_items",
     "calculate_labor_items",
     "calculate_material_items",
+    "calculate_product_items",
+    "calculate_structure_items",
     "calculate_misc_items",
     "calculate_service_items",
     "emit_audit_logs",

@@ -67,6 +67,36 @@ LABOR_RATES: dict[str, Decimal] = {
     "carpentry_labor": Decimal("55"),
 }
 
+# Built-up construction rate (₹/sqft) for exterior/architecture massing — RCC
+# structure + envelope + basic services, India standard grade. Interior projects
+# are costed per-room from surfaces; a massing has no rooms, so its shell is
+# costed on built-up area (footprint × storeys). Part of the same rate card that
+# regionalizes later (see the deferred regional-rates work).
+CONSTRUCTION_RATE_PER_SQFT: Decimal = Decimal("1850")
+
+# Free-text product types (from the LLM `product_meta`) → FURNITURE_RATES keys.
+# A product carries no floor area, so it's priced per-unit off this card.
+# Anything unmatched falls back to FURNITURE_RATES["default"].
+PRODUCT_RATE_ALIASES: dict[str, str] = {
+    "armchair": "sofa",        # upholstered lounge chair ≈ small-sofa tier
+    "lounge chair": "sofa",
+    "accent chair": "sofa",
+    "recliner": "sofa",
+    "dining chair": "chair",
+    "office chair": "chair",
+    "stool": "chair",
+    "bench": "table",
+    "side table": "coffee_table",
+    "console table": "tv_unit",
+    "console": "tv_unit",
+    "nightstand": "cabinet",
+    "sideboard": "cabinet",
+    "dresser": "wardrobe",
+    "bookcase": "bookshelf",
+    "credenza": "tv_unit",
+    "ottoman": "coffee_table",
+}
+
 MISC_RATES: dict[str, Decimal] = {
     "logistics": Decimal("0.02"),
     "contingency": Decimal("0.03"),

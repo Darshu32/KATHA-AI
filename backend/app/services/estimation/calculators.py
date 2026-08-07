@@ -5,12 +5,14 @@ from __future__ import annotations
 from decimal import Decimal
 
 from app.services.estimation.catalog import (
+    CONSTRUCTION_RATE_PER_SQFT,
     FIXTURE_RATES,
     FURNITURE_RATES,
     FURNITURE_TYPES,
     LABOR_RATES,
     MATERIAL_RATES,
     MISC_RATES,
+    PRODUCT_RATE_ALIASES,
     SERVICE_RATES,
 )
 from app.services.estimation.models import EstimateItem, round_money, to_decimal
@@ -63,6 +65,30 @@ def calculate_area_summary(graph_data: dict) -> dict:
                     "space_id": room.get("id", f"room_{index}"),
                     "space_name": room.get("type", f"Room {index}"),
                     "sqft": float(floor_area),
+                }
+            )
+
+    # Exterior/architecture: no interior rooms, but there IS a built-up area —
+    # each massing volume contributes footprint × storeys (height ÷ ~3 m/floor).
+    # This is the area the shell + labour + services are costed on.
+    if not space_breakdown and str(graph_data.get("design_type")) == "architecture":
+        for index, obj in enumerate(graph_data.get("objects") or [], start=1):
+            if str(obj.get("role")) != "massing":
+                continue
+            dims = obj.get("dimensions") or {}
+            length_ft = _ft(dims.get("length") or dims.get("width") or dims.get("x"), "40")
+            width_ft = _ft(dims.get("depth") or dims.get("width") or dims.get("y"), "30")
+            height_m = to_decimal(dims.get("height") or dims.get("z"))
+            floors = max(int(height_m / Decimal("3")), 1) if height_m >= Decimal("3") else 1
+            built = round_money(length_ft * width_ft * Decimal(floors))
+            if built <= 0:
+                continue
+            total_sqft += built
+            space_breakdown.append(
+                {
+                    "space_id": obj.get("id", f"mass_{index}"),
+                    "space_name": obj.get("name", f"Massing {index}"),
+                    "sqft": float(built),
                 }
             )
 
@@ -180,6 +206,76 @@ def calculate_furniture_items(graph_data: dict) -> list[EstimateItem]:
         )
 
     return items
+
+
+def calculate_structure_items(graph_data: dict, area_summary: dict) -> list[EstimateItem]:
+    """Exterior/architecture shell — RCC structure + envelope, costed on the
+    built-up area (computed in :func:`calculate_area_summary`). Interior projects
+    return nothing here (their cost comes from per-room surfaces)."""
+    if str(graph_data.get("design_type")) != "architecture":
+        return []
+    built = to_decimal(area_summary.get("total_sqft"))
+    if built <= 0:
+        return []
+    return [
+        EstimateItem(
+            item="Structure & building shell (built-up area)",
+            category="materials",
+            subcategory="construction",
+            quantity=round_money(built),
+            unit="sqft",
+            base_unit_cost=CONSTRUCTION_RATE_PER_SQFT,
+            material="rcc_structure",
+            source="massing",
+        )
+    ]
+
+
+def calculate_product_items(graph_data: dict) -> list[EstimateItem]:
+    """Furniture/product — priced per-unit off the rate card (a product has no
+    floor area). The product's type comes from the ``product_meta`` constraint;
+    its parts are geometry, not separate line items."""
+    if str(graph_data.get("design_type")) != "product":
+        return []
+    ptype = _product_type(graph_data)
+    return [
+        EstimateItem(
+            item=(ptype.replace("_", " ").title() or "Product"),
+            category="furniture",
+            subcategory="product",
+            quantity=Decimal("1"),
+            unit="item",
+            base_unit_cost=_product_base_rate(ptype),
+            material="mixed",
+            quality="standard",
+            source="product",
+        )
+    ]
+
+
+def _product_type(graph_data: dict) -> str:
+    for constraint in graph_data.get("constraints") or []:
+        if str(constraint.get("type")) == "product_meta":
+            return str(constraint.get("value") or "product").lower().strip()
+    return "product"
+
+
+def _product_base_rate(ptype: str) -> Decimal:
+    """Free-text product type → a rate-card price. Exact key, then exact alias,
+    then substring on aliases (so 'lounge armchair' → 'armchair' → sofa tier
+    BEFORE the bare 'chair' substring), then substring on furniture keys."""
+    t = (ptype or "").lower().strip()
+    if t in FURNITURE_RATES:
+        return FURNITURE_RATES[t]
+    if t in PRODUCT_RATE_ALIASES:
+        return FURNITURE_RATES[PRODUCT_RATE_ALIASES[t]]
+    for alias, key in PRODUCT_RATE_ALIASES.items():
+        if alias in t:
+            return FURNITURE_RATES[key]
+    for key in FURNITURE_TYPES:
+        if key in t:
+            return FURNITURE_RATES[key]
+    return FURNITURE_RATES["default"]
 
 
 def calculate_labor_items(area_summary: dict, priced_goods_total: Decimal, style_tier: str) -> list[EstimateItem]:
