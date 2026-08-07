@@ -152,14 +152,16 @@ def convert_from_inr(amount_inr: float | Decimal, currency: str | None) -> Decim
     rate-cards in the project's regional currency.
 
     The estimation engine is authored in INR (Indian rate-cards). For
-    non-INR regions we convert at the fallback rate so the demo shows a
-    plausible local-currency figure rather than rupees. Live FX, when
-    wired, supersedes these constants.
+    non-INR regions we convert into the project's currency. LIVE FX (a real
+    forex feed, cached ~1h) is used when reachable; the static card is the
+    offline fallback so an estimate never depends on the network.
     """
     norm = str(currency or CURRENCY).upper()
     if norm == CURRENCY:
         return Decimal(str(amount_inr))
-    rate = DEFAULT_CONVERSION_RATES.get(norm, Decimal("1.00"))
+    from app.services.estimation.fx_live import get_live_inr_rates
+    live = get_live_inr_rates()
+    rate = live.get(norm) or DEFAULT_CONVERSION_RATES.get(norm, Decimal("1.00"))
     return (Decimal(str(amount_inr)) * rate)
 DEFAULT_PRICING_CONFIG = {
     "material_multipliers": {key: "1.00" for key in MATERIAL_RATES},

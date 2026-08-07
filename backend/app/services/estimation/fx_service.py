@@ -75,7 +75,9 @@ def _fetch_live_rates(graph_data: dict, fx_service: dict) -> dict:
     if isinstance(provider_payload, dict) and provider_payload.get("provider") == fx_service["provider"]:
         return provider_payload.get("rates", {})
 
-    return {}
+    # No rates injected on the graph → fetch a real live feed (cached ~1h).
+    from app.services.estimation.fx_live import get_live_inr_rates
+    return get_live_inr_rates()
 
 
 def _load_fallback_rates(graph_data: dict, raw_currency: dict) -> dict:
