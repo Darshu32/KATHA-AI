@@ -79,6 +79,14 @@ class Settings(BaseSettings):
     # restyles materials). Extracts depth from the clay render internally. Ready
     # to use the moment replicate_api_token is set; blank token = dormant.
     controlnet_depth_model: str = "black-forest-labs/flux-depth-dev"
+    # Finish tuning. Higher guidance = stronger prompt/material adherence; the
+    # depth control keeps geometry locked regardless. Steps trade quality vs cost.
+    controlnet_guidance: float = 12.0
+    controlnet_steps: int = 28
+    # Send the kernel's exact DEPTH MAP as the control instead of the clay render.
+    # Leave False for flux-depth-dev (it extracts depth from the clay image); set
+    # True only if you point controlnet_depth_model at a depth-NATIVE ControlNet.
+    controlnet_send_depth: bool = False
 
     # ── Interop / export ─────────────────────────────────
     # Speckle push (Revit/Rhino/Grasshopper/ArchiCAD distribution wedge).

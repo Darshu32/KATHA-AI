@@ -150,18 +150,29 @@ async def _controlnet_depth(base_png: bytes, depth_png: bytes | None, prompt: st
     import asyncio
 
     import httpx
-    # flux-depth-dev extracts depth from the control image internally, so we hand
-    # it the CLAY render (which already encodes the exact kernel geometry) — that
-    # is the geometry lock. (For a model that takes a raw depth map directly,
-    # swap in depth_png here.)
-    control = "data:image/png;base64," + base64.b64encode(base_png).decode()
+    # flux-depth-dev extracts the depth structure from the control image, so we
+    # hand it the CLAY render (clean, unambiguous kernel geometry) and it locks
+    # the output to that depth — it can't add or move geometry the way img2img
+    # can. If a depth-NATIVE ControlNet is configured (controlnet_send_depth) and
+    # a kernel depth map exists, send that instead — a pre-computed depth is
+    # tighter than an extracted one.
+    send_depth = bool(getattr(s, "controlnet_send_depth", False)) and depth_png is not None
+    control_bytes = depth_png if send_depth else base_png
+    control = "data:image/png;base64," + base64.b64encode(control_bytes).decode()
+    payload = {
+        "prompt": prompt,
+        "control_image": control,
+        "guidance": float(getattr(s, "controlnet_guidance", 12.0) or 12.0),
+        "num_inference_steps": int(getattr(s, "controlnet_steps", 28) or 28),
+        "output_format": "png",
+    }
     url = f"https://api.replicate.com/v1/models/{model}/predictions"
     auth = {"Authorization": f"Bearer {token}"}
     try:
         async with httpx.AsyncClient(timeout=180.0) as client:
             resp = await client.post(
                 url,
-                json={"input": {"prompt": prompt, "control_image": control}},
+                json={"input": payload},
                 headers={**auth, "Content-Type": "application/json", "Prefer": "wait"},
             )
             resp.raise_for_status()
@@ -177,17 +188,36 @@ async def _controlnet_depth(base_png: bytes, depth_png: bytes | None, prompt: st
                 data = r.json()
                 status = data.get("status")
             if status != "succeeded":
+                logger.warning("controlnet-depth: prediction did not succeed (status=%s)", status)
                 return None
-            out = data.get("output")
-            img_url = out[0] if isinstance(out, list) and out else (out if isinstance(out, str) else None)
+            img_url = _first_output_url(data.get("output"))
             if not img_url:
+                logger.warning("controlnet-depth: no output image in %s", str(data.get("output"))[:120])
                 return None
             img = await client.get(img_url)
             img.raise_for_status()
+            logger.info("controlnet-depth: finished via %s (control=%s)", model, "depth" if send_depth else "clay")
             return img.content
     except Exception as exc:  # noqa: BLE001 — never break the finish
         logger.warning("controlnet-depth finish failed: %s", exc)
         return None
+
+
+def _first_output_url(out) -> str | None:
+    """Replicate output can be a URL string, a list of URLs, or a dict — normalise
+    to the first image URL, or None."""
+    if isinstance(out, str):
+        return out or None
+    if isinstance(out, list) and out:
+        first = out[0]
+        if isinstance(first, str):
+            return first or None
+        if isinstance(first, dict):
+            return first.get("url") or first.get("image")
+        return None
+    if isinstance(out, dict):
+        return out.get("url") or out.get("image")
+    return None
 
 
 # provider name → (coroutine factory, reported label)
