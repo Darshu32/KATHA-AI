@@ -70,6 +70,11 @@ def build_finish_prompt(graph: dict, *, kind: str = "interior") -> str:
         f"Materials to render: {mat_txt}. "
         "Realistic natural lighting, soft shadows, subtle ambient occlusion, high detail, "
         "professional architectural photography. "
+        "CRITICAL — treat the provided image as a LOCKED structural template: do NOT add, "
+        "remove, relocate, resize, merge or invent ANY element. No extra walls, panels, "
+        "glass, dividers, furniture, legs or props that are not already in the model; no "
+        "missing ones either. Keep the exact silhouette, part count and every edge; change "
+        "ONLY surface material, colour and lighting. "
         "Do NOT add text, labels, dimension lines, floor-plan lines or diagram overlays."
     )
 
@@ -95,10 +100,14 @@ async def _openai_edit(base_png: bytes, prompt: str, size: str) -> bytes | None:
         return None
 
 
-async def _gemini_edit(base_png: bytes, prompt: str) -> bytes | None:
+async def _gemini_edit(base_png: bytes, prompt: str, ref_png: bytes | None = None) -> bytes | None:
     """Nano Banana (Gemini 2.5 Flash Image) img2img finish — the clay render is
     the attached reference the model must KEEP; it only paints materials + light.
-    Same provider ReRender-style tools use, and KATHA's target image stack."""
+    Same provider ReRender-style tools use, and KATHA's target image stack.
+
+    When a ``ref_png`` (the kernel DEPTH MAP) is supplied it's attached as a
+    SECOND reference and the prompt tells the model to hold the 3D structure to
+    it — extra geometry signal to curb img2img drift without a ControlNet."""
     s = get_settings()
     key = (getattr(s, "gemini_api_key", "") or "").strip()
     if not key:
@@ -106,12 +115,18 @@ async def _gemini_edit(base_png: bytes, prompt: str) -> bytes | None:
     model = getattr(s, "gemini_image_model", None) or "gemini-2.5-flash-image"
     url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
            f"{model}:generateContent?key={key}")
+    parts: list = [
+        {"inlineData": {"mimeType": "image/png", "data": base64.b64encode(base_png).decode()}},
+    ]
+    text = prompt
+    if ref_png:
+        parts.append({"inlineData": {"mimeType": "image/png", "data": base64.b64encode(ref_png).decode()}})
+        text = (prompt + " Two images are provided: the FIRST is the clay 3D model to render; "
+                "the SECOND is its exact DEPTH MAP — use it to hold the precise 3D structure, "
+                "proportions and part positions. Render only the first; do not depict the depth map.")
+    parts.append({"text": text})
     payload = {
-        "contents": [{"parts": [
-            {"inlineData": {"mimeType": "image/png",
-                            "data": base64.b64encode(base_png).decode()}},
-            {"text": prompt},
-        ]}],
+        "contents": [{"parts": parts}],
         "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
     }
     try:
@@ -221,9 +236,10 @@ def _first_output_url(out) -> str | None:
 
 
 # provider name → (coroutine factory, reported label)
-async def _run_provider(name: str, base_png: bytes, prompt: str, size: str) -> dict | None:
+async def _run_provider(name: str, base_png: bytes, prompt: str, size: str,
+                        depth_png: bytes | None = None) -> dict | None:
     if name == "gemini":
-        out = await _gemini_edit(base_png, prompt)
+        out = await _gemini_edit(base_png, prompt, depth_png)
         return {"bytes": out, "provider": "gemini-2.5-flash-image"} if out else None
     if name == "openai":
         out = await _openai_edit(base_png, prompt, size)
@@ -247,7 +263,7 @@ async def finish_render(base_png: bytes, depth_png: bytes | None, prompt: str,
     pref = (provider or getattr(get_settings(), "spatial_finish_provider", "openai") or "openai").lower()
     order = ["gemini", "openai"] if pref == "gemini" else ["openai", "gemini"]
     for name in order:
-        res = await _run_provider(name, base_png, prompt, size)
+        res = await _run_provider(name, base_png, prompt, size, depth_png)
         if res:
             return res
     return None
