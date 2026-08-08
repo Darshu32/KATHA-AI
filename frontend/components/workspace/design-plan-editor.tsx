@@ -20,11 +20,15 @@ type Vec = { x: number; y: number; z: number };
 type Dim = { length?: number; width?: number; height?: number; unit?: string };
 type Obj = { id?: string; type?: string; position?: Partial<Vec>; dimensions?: Dim };
 type Space = { id?: string; name?: string; type?: string; position?: Partial<Vec>; dimensions?: Dim };
-type Graph = { objects?: Obj[]; spaces?: Space[] } | null | undefined;
+type Adj = { a?: string; b?: string };
+type Graph = { objects?: Obj[]; spaces?: Space[]; adjacencies?: Adj[] } | null | undefined;
 // A room to draw: corner (x,z) + size (l,w) in metres, matching the kernel's
 // `_placed_rooms` convention — the same world coords the furniture uses, so
 // pieces land inside their rooms with no extra transform.
 type Room = { id: string; name: string; x: number; z: number; l: number; w: number; area: number };
+// An opening drawn ON a wall: centre (cx,cz), the axis it RUNS along, its clear
+// width, and a point on its interior side so a door swings the right way.
+type Opening = { id: string; kind: "door" | "window"; axis: "x" | "z"; cx: number; cz: number; size: number; inx: number; inz: number };
 
 const UNIT: Record<string, number> = { mm: 1e-3, cm: 1e-2, m: 1, metre: 1, meter: 1, ft: 0.3048, feet: 0.3048 };
 function toM(v: unknown, unit?: string): number {
@@ -35,6 +39,55 @@ function toM(v: unknown, unit?: string): number {
 
 // Structural elements aren't draggable furniture — show them faintly as context.
 const STRUCTURAL = new Set(["building", "wall", "floor", "slab", "ground", "atrium", "driveway"]);
+// Openings are drawn as architectural symbols on the walls, not furniture boxes.
+const OPENING_TYPES = new Set(["door", "window", "opening", "doorway"]);
+
+/* One opening on a wall — a door (leaf + swing arc) or a window (glazing line),
+ * with a paper-filled gap so the wall reads as broken there. */
+function OpeningGlyph({ op }: { op: Opening }) {
+  const { kind, axis, cx, cz, size } = op;
+  const half = size / 2;
+  const maskT = 0.18; // metres — wide enough to cover the wall stroke
+  const gap =
+    axis === "x" ? (
+      <rect x={cx - half} y={cz - maskT / 2} width={size} height={maskT} fill="var(--paper)" />
+    ) : (
+      <rect x={cx - maskT / 2} y={cz - half} width={maskT} height={size} fill="var(--paper)" />
+    );
+  if (kind === "window") {
+    const line =
+      axis === "x" ? (
+        <line x1={cx - half} y1={cz} x2={cx + half} y2={cz} stroke="#1A1A1A" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+      ) : (
+        <line x1={cx} y1={cz - half} x2={cx} y2={cz + half} stroke="#1A1A1A" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+      );
+    return (
+      <g style={{ pointerEvents: "none" }}>
+        {gap}
+        {line}
+      </g>
+    );
+  }
+  // Door: hinge at one jamb, leaf perpendicular into the interior, swing arc back.
+  const perp = axis === "x" ? Math.sign(op.inz - cz) || 1 : Math.sign(op.inx - cx) || 1;
+  const hinge = axis === "x" ? { x: cx - half, z: cz } : { x: cx, z: cz - half };
+  const jamb2 = axis === "x" ? { x: cx + half, z: cz } : { x: cx, z: cz + half };
+  const tip = axis === "x" ? { x: hinge.x, z: hinge.z + perp * size } : { x: hinge.x + perp * size, z: hinge.z };
+  const sweep = axis === "x" ? (perp > 0 ? 0 : 1) : perp > 0 ? 1 : 0;
+  return (
+    <g style={{ pointerEvents: "none" }}>
+      {gap}
+      <line x1={hinge.x} y1={hinge.z} x2={tip.x} y2={tip.z} stroke="#9a9a95" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+      <path
+        d={`M ${tip.x} ${tip.z} A ${size} ${size} 0 0 ${sweep} ${jamb2.x} ${jamb2.z}`}
+        fill="none"
+        stroke="#c4c4bf"
+        strokeWidth={1}
+        vectorEffect="non-scaling-stroke"
+      />
+    </g>
+  );
+}
 
 export default function DesignPlanEditor({
   projectId,
@@ -112,16 +165,74 @@ export default function DesignPlanEditor({
     });
   }, [graph]);
 
-  const foot = objects.map((o) => {
-    const d = o.dimensions ?? {};
-    const l = toM(d.length, d.unit) || 0.5;
-    const w = toM(d.width, d.unit) || 0.5;
-    // Position priority: my in-flight drag → shared-room value (local + remote
-    // edits) → the graph's saved position. So peers' drags appear live.
-    const rp = room.positions[o.id!];
-    const p = live[o.id!] ?? (rp ? { x: rp.x, z: rp.z } : { x: o.position!.x ?? 0, z: o.position!.z ?? 0 });
-    return { id: o.id!, type: String(o.type ?? ""), l, w, x: p.x, z: p.z, structural: STRUCTURAL.has(String(o.type ?? "").toLowerCase()) };
-  });
+  const foot = objects
+    .filter((o) => !OPENING_TYPES.has(String(o.type ?? "").toLowerCase()))
+    .map((o) => {
+      const d = o.dimensions ?? {};
+      const l = toM(d.length, d.unit) || 0.5;
+      const w = toM(d.width, d.unit) || 0.5;
+      // Position priority: my in-flight drag → shared-room value (local + remote
+      // edits) → the graph's saved position. So peers' drags appear live.
+      const rp = room.positions[o.id!];
+      const p = live[o.id!] ?? (rp ? { x: rp.x, z: rp.z } : { x: o.position!.x ?? 0, z: o.position!.z ?? 0 });
+      return { id: o.id!, type: String(o.type ?? ""), l, w, x: p.x, z: p.z, structural: STRUCTURAL.has(String(o.type ?? "").toLowerCase()) };
+    });
+
+  // Openings drawn as wall SYMBOLS (not furniture boxes): doors from adjacencies
+  // (a door on the wall two connected rooms share) + any explicit door/window
+  // objects, snapped onto the nearest room wall.
+  const openings: Opening[] = (() => {
+    const out: Opening[] = [];
+    const roomById = new Map(rooms.map((r) => [r.id, r] as const));
+    const EPS = 0.35;
+    const adj = (graph as Graph)?.adjacencies ?? [];
+    adj.forEach((pair, i) => {
+      const a = roomById.get(String(pair?.a));
+      const b = roomById.get(String(pair?.b));
+      if (!a || !b) return;
+      const inx = a.x + a.l / 2, inz = a.z + a.w / 2; // swing into room a
+      const vert = (wallX: number) => {
+        const z0 = Math.max(a.z, b.z), z1 = Math.min(a.z + a.w, b.z + b.w);
+        if (z1 - z0 > 0.6)
+          out.push({ id: `door_adj_${i}`, kind: "door", axis: "z", cx: wallX, cz: (z0 + z1) / 2, size: Math.min(0.9, z1 - z0 - 0.2), inx, inz });
+      };
+      const horz = (wallZ: number) => {
+        const x0 = Math.max(a.x, b.x), x1 = Math.min(a.x + a.l, b.x + b.l);
+        if (x1 - x0 > 0.6)
+          out.push({ id: `door_adj_${i}`, kind: "door", axis: "x", cx: (x0 + x1) / 2, cz: wallZ, size: Math.min(0.9, x1 - x0 - 0.2), inx, inz });
+      };
+      if (Math.abs(a.x + a.l - b.x) < EPS) vert(a.x + a.l);
+      else if (Math.abs(b.x + b.l - a.x) < EPS) vert(a.x);
+      else if (Math.abs(a.z + a.w - b.z) < EPS) horz(a.z + a.w);
+      else if (Math.abs(b.z + b.w - a.z) < EPS) horz(a.z);
+    });
+    objects
+      .filter((o) => OPENING_TYPES.has(String(o.type ?? "").toLowerCase()))
+      .forEach((o, i) => {
+        const d = o.dimensions ?? {};
+        const size = Math.max(toM(d.length, d.unit), toM(d.width, d.unit)) || 0.9;
+        const px = toM(o.position?.x, d.unit), pz = toM(o.position?.z, d.unit);
+        const kind: "door" | "window" = String(o.type).toLowerCase().startsWith("window") ? "window" : "door";
+        let r = rooms.find((rm) => px >= rm.x - 0.5 && px <= rm.x + rm.l + 0.5 && pz >= rm.z - 0.5 && pz <= rm.z + rm.w + 0.5);
+        if (!r && rooms.length) {
+          const d2 = (rm: Room) => (px - (rm.x + rm.l / 2)) ** 2 + (pz - (rm.z + rm.w / 2)) ** 2;
+          r = rooms.reduce((best, rm) => (d2(rm) < d2(best) ? rm : best));
+        }
+        if (!r) {
+          out.push({ id: o.id ?? `op_${i}`, kind, axis: "x", cx: px, cz: pz, size, inx: px, inz: pz + 1 });
+          return;
+        }
+        const inx = r.x + r.l / 2, inz = r.z + r.w / 2;
+        const dLeft = Math.abs(px - r.x), dRight = Math.abs(px - (r.x + r.l));
+        const dTop = Math.abs(pz - r.z), dBottom = Math.abs(pz - (r.z + r.w));
+        if (Math.min(dLeft, dRight) <= Math.min(dTop, dBottom)) {
+          out.push({ id: o.id ?? `op_${i}`, kind, axis: "z", cx: dLeft <= dRight ? r.x : r.x + r.l, cz: pz, size, inx, inz: pz });
+        } else {
+          out.push({ id: o.id ?? `op_${i}`, kind, axis: "x", cx: px, cz: dTop <= dBottom ? r.z : r.z + r.w, size, inx: px, inz });
+        }
+      });
+    return out;
+  })();
 
   // World bounds → viewBox (1 SVG unit = 1 metre). Frame the ROOMS (+ any
   // furniture that spills past them), so the plan reads as a floor plan.
@@ -408,6 +519,10 @@ export default function DesignPlanEditor({
             </g>
           );
         })}
+        {/* Doors + windows drawn as wall symbols, on top of the walls. */}
+        {openings.map((op) => (
+          <OpeningGlyph key={op.id} op={op} />
+        ))}
         {constraints.map((c, i) => {
           const a = foot.find((f) => f.id === c.refs[0]);
           const b = foot.find((f) => f.id === c.refs[1]);
