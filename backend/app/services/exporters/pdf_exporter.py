@@ -7,6 +7,7 @@ delivery. Sections: cover, summary, materials, manufacturing, MEP, cost.
 from __future__ import annotations
 
 import io
+from xml.sax.saxutils import escape as _xml_escape
 
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
@@ -47,21 +48,36 @@ def _styles() -> dict:
     }
 
 
+_CELL_HDR = ParagraphStyle("katha_cell_hdr", fontName="Helvetica-Bold", fontSize=9, leading=11, textColor=PAPER)
+_CELL_BODY = ParagraphStyle("katha_cell_body", fontName="Helvetica", fontSize=9, leading=11, textColor=INK)
+
+
+def _cell(value, style: ParagraphStyle) -> Paragraph:
+    # Escape XML so values like "R_min >= 2.5 & up" don't break Paragraph markup,
+    # and keep newlines as line breaks.
+    text = _xml_escape(str(value)).replace("\n", "<br/>")
+    return Paragraph(text, style)
+
+
 def _table(data: list[list], col_widths: list[float] | None = None) -> Table:
-    t = Table(data, colWidths=col_widths, repeatRows=1)
+    # Wrap every cell in a Paragraph so long values WRAP inside the column
+    # instead of overflowing the page — reportlab does not wrap bare strings.
+    wrapped = [
+        [c if isinstance(c, Paragraph) else _cell(c, _CELL_HDR if i == 0 else _CELL_BODY) for c in row]
+        for i, row in enumerate(data)
+    ]
+    t = Table(wrapped, colWidths=col_widths, repeatRows=1)
     t.setStyle(TableStyle([
         ("BACKGROUND", (0, 0), (-1, 0), INK),
-        ("TEXTCOLOR", (0, 0), (-1, 0), PAPER),
-        ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
-        ("FONTSIZE", (0, 0), (-1, -1), 9),
         ("BOTTOMPADDING", (0, 0), (-1, 0), 6),
         ("TOPPADDING", (0, 0), (-1, 0), 6),
         ("ROWBACKGROUNDS", (0, 1), (-1, -1), [PAPER, PAPER_DEEP]),
-        ("TEXTCOLOR", (0, 1), (-1, -1), INK),
         ("GRID", (0, 0), (-1, -1), 0.25, INK_MUTED),
         ("VALIGN", (0, 0), (-1, -1), "TOP"),
         ("LEFTPADDING", (0, 0), (-1, -1), 5),
         ("RIGHTPADDING", (0, 0), (-1, -1), 5),
+        ("TOPPADDING", (0, 1), (-1, -1), 4),
+        ("BOTTOMPADDING", (0, 1), (-1, -1), 4),
     ]))
     return t
 
