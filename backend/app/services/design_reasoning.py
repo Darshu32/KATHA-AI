@@ -90,6 +90,17 @@ def shade_directions(zone_key: str, zone: dict) -> set[str]:
     return dirs
 
 
+def wants_courtyard(zone: dict) -> bool:
+    """True when the zone's own passive strategy calls for a courtyard.
+
+    Grounded in the data, not hard-coded: hot-dry lists 'courtyards and buffer
+    zones' + 'courtyard stack' ventilation, so it fires; temperate/cold don't.
+    """
+    text = " ".join(zone.get("passive_priorities") or [])
+    text += " " + str((zone.get("hvac") or {}).get("ventilation_strategy", ""))
+    return "courtyard" in text.lower()
+
+
 # ── Directives ───────────────────────────────────────────────────────────────
 
 @dataclass
@@ -138,6 +149,22 @@ def derive_directives(brief: dict) -> list[Directive]:
             target=facade,
             params={"device": "brise_soleil", "orientation": "horizontal",
                     "gradient": "top", "shading_devices": devices},
+        ))
+
+    # 1b) A central courtyard — the classic hot-dry / buffered-plan cooling move.
+    if wants_courtyard(zone):
+        priority = next((p for p in priorities if "courtyard" in p.lower()),
+                        priorities[0] if priorities else "passive cooling")
+        directives.append(Directive(
+            id="courtyard",
+            category="courtyard",
+            title="Carve a central courtyard",
+            rationale=(
+                f"{name} zone: a central courtyard buffers the interior and drives "
+                f"night-flush stack ventilation — the classic response in this climate. "
+                f"Priority: {priority}."
+            ),
+            params={"device": "courtyard", "footprint_fraction": 0.34},
         ))
 
     # 2) Passive-solar gain instead of shading, in the heating-dominated zone.
@@ -197,6 +224,21 @@ def derive_directives(brief: dict) -> list[Directive]:
             params={"window_wall_ratio_max": wwr},
         ))
 
+    # 6) Roof / overhang strategy — the roof takes the most sun and rain.
+    roof = zone.get("roof_strategy") or {}
+    techniques = roof.get("techniques") or []
+    if techniques:
+        directives.append(Directive(
+            id="roof_strategy",
+            category="envelope",
+            title=f"Roof: {', '.join(techniques[:2])}",
+            rationale=(
+                f"{name} zone: {', '.join(techniques[:2])} "
+                f"(roof U-value target {roof.get('u_value_target_w_m2k', 'per code')} W/m²K)."
+            ),
+            params={"techniques": techniques},
+        ))
+
     return directives
 
 
@@ -254,22 +296,38 @@ def apply_directives(graph: dict, directives: list[Directive]) -> dict:
     height = max(maxy, 2.4)
 
     for d in directives:
-        if d.category != "shading":
-            continue
-        # A brise-soleil over the upper ~65% of the primary (front/+z) facade.
-        band_h = round(height * 0.65, 2)
-        objects.append({
-            "id": f"shade_{d.target or 'front'}",
-            "type": "screen",
-            "name": "Brise-Soleil",
-            "role": "massing",
-            "material": "dark stained timber",
-            "orientation": d.params.get("orientation", "horizontal"),
-            "gradient": d.params.get("gradient", "top"),
-            "position": {"x": round((minx + maxx) / 2, 3), "y": round(height - band_h, 3),
-                         "z": round(maxz + 0.05, 3)},
-            "dimensions": {"length": round(width, 3), "width": 0.18, "height": band_h},
-        })
+        if d.category == "shading":
+            # A brise-soleil over the upper ~65% of the primary (front/+z) facade.
+            band_h = round(height * 0.65, 2)
+            objects.append({
+                "id": f"shade_{d.target or 'front'}",
+                "type": "screen",
+                "name": "Brise-Soleil",
+                "role": "massing",
+                "material": "dark stained timber",
+                "orientation": d.params.get("orientation", "horizontal"),
+                "gradient": d.params.get("gradient", "top"),
+                "position": {"x": round((minx + maxx) / 2, 3), "y": round(height - band_h, 3),
+                             "z": round(maxz + 0.05, 3)},
+                "dimensions": {"length": round(width, 3), "width": 0.18, "height": band_h},
+            })
+        elif d.category == "courtyard":
+            # A central open-to-sky courtyard, carved as a void — the kernel
+            # subtracts 'courtyard'-typed volumes. Full height + poking through the
+            # roof so it reads as open to the sky.
+            frac = float(d.params.get("footprint_fraction", 0.34))
+            cw = max((maxx - minx) * frac, 1.5)
+            cd = max((maxz - minz) * frac, 1.5)
+            objects.append({
+                "id": "courtyard",
+                "type": "courtyard",
+                "name": "Courtyard",
+                "role": "massing",
+                "position": {"x": round((minx + maxx) / 2, 3), "y": 0.0,
+                             "z": round((minz + maxz) / 2, 3)},
+                "dimensions": {"length": round(cw, 3), "width": round(cd, 3),
+                               "height": round(height + 1.0, 3)},
+            })
     return out
 
 

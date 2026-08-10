@@ -97,3 +97,38 @@ def test_shade_directions_are_grounded_in_zone_data():
     dirs = shade_directions("hot_dry", hot)
     assert "W" in dirs and "E" in dirs            # from minimise_openings "E, W"
     assert shade_directions("cold", climate.get("cold")) == set()
+
+
+# ── Deepened reasoning: courtyard + envelope ─────────────────────────────────
+
+_MASS = {"objects": [{"id": "mass", "type": "building", "role": "massing",
+                      "position": {"x": 0, "y": 0, "z": 0},
+                      "dimensions": {"length": 12, "width": 10, "height": 9}}]}
+
+
+def test_hot_dry_proposes_and_carves_a_central_courtyard():
+    directives = derive_directives({"climate_zone": "hot_dry", "facade_orientation": "west"})
+    assert "courtyard" in _cats(directives)                 # grounded in passive priorities
+    out = apply_directives({"objects": list(_MASS["objects"])}, directives)
+    courts = [o for o in out["objects"] if o.get("type") == "courtyard"]
+    assert len(courts) == 1
+    assert courts[0]["position"]["x"] == 0                  # central
+    assert courts[0]["dimensions"]["height"] > 9            # open to sky (pokes above the roof)
+
+
+def test_temperate_and_cold_get_no_courtyard():
+    for z in ("temperate", "cold"):
+        assert "courtyard" not in _cats(derive_directives({"climate_zone": z, "facade_orientation": "west"}))
+
+
+def test_hot_dry_west_composes_brise_soleil_and_courtyard_from_climate_alone():
+    out = reason({"objects": list(_MASS["objects"])},
+                 {"climate_zone": "hot_dry", "facade_orientation": "west"})
+    types = {o.get("type") for o in out["graph"]["objects"]}
+    assert "screen" in types and "courtyard" in types      # both moves, from the brief alone
+
+
+def test_roof_envelope_directive_is_grounded_in_zone_data():
+    directives = derive_directives({"climate_zone": "warm_humid", "facade_orientation": "north"})
+    roof = [d for d in directives if d.category == "envelope"]
+    assert roof and roof[0].params["techniques"] == climate.get("warm_humid")["roof_strategy"]["techniques"]
