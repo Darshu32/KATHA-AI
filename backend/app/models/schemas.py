@@ -195,8 +195,17 @@ class DesignGraphOut(BaseModel):
 # ── Prompt / Generation Schemas ──────────────────────────────────────────────
 
 
+class SiteBrief(BaseModel):
+    """Site + climate inputs that let the design engine reason from constraints
+    (see app/services/design_reasoning.py). All optional — absent = no reasoning."""
+    location: str | None = None            # city/region; resolves to a climate zone
+    climate_zone: str | None = None        # explicit NBC zone (hot_dry, warm_humid, …)
+    facade_orientation: str | None = None  # direction the primary facade faces (e.g. "west")
+
+
 class PromptRequest(BaseModel):
     prompt: str = Field(min_length=10, max_length=5000)
+    site: SiteBrief | None = None
     # Empty = "derive the room type from the prompt" — see
     # ai_orchestrator.generate_design_graph / knowledge.infer_room_type.
     room_type: str = Field(default="")

@@ -521,6 +521,15 @@ export default function ImageWorkspaceMvp2() {
         lighting,
         view_mode: viewMode,
         drawing_type: "3d-render",
+        // Site + climate brief → the backend reasons from constraints for
+        // exterior designs (e.g. adds a brise-soleil on a sun-exposed facade)
+        // and returns design_rationale. Built from the left-rail Space & Site
+        // (orientation) + Regulatory (climate zone); absent fields are a no-op.
+        site: {
+          climate_zone: briefRegulatory.climatic_zone || undefined,
+          facade_orientation: briefSpace.orientation || undefined,
+          location: briefSpace.site_notes?.trim() || undefined,
+        },
       });
 
       if (!graphRes.image_url) {
@@ -535,6 +544,19 @@ export default function ImageWorkspaceMvp2() {
         setGenerateNotice(
           "Design graph generated. Render skipped — GEMINI_API_KEY not set or provider failed.",
         );
+      }
+
+      // Surface the climate-responsive design decisions the backend reasoned
+      // from the site & climate brief (design_reasoning) — the "what it decided
+      // and why". Present only for exterior designs given a site brief.
+      if (graphRes.design_rationale?.length) {
+        const n = graphRes.design_rationale.length;
+        useToastStore.getState().notify({
+          type: "success",
+          title: `Climate-responsive design · ${n} decision${n > 1 ? "s" : ""}`,
+          message: graphRes.design_rationale[0],
+        });
+        setGenerateNotice("Site & climate shaped this design — " + graphRes.design_rationale[0]);
       }
 
       // 3 — push combined record (image_url comes from the same response)

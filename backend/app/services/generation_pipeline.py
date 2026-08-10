@@ -29,6 +29,7 @@ from app.services.graph_render_reference import (
 )
 from app.services.image_service import generate_image, resolve_theme_visual_hint
 from app.services.knowledge_validator import validate_design_graph_async
+from app.services import design_reasoning
 from app.services.layout_solver import furnish_rooms, maybe_solve_layout
 from app.services.standards.knowledge_service import resolve_standard as _resolve_standard
 from app.services.standards.mep_sizing import system_cost_estimate as _mep_system_cost
@@ -751,6 +752,7 @@ async def run_initial_generation(
     drawing_type: str | None = None,
     project_type: str | None = None,
     region: str = "india",
+    site: dict | None = None,
 ) -> dict:
     """
     Full pipeline for initial design:
@@ -776,6 +778,22 @@ async def run_initial_generation(
         drawing_type=drawing_type,
     )
     graph_data = design_graph.model_dump()
+
+    # Step 1a — Constraint → design reasoning. For an exterior/architecture design
+    # with a site brief, let the climate DRIVE form: derive passive-design moves
+    # (shading, orientation, glazing) and apply the geometric ones — e.g. a
+    # brise-soleil on the sun-exposed facade — attaching a human rationale. This
+    # turns the climate knowledge base from a checker into a driver. No-op without
+    # a site brief or for interiors.
+    design_rationale: list[str] = []
+    if site and str(graph_data.get("design_type") or "").lower() in ("architecture", "exterior"):
+        reasoned = design_reasoning.reason(graph_data, site)
+        graph_data = reasoned["graph"]
+        design_rationale = reasoned["rationale"]
+        graph_data["design_rationale"] = design_rationale
+        if design_rationale:
+            logger.info("Design reasoning applied %d directive(s) for project %s",
+                        len(reasoned["directives"]), project_id)
 
     # Step 1b — Layout solve (Stage E). If the graph is a multi-room *program*
     # (≥2 spaces, none placed), solve a non-overlapping floor plan so every
@@ -865,6 +883,7 @@ async def run_initial_generation(
         "validation": validation,
         "mep_cost_estimate": mep_cost,
         "code_compliance_summary": compliance,
+        "design_rationale": design_rationale,
         "status": "completed",
     }
 

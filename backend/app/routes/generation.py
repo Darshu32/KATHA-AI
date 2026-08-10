@@ -232,6 +232,7 @@ async def generate_design(
         drawing_type=payload.drawing_type,
         project_type=project.project_type,
         region=project.region,
+        site=payload.site.model_dump() if payload.site else None,
     )
     return result
 
