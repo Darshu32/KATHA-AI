@@ -161,6 +161,12 @@ export default function ImageWorkspaceMvp2() {
 
   const [scope, setScope] = useState<Scope>("interior");
   const [dim, setDim] = useState<Dim>("3d");
+  // Left-rail brief (Space & Site / Requirements / Regulatory) lives here so
+  // Generate can fold it into the prompt; LeftControls edits it + Save brief
+  // still packages it to /brief/intake.
+  const [briefSpace, setBriefSpace] = useState<BriefSpace>(emptySpace);
+  const [briefRequirements, setBriefRequirements] = useState<BriefRequirements>(emptyRequirements);
+  const [briefRegulatory, setBriefRegulatory] = useState<BriefRegulatory>(emptyRegulatory);
   const [terminalTab, setTerminalTab] = useState<TerminalTab>("cost");
   const [generateError, setGenerateError] = useState<string | null>(null);
   const [generateNotice, setGenerateNotice] = useState<string | null>(null);
@@ -478,6 +484,12 @@ export default function ImageWorkspaceMvp2() {
     setGenerateNotice(null);
     setIsGenerating(true);
 
+    // Fold the left-rail brief (dimensions / needs / budget / codes / climate)
+    // into the prompt so the design honours it instead of guessing. The raw
+    // user prompt is still what we store + display on the generation record.
+    const briefSuffix = assembleBriefPrompt(briefSpace, briefRequirements, briefRegulatory);
+    const effectivePrompt = (prompt.trim() + briefSuffix).trim();
+
     try {
       // 1 — ensure active project
       let projectId = activeProjectId;
@@ -498,7 +510,7 @@ export default function ImageWorkspaceMvp2() {
 
       // 2 — single backend call: graph + render baked together
       const graphRes = await designApi.generate(token, projectId, {
-        prompt: prompt.trim(),
+        prompt: effectivePrompt,
         // room_type intentionally omitted — the backend derives it from
         // the prompt (knowledge.infer_room_type) instead of assuming one.
         style: theme,
@@ -644,6 +656,12 @@ export default function ImageWorkspaceMvp2() {
           lighting={lighting}
           setLighting={setLighting}
           theme={theme}
+          space={briefSpace}
+          setSpace={setBriefSpace}
+          requirements={briefRequirements}
+          setRequirements={setBriefRequirements}
+          regulatory={briefRegulatory}
+          setRegulatory={setBriefRegulatory}
         />
 
         <main className="flex-1 flex flex-col min-w-0 border-x border-hairline bg-paper">
@@ -1115,6 +1133,35 @@ function serialiseRegulatory(g: BriefRegulatory): Record<string, unknown> | unde
   };
 }
 
+// Fold the left-rail brief into a natural-language constraint suffix so the
+// generator honours the architect's dimensions / budget / needs / codes /
+// climate instead of guessing them. Returns "" when nothing is filled.
+function assembleBriefPrompt(space: BriefSpace, req: BriefRequirements, reg: BriefRegulatory): string {
+  const bits: string[] = [];
+  const u = space.unit || "m";
+  const L = parseFloat(space.length), W = parseFloat(space.width), H = parseFloat(space.height);
+  if (isFinite(L) && isFinite(W) && L > 0 && W > 0) {
+    bits.push(`sized exactly ${space.length}${u} by ${space.width}${u}` +
+      (isFinite(H) && H > 0 ? ` with a ${space.height}${u} ceiling` : ""));
+  }
+  if (space.orientation.trim()) bits.push(`${space.orientation.trim()}-facing`);
+  if (space.constraints.trim()) bits.push(`site constraints: ${space.constraints.trim()}`);
+  if (space.site_notes.trim()) bits.push(space.site_notes.trim());
+  if (req.functional_needs.trim()) bits.push(`must include: ${req.functional_needs.trim()}`);
+  if (req.aesthetic_preferences.trim()) bits.push(`aesthetic: ${req.aesthetic_preferences.trim()}`);
+  const budget = parseFloat(req.budget);
+  if (isFinite(budget) && budget > 0) bits.push(`budget approximately INR ${budget.toLocaleString("en-IN")}`);
+  const weeks = parseInt(req.timeline_weeks, 10);
+  if (isFinite(weeks) && weeks > 0) bits.push(`timeline about ${weeks} weeks`);
+  if (req.narrative.trim()) bits.push(req.narrative.trim());
+  const loc = [reg.city, reg.state, reg.country].map((x) => x.trim()).filter(Boolean).join(", ");
+  if (loc) bits.push(`located in ${loc}`);
+  if (reg.building_codes.trim()) bits.push(`must comply with ${reg.building_codes.trim()}`);
+  if (reg.climatic_zone) bits.push(`${reg.climatic_zone.replace(/_/g, " ")} climate`);
+  if (reg.compliance_notes.trim()) bits.push(reg.compliance_notes.trim());
+  return bits.length ? ` Brief constraints — ${bits.join("; ")}.` : "";
+}
+
 // ── Brief form primitives — tiny styled inputs shared by all three
 //    section forms. All keep the paper/ink/hairline register and
 //    quiet hover/focus states. Width-100% so they stack cleanly in
@@ -1392,6 +1439,12 @@ function LeftControls({
   lighting,
   setLighting,
   theme,
+  space,
+  setSpace,
+  requirements,
+  setRequirements,
+  regulatory,
+  setRegulatory,
 }: {
   projectType: ProjectType;
   setProjectType: (t: ProjectType) => void;
@@ -1407,6 +1460,12 @@ function LeftControls({
   lighting: LightingMode;
   setLighting: (l: LightingMode) => void;
   theme: ArchTheme;
+  space: BriefSpace;
+  setSpace: (v: BriefSpace) => void;
+  requirements: BriefRequirements;
+  setRequirements: (v: BriefRequirements) => void;
+  regulatory: BriefRegulatory;
+  setRegulatory: (v: BriefRegulatory) => void;
 }) {
   // Multi-open accordion — architects often want to see Brief + Space
   // simultaneously when tuning a design. State persists to localStorage
@@ -1445,14 +1504,9 @@ function LeftControls({
     });
   };
 
-  // Brief section state — three controlled forms backed by their own
-  // schema (BRD §1A.3/4/5). Save button packages all three into a
-  // single /brief/intake POST. State lives here for v1; if other
-  // surfaces (Generate, Notes) need to read the brief we can lift it
-  // up to the workspace store later.
-  const [space, setSpace] = useState<BriefSpace>(emptySpace);
-  const [requirements, setRequirements] = useState<BriefRequirements>(emptyRequirements);
-  const [regulatory, setRegulatory] = useState<BriefRegulatory>(emptyRegulatory);
+  // Brief section state (Space & Site / Requirements / Regulatory) is owned by
+  // the workspace and passed in as props, so Generate can fold it into the
+  // prompt. Save brief still packages all three into a single /brief/intake POST.
   const [saving, setSaving] = useState(false);
   const [briefSaved, setBriefSaved] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
