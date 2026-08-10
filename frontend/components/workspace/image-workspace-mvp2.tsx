@@ -553,10 +553,10 @@ export default function ImageWorkspaceMvp2() {
         const n = graphRes.design_rationale.length;
         useToastStore.getState().notify({
           type: "success",
-          title: `Climate-responsive design · ${n} decision${n > 1 ? "s" : ""}`,
+          title: `Design decisions · ${n} applied`,
           message: graphRes.design_rationale[0],
         });
-        setGenerateNotice("Site & climate shaped this design — " + graphRes.design_rationale[0]);
+        setGenerateNotice("Your brief shaped this design — " + graphRes.design_rationale[0]);
       }
 
       // 3 — push combined record (image_url comes from the same response)
