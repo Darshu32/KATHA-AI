@@ -32,6 +32,7 @@ def _get_client() -> AsyncOpenAI:
 class ResponseMetadata:
     suggestions: list[str] = field(default_factory=list)
     image_prompt: str | None = None
+    diagram: str | None = None            # Deep mode — a Mermaid diagram of the concept (mandatory)
     video_query: str | None = None        # Quick mode — YouTube search for short clip
     youtube_query: str | None = None      # Deep mode — YouTube search for tutorials
     research_query: str | None = None     # Deep mode — Semantic Scholar search
@@ -53,7 +54,7 @@ You serve architects, architecture students, interior designers, civil planning 
 
 You are in QUICK MODE. Follow these rules strictly:
 
-1. **Be concise** — answer in 3-5 lines maximum. No long explanations.
+1. **Be concise** — answer in 1-2 lines maximum. No long explanations.
 2. **Be direct** — lead with the answer, not background context.
 3. **Use precise terminology** but keep it accessible.
 4. **Include key numbers** — dimensions, ratios, standards, costs when relevant.
@@ -138,12 +139,13 @@ If the user is asking a knowledge question (no project intent), omit `brief`, `b
 
 IMPORTANT: At the end of your response, output a JSON block on a new line in this exact format:
 ```json
-{"suggestions": ["suggestion 1", "suggestion 2", "suggestion 3"], "image_prompt": "a detailed prompt to generate an architectural image for this concept", "youtube_query": "YouTube search for tutorial or lecture videos about this topic", "research_query": "academic search terms for finding research papers on this topic", "reference_links": [{"title": "relevant standard or article name", "url": "URL if you know it, otherwise empty string", "type": "article or standard or documentation"}], "brief": null, "brief_status": null, "brief_missing": []}
+{"suggestions": ["suggestion 1", "suggestion 2", "suggestion 3"], "diagram": "flowchart TD\n  A[\"Concept\"] --> B[\"Step / part\"]\n  B --> C[\"Outcome\"]", "image_prompt": "a detailed prompt to generate an architectural image for this concept", "youtube_query": "YouTube search for tutorial or lecture videos about this topic", "research_query": "academic search terms for finding research papers on this topic", "reference_links": [{"title": "relevant standard or article name", "url": "URL if you know it, otherwise empty string", "type": "article or standard or documentation"}], "brief": null, "brief_status": null, "brief_missing": []}
 ```
 Rules for the JSON:
 - **suggestions**: 2-3 natural follow-up actions
+- **diagram** (MANDATORY): A valid **Mermaid** diagram that visually explains THIS topic — a `flowchart`/`graph`, `sequenceDiagram`, or similar showing the steps, parts, or relationships. It must be specific to the question (a construction sequence, a load path, a spatial/zoning relationship, a decision flow), never generic. Escape quotes inside node labels. Deep mode ALWAYS returns a diagram.
 - **image_prompt**: A rich, detailed prompt to generate a custom architectural visualization. Be specific.
-- **youtube_query**: Search terms for finding in-depth tutorial/lecture videos (10-20 min) on this topic
+- **youtube_query** (MANDATORY): Search terms for finding a real, on-topic tutorial/lecture video (10-20 min) about this exact concept. Always provide one — the video is a required visual in deep mode.
 - **research_query**: Academic search terms for Semantic Scholar (e.g., "shear wall seismic design reinforced concrete")
 - **reference_links**: 1-3 relevant standards, articles, or documentation. Include real URLs you are confident about (IS codes, NBC chapters, ASHRAE standards). Use empty string for URL if unsure.
 - **brief**: BRD §1A 5-section design brief object (project_type / theme / space / requirements / regulatory). Use `null` if this turn is a knowledge question, not a project briefing.
@@ -160,29 +162,6 @@ def _get_system_prompt(mode: str) -> str:
     if mode == "deep":
         return DEEP_MODE_SYSTEM_PROMPT
     return QUICK_MODE_SYSTEM_PROMPT
-
-
-def _detect_mode(message: str) -> str:
-    """Auto-detect whether a query should use quick or deep mode."""
-    message_lower = message.lower().strip()
-
-    word_count = len(message_lower.split())
-    if word_count <= 10:
-        return "quick"
-
-    deep_triggers = [
-        "explain in detail", "deep dive", "tutorial", "step by step",
-        "guide me", "teach me", "how to design", "complete guide",
-        "everything about", "all about", "detailed", "in depth",
-        "comprehensive", "elaborate", "walk me through",
-    ]
-    if any(trigger in message_lower for trigger in deep_triggers):
-        return "deep"
-
-    if word_count > 20:
-        return "deep"
-
-    return "quick"
 
 
 def _fallback_image_prompt(user_message: str, clean_content: str) -> str:
@@ -206,6 +185,38 @@ def _fallback_image_prompt(user_message: str, clean_content: str) -> str:
         "Studio-quality presentation drawing — labelled, dimensioned where relevant, "
         "neutral palette, white background, technical line work with subtle shading."
     )
+
+
+def _fallback_diagram(user_message: str, clean_content: str) -> str:
+    """A valid, on-topic-ish Mermaid diagram when Deep mode omits one.
+
+    Deep responses are contractually required to carry a diagram; this is the
+    safety net so the frontend always has one to render. The LLM's own diagram
+    is used whenever present — this only fires on omission.
+    """
+    topic = (user_message or "").strip()
+    if not topic:
+        for line in (clean_content or "").splitlines():
+            stripped = line.lstrip("# ").strip()
+            if stripped:
+                topic = stripped
+                break
+    topic = (topic or "Concept")[:60].replace('"', "'").replace("\n", " ")
+    return (
+        "flowchart TD\n"
+        f'  A["{topic}"] --> B["Key principles"]\n'
+        '  B --> C["Design application"]\n'
+        '  C --> D["Checks & standards"]'
+    )
+
+
+def _fallback_youtube_query(user_message: str, clean_content: str) -> str:
+    """A YouTube search query when Deep mode omits one — the video is mandatory."""
+    topic = (user_message or "").strip()
+    if not topic:
+        topic = (clean_content or "").strip().splitlines()[0] if clean_content.strip() else ""
+    topic = (topic or "architecture concept")[:80]
+    return f"{topic} architecture explained tutorial"
 
 
 def _build_messages(
@@ -240,8 +251,9 @@ async def stream_chat_response(
         yield _sse_event("error", {"content": "OpenAI API key is not configured. Please set OPENAI_API_KEY in your .env file."})
         return
 
-    if mode is None or mode == "auto":
-        mode = _detect_mode(user_message)
+    # Two modes only — quick (the default) and deep. Auto-detect was removed.
+    if mode != "deep":
+        mode = "quick"
 
     client = _get_client()
     messages = _build_messages(conversation_history or [], user_message, mode)
@@ -278,6 +290,16 @@ async def stream_chat_response(
         if mode == "deep" and not (image_prompt and image_prompt.strip()):
             image_prompt = _fallback_image_prompt(user_message, clean_content)
 
+        # Deep mode ALWAYS ships a Mermaid diagram + an on-topic video — the two
+        # mandatory visuals. Synthesize a fallback if the LLM omitted either, so
+        # every Deep answer carries them.
+        diagram = metadata.diagram if mode == "deep" else None
+        if mode == "deep" and not (diagram and diagram.strip()):
+            diagram = _fallback_diagram(user_message, clean_content)
+        youtube_query = metadata.youtube_query
+        if mode == "deep" and not (youtube_query and youtube_query.strip()):
+            youtube_query = _fallback_youtube_query(user_message, clean_content)
+
         # Brief capture is Deep-mode only (BRD §1A). Drop any Quick-mode leak.
         brief = metadata.brief if mode == "deep" else None
         brief_status = metadata.brief_status if mode == "deep" else None
@@ -287,8 +309,9 @@ async def stream_chat_response(
             "content": clean_content,
             "suggestions": metadata.suggestions,
             "image_prompt": image_prompt,
+            "diagram": diagram,
             "video_query": metadata.video_query,
-            "youtube_query": metadata.youtube_query,
+            "youtube_query": youtube_query,
             "research_query": metadata.research_query,
             "reference_links": metadata.reference_links,
             "brief": brief,
@@ -419,6 +442,7 @@ def _extract_metadata(raw: dict) -> ResponseMetadata:
         suggestions=raw.get("suggestions", []),
         # Support both old "image_query" and new "image_prompt"
         image_prompt=_str_or_none(raw.get("image_prompt") or raw.get("image_query")),
+        diagram=_str_or_none(raw.get("diagram")),
         video_query=_str_or_none(raw.get("video_query")),
         youtube_query=_str_or_none(raw.get("youtube_query")),
         research_query=_str_or_none(raw.get("research_query")),
