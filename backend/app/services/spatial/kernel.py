@@ -47,6 +47,10 @@ _TYPE_DEFAULT = {
     "roof": (0.5, 0.42, 0.38), "ground": (0.82, 0.83, 0.8), "sofa": (0.55, 0.5, 0.46),
     "table": (0.6, 0.45, 0.32), "bed": (0.7, 0.66, 0.6), "chair": (0.5, 0.45, 0.4),
     "rug": (0.7, 0.5, 0.45), "cabinet": (0.55, 0.42, 0.3),
+    # Facade screens / brise-soleil default to a stained-timber tone.
+    "screen": (0.36, 0.26, 0.18), "louver": (0.36, 0.26, 0.18),
+    "louvre": (0.36, 0.26, 0.18), "brise_soleil": (0.36, 0.26, 0.18),
+    "slats": (0.36, 0.26, 0.18), "jali": (0.58, 0.48, 0.38),
 }
 
 
@@ -82,6 +86,10 @@ def _color_for(obj: dict, materials_by_key: dict) -> tuple:
 
 # ── geometry ─────────────────────────────────────────────────────────────────
 _VOID_TYPES = {"atrium", "courtyard", "void", "shaft", "lightwell", "cutout"}
+# Facade screens: one object → an ARRAY of thin slat solids (a brise-soleil /
+# louvre / timber screen), not a single box. Built by ``_screen_slats``.
+_SCREEN_TYPES = {"screen", "louver", "louvre", "louvers", "louvres",
+                 "brise_soleil", "brise-soleil", "slats", "grille", "jali"}
 # Object types that hang on a wall / ceiling and keep their authored height;
 # everything else is floor-placed (the LLM's vertical coordinate is unreliable —
 # often depth, which otherwise floats the piece metres off the floor).
@@ -112,6 +120,50 @@ def _box(l: float, h: float, w: float, cx: float, cy: float, cz: float, rot_y_de
     if abs(rot_y_deg) > 1e-6:
         m = m.rotate((0.0, rot_y_deg, 0.0))
     return m.translate((cx, cy, cz))
+
+
+def _screen_slats(obj: dict, unit: str | None) -> list:
+    """Expand a screen/louvre/brise-soleil object into an ARRAY of thin slat
+    boxes across its region — the geometry a single box can never represent.
+
+    The region is the object's footprint (position = centre-base) × height.
+    ``orientation`` picks the slat run: "horizontal" (default) stacks slats up
+    the Y axis; "vertical" stacks them across X. Slat count comes from
+    ``slat_count`` or is derived from ``slat_thickness`` + ``slat_gap``. An
+    optional ``gradient`` ("top"/"bottom") biases the spacing denser toward that
+    end — the signature move of a screen that reads solid at the top and opens up
+    lower down. Rotation about vertical is honoured so an angled screen works.
+    """
+    d = obj.get("dimensions") or {}
+    L = _to_m(d.get("length"), unit) or 2.0     # x extent
+    Wd = _to_m(d.get("width"), unit) or 0.12    # z depth of each slat
+    H = _to_m(d.get("height"), unit) or 2.0     # y extent
+    p = obj.get("position") or {}
+    cx, cy, cz = float(p.get("x", 0) or 0), float(p.get("y", 0) or 0), float(p.get("z", 0) or 0)
+    rot = (obj.get("rotation") or {}).get("y", 0) or 0 if isinstance(obj.get("rotation"), dict) else 0
+
+    vertical = str(obj.get("orientation") or "horizontal").lower().startswith("vert")
+    span = L if vertical else H
+    t = _to_m(obj.get("slat_thickness"), unit) or 0.05
+    gap = _to_m(obj.get("slat_gap"), unit) or max(t, 0.05)
+    count = obj.get("slat_count")
+    n = int(count) if count else max(2, int(span / max(t + gap, 1e-3)))
+    n = max(2, min(n, 48))  # cap for performance — 48 slats is plenty
+
+    grad = str(obj.get("gradient") or "").lower()
+    gamma = 0.55 if grad in ("top", "top_dense", "dense_top") else \
+        (1.8 if grad in ("bottom", "bottom_dense", "dense_bottom") else 1.0)
+    usable = max(span - t, 1e-3)
+
+    slats = []
+    for i in range(n):
+        f = i / (n - 1)
+        pos = usable * (f ** gamma)
+        if vertical:
+            slats.append(_box(t, H, Wd, cx - L / 2 + t / 2 + pos, cy, cz, float(rot)))
+        else:
+            slats.append(_box(L, t, Wd, cx, cy + pos, cz, float(rot)))
+    return slats
 
 
 # Object types that mean "this is a site/building, not a room" — so a large
@@ -283,8 +335,14 @@ def build_scene(graph: dict) -> tuple[list[Solid], tuple, str]:
         interior = False
 
     raw = []
+    screen_objs = []
     for obj in graph.get("objects") or []:
         if not isinstance(obj, dict):
+            continue
+        otype = str(obj.get("type") or "").lower()
+        # A screen/louvre is one object → many slats; expand it separately.
+        if otype in _SCREEN_TYPES:
+            screen_objs.append(obj)
             continue
         d = obj.get("dimensions") or {}
         unit = d.get("unit")
@@ -296,7 +354,6 @@ def build_scene(graph: dict) -> tuple[list[Solid], tuple, str]:
         # Floor-place furniture in INTERIORS (the LLM's vertical coord is
         # unreliable there). Keep the authored height for wall/ceiling items, and
         # for exterior massing (multi-storey volumes must keep their level).
-        otype = str(obj.get("type") or "").lower()
         cy = 0.0 if (interior and otype not in _WALL_MOUNTED) else float(p.get("y", 0) or 0)
         rot = (obj.get("rotation") or {}).get("y", 0) or 0
         raw.append((obj, _box(l, h, w, cx, cy, cz, float(rot))))
@@ -346,6 +403,15 @@ def build_scene(graph: dict) -> tuple[list[Solid], tuple, str]:
             type=str(o.get("type") or "object"),
             color=_color_for(o, materials_by_key), manifold=m,
         ))
+
+    # Facade screens: each becomes an array of slat solids (a real brise-soleil).
+    for so in screen_objs:
+        unit = (so.get("dimensions") or {}).get("unit")
+        color = _color_for(so, materials_by_key)
+        base_id = str(so.get("id") or so.get("name") or "screen")
+        sname = str(so.get("name") or so.get("type") or "screen")
+        for j, sm in enumerate(_screen_slats(so, unit)):
+            solids.append(Solid(f"{base_id}_slat{j}", sname, "screen", color, sm))
 
     lo = np.array([np.inf] * 3)
     hi = np.array([-np.inf] * 3)

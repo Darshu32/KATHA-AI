@@ -428,10 +428,12 @@ def _architecture_graph(data, project_id, massing, style_data, theme_changes):
     exterior massing render path."""
     from app.models.design_graph import AssetBundle, DesignGraph, SiteInfo, StyleProfile
 
+    # Screen/louvre volumes carry extra parameters the kernel expands into slats.
+    _screen_keys = ("orientation", "slat_thickness", "slat_gap", "slat_count", "gradient")
     objects = []
     for i, m in enumerate(massing):
         mtype = str(m.get("type") or "building")
-        objects.append({
+        obj = {
             "id": str(m.get("id") or f"mass_{i + 1}"),
             "type": mtype,
             "name": mtype.replace("_", " ").title(),
@@ -439,7 +441,11 @@ def _architecture_graph(data, project_id, massing, style_data, theme_changes):
             "dimensions": m.get("dimensions") or {},
             "material": m.get("material"),
             "role": "massing",
-        })
+        }
+        for k in _screen_keys:
+            if m.get(k) is not None:
+                obj[k] = m.get(k)
+        objects.append(obj)
     constraints: list[dict] = []
     if theme_changes:
         constraints.append({
