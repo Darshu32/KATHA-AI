@@ -13,6 +13,7 @@ from app.services.program_reasoning import (
     parse_area_sqm,
     parse_bedrooms,
     program_rationale,
+    reconcile_program,
 )
 
 _RES = space_standards.RESIDENTIAL
@@ -83,3 +84,32 @@ def test_program_flows_into_the_layout_solver_and_every_room_is_placed():
 def test_rationale_explains_the_decomposition():
     lines = program_rationale(derive_room_program({"program": "3BHK", "built_up_area_sqm": 110}))
     assert lines and "3BHK" in lines[0] and "bedroom" in lines[0].lower()
+
+
+# ── Hybrid reconcile (the pipeline behaviour) ────────────────────────────────
+
+def test_reconcile_rescues_a_collapsed_home():
+    # The classic failure: the model collapsed a 3BHK into one room.
+    collapsed = {"design_type": "interior", "spaces": [
+        {"id": "s1", "name": "Apartment", "room_type": "living_room"}], "objects": [{"id": "x"}]}
+    out = reconcile_program(collapsed, {"prompt": "3BHK apartment, 1100 sqft"})
+    assert out is not None
+    ids = {s["id"] for s in out["graph"]["spaces"]}
+    assert {"master", "bed2", "bed3", "living", "kitchen", "bath1", "hall"} <= ids  # full program restored
+    assert out["graph"]["objects"] == []  # cleared for re-furnishing
+
+
+def test_reconcile_keeps_a_model_detected_study():
+    llm = {"design_type": "interior", "spaces": [
+        {"id": "study1", "name": "Study", "room_type": "study",
+         "dimensions": {"length": 3, "width": 2.5}}]}
+    out = reconcile_program(llm, {"prompt": "3BHK with a study, 1200 sqft"})
+    names = {s["name"] for s in out["graph"]["spaces"]}
+    assert "Study" in names                              # the special survived
+    study = next(s for s in out["graph"]["spaces"] if s["name"] == "Study")
+    assert study["area"] == 7.5                          # its stated 3×2.5 area was kept
+
+
+def test_reconcile_is_a_no_op_without_a_bedroom_count():
+    single = {"design_type": "interior", "spaces": [{"id": "r", "room_type": "living_room"}]}
+    assert reconcile_program(single, {"prompt": "a modern living room"}) is None

@@ -166,3 +166,77 @@ def program_rationale(program: dict) -> list[str]:
     else:
         lines.append("Room areas from typical space standards (no built-up area given).")
     return lines
+
+
+# ── Hybrid reconcile: deterministic core program + LLM-detected specials ──────
+
+# Non-standard rooms the model may have detected that the base program doesn't
+# enumerate — kept so a user's "…with a study / pooja room / balcony" survives.
+_SPECIAL_KEYWORDS = (
+    "study", "office", "pooja", "puja", "prayer", "balcony", "veranda", "terrace",
+    "utility", "laundry", "store", "storage", "dressing", "closet", "walk-in",
+    "servant", "staff", "foyer", "lobby", "mudroom", "gym", "library", "guest",
+    "home theatre", "home theater", "media",
+)
+
+
+def _stated_area(space: dict) -> float | None:
+    dims = space.get("dimensions") if isinstance(space, dict) else None
+    if isinstance(dims, dict):
+        try:
+            length, width = float(dims.get("length") or 0), float(dims.get("width") or 0)
+            if length > 0 and width > 0:
+                return round(length * width, 1)
+        except (TypeError, ValueError):
+            pass
+    for k in ("area_sqm", "area"):
+        try:
+            a = float(space.get(k))
+            if a > 0:
+                return round(a, 1)
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def reconcile_program(graph: dict, brief: dict) -> dict | None:
+    """Hybrid: replace the room set with the deterministic, NBC-grounded program
+    (so a home never collapses into too few rooms), while KEEPING any special
+    rooms the model detected (study, pooja, balcony, guest, …).
+
+    Returns ``{graph, rationale}`` or ``None`` when no bedroom count is derivable
+    (leave the LLM output untouched — this is only for programmatic homes).
+    """
+    prog = derive_room_program(brief)
+    base = prog["spaces"]
+    if not base:
+        return None
+
+    used_ids = {s["id"] for s in base}
+    extras, extra_adj = [], []
+    for s in (graph.get("spaces") or []):
+        if not isinstance(s, dict):
+            continue
+        label = " ".join(str(s.get(k) or "") for k in ("room_type", "type", "name")).lower()
+        if not any(kw in label for kw in _SPECIAL_KEYWORDS):
+            continue  # a standard room — the base program already covers it
+        rid = str(s.get("id") or s.get("name") or f"extra{len(extras) + 1}").lower().replace(" ", "_")
+        while rid in used_ids:
+            rid += "_x"
+        used_ids.add(rid)
+        area = _stated_area(s) or _typical("study", 7.5)
+        extras.append({
+            "id": rid, "name": str(s.get("name") or rid.replace("_", " ").title()),
+            "room_type": str(s.get("room_type") or s.get("type") or "study"),
+            "area": area, "area_sqm": area,
+        })
+        extra_adj.append({"a": "hall", "b": rid})
+
+    out = dict(graph)
+    out["spaces"] = base + extras
+    out["adjacencies"] = prog["adjacencies"] + extra_adj
+    out["objects"] = []  # cleared — furnish_rooms re-furnishes each placed room
+    rationale = program_rationale(prog)
+    if extras:
+        rationale.append("Kept the room(s) you asked for: " + ", ".join(e["name"] for e in extras) + ".")
+    return {"graph": out, "rationale": rationale}

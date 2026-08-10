@@ -29,7 +29,7 @@ from app.services.graph_render_reference import (
 )
 from app.services.image_service import generate_image, resolve_theme_visual_hint
 from app.services.knowledge_validator import validate_design_graph_async
-from app.services import design_reasoning
+from app.services import design_reasoning, program_reasoning
 from app.services.layout_solver import furnish_rooms, maybe_solve_layout
 from app.services.standards.knowledge_service import resolve_standard as _resolve_standard
 from app.services.standards.mep_sizing import system_cost_estimate as _mep_system_cost
@@ -779,21 +779,30 @@ async def run_initial_generation(
     )
     graph_data = design_graph.model_dump()
 
-    # Step 1a — Constraint → design reasoning. For an exterior/architecture design
-    # with a site brief, let the climate DRIVE form: derive passive-design moves
-    # (shading, orientation, glazing) and apply the geometric ones — e.g. a
-    # brise-soleil on the sun-exposed facade — attaching a human rationale. This
-    # turns the climate knowledge base from a checker into a driver. No-op without
-    # a site brief or for interiors.
+    # Step 1a — Constraint → design reasoning: turn the knowledge base from a
+    # checker into a DRIVER, across both scopes.
+    #   • Exterior/architecture + a site brief → climate-driven passive moves
+    #     (shading, courtyard, orientation, glazing), applying the geometric ones
+    #     (e.g. a brise-soleil on the sun-exposed facade).
+    #   • Interior with a derivable room program ("3BHK") → a deterministic,
+    #     NBC-grounded room program (never collapses; keeps model-detected
+    #     specials like a study), which the layout solver then places.
+    # Each attaches a human rationale. No-op when nothing is derivable.
     design_rationale: list[str] = []
-    if site and str(graph_data.get("design_type") or "").lower() in ("architecture", "exterior"):
+    dtype = str(graph_data.get("design_type") or "").lower()
+    if dtype in ("architecture", "exterior") and site:
         reasoned = design_reasoning.reason(graph_data, site)
         graph_data = reasoned["graph"]
-        design_rationale = reasoned["rationale"]
+        design_rationale += reasoned["rationale"]
+    elif dtype == "interior":
+        merged = program_reasoning.reconcile_program(graph_data, {"prompt": prompt, **(site or {})})
+        if merged is not None:
+            graph_data = merged["graph"]
+            design_rationale += merged["rationale"]
+    if design_rationale:
         graph_data["design_rationale"] = design_rationale
-        if design_rationale:
-            logger.info("Design reasoning applied %d directive(s) for project %s",
-                        len(reasoned["directives"]), project_id)
+        logger.info("Design reasoning applied for project %s: %d note(s)",
+                    project_id, len(design_rationale))
 
     # Step 1b — Layout solve (Stage E). If the graph is a multi-room *program*
     # (≥2 spaces, none placed), solve a non-overlapping floor plan so every
