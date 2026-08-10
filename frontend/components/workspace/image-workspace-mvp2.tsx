@@ -643,6 +643,7 @@ export default function ImageWorkspaceMvp2() {
           setCamera={setCamera}
           lighting={lighting}
           setLighting={setLighting}
+          theme={theme}
         />
 
         <main className="flex-1 flex flex-col min-w-0 border-x border-hairline bg-paper">
@@ -1390,6 +1391,7 @@ function LeftControls({
   setCamera,
   lighting,
   setLighting,
+  theme,
 }: {
   projectType: ProjectType;
   setProjectType: (t: ProjectType) => void;
@@ -1404,6 +1406,7 @@ function LeftControls({
   setCamera: (c: CameraMode) => void;
   lighting: LightingMode;
   setLighting: (l: LightingMode) => void;
+  theme: ArchTheme;
 }) {
   // Multi-open accordion — architects often want to see Brief + Space
   // simultaneously when tuning a design. State persists to localStorage
@@ -1459,8 +1462,18 @@ function LeftControls({
     setSaving(true);
     setSaveError(null);
     try {
+      // `theme` is REQUIRED by /brief/intake — omitting it 422'd every save.
+      // The sidebar has no theme selector, so carry the workspace theme: map it
+      // to the brief enum, or fall back to `custom` with the raw value so any
+      // theme still validates.
+      const KNOWN_THEMES = new Set(["pedestal", "contemporary", "modern", "mid_century_modern"]);
+      const t = String(theme || "modern").toLowerCase().replace(/[\s-]+/g, "_");
+      const themeSection = KNOWN_THEMES.has(t)
+        ? { theme: t }
+        : { theme: "custom", custom_spec: String(theme || "modern") };
       const payload: import("@/lib/api-client").BriefIntakePayload = {
         project_type: { type: projectType, scale: "" },
+        theme: themeSection,
         space: serialiseSpace(space),
         requirements: serialiseRequirements(requirements),
         regulatory: serialiseRegulatory(regulatory),
