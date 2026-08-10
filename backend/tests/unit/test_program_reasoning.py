@@ -24,6 +24,9 @@ def test_parse_bedrooms_from_common_phrasings():
     assert parse_bedrooms("a 2 BHK flat") == 2
     assert parse_bedrooms("4-bedroom villa") == 4
     assert parse_bedrooms("a modern house") is None
+    # Bare "beds"/"br" are furniture/context, not a home program.
+    assert parse_bedrooms("a room with 3 beds and a sofa") is None
+    assert parse_bedrooms("4 br studio") is None
 
 
 def test_parse_area_sqft_and_sqm():
@@ -113,3 +116,12 @@ def test_reconcile_keeps_a_model_detected_study():
 def test_reconcile_is_a_no_op_without_a_bedroom_count():
     single = {"design_type": "interior", "spaces": [{"id": "r", "room_type": "living_room"}]}
     assert reconcile_program(single, {"prompt": "a modern living room"}) is None
+
+
+def test_reconcile_keeps_a_full_llm_decomposition():
+    # The model already produced the 3 bedrooms — don't replace its design.
+    llm = {"design_type": "interior", "spaces": [
+        {"id": "m", "room_type": "bedroom", "name": "Master"},
+        {"id": "b2", "room_type": "bedroom"}, {"id": "b3", "room_type": "bedroom"},
+        {"id": "l", "room_type": "living_room"}, {"id": "k", "room_type": "kitchen"}]}
+    assert reconcile_program(llm, {"prompt": "3 bedroom penthouse, marble living room"}) is None

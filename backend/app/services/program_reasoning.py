@@ -25,8 +25,10 @@ def parse_bedrooms(text) -> int | None:
     """Pull a bedroom count out of '3BHK' / '3 BHK' / '3-bedroom' / '3 bed'."""
     if not isinstance(text, str):
         return None
-    m = re.search(r"(\d+)[\s-]*(?:bhk|b\.?h\.?k|bed\s*rooms?|bedrooms?|beds?|br)\b",
-                  text.lower())
+    # Require an explicit "BHK"/"bedroom" — NOT bare "beds"/"br", which show up as
+    # furniture/context ("a room with 3 beds", "4 br studio") and must not be read
+    # as a home program.
+    m = re.search(r"(\d+)[\s-]*(?:bhk|b\.?h\.?k|bed\s*rooms?|bedrooms?)\b", text.lower())
     return int(m.group(1)) if m else None
 
 
@@ -199,17 +201,31 @@ def _stated_area(space: dict) -> float | None:
     return None
 
 
-def reconcile_program(graph: dict, brief: dict) -> dict | None:
-    """Hybrid: replace the room set with the deterministic, NBC-grounded program
-    (so a home never collapses into too few rooms), while KEEPING any special
-    rooms the model detected (study, pooja, balcony, guest, …).
+def _is_bedroom(space: dict) -> bool:
+    label = " ".join(str(space.get(k) or "") for k in ("room_type", "type", "name", "id")).lower()
+    return "bedroom" in label or ("master" in label and "bath" not in label)
 
-    Returns ``{graph, rationale}`` or ``None`` when no bedroom count is derivable
-    (leave the LLM output untouched — this is only for programmatic homes).
+
+def reconcile_program(graph: dict, brief: dict) -> dict | None:
+    """RESCUE an under-decomposed home with a deterministic, NBC-grounded program,
+    while KEEPING any special rooms the model detected (study, pooja, guest, …).
+
+    Fires only when (a) the brief gives a bedroom count *and* (b) the model
+    produced FEWER bedrooms than that — i.e. it collapsed the home. When the model
+    already decomposed the program (enough bedrooms), its design is left intact:
+    we never replace a good multi-room result or wipe its furniture. Returns
+    ``{graph, rationale}`` or ``None`` (a true no-op).
     """
     prog = derive_room_program(brief)
     base = prog["spaces"]
     if not base:
+        return None
+
+    # Rescue-only: if the model already produced the bedrooms, keep its design.
+    expected = prog["program_summary"]["bedrooms"]
+    llm_bedrooms = sum(1 for s in (graph.get("spaces") or [])
+                       if isinstance(s, dict) and _is_bedroom(s))
+    if llm_bedrooms >= expected:
         return None
 
     used_ids = {s["id"] for s in base}

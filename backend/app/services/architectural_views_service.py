@@ -55,8 +55,6 @@ _OPENING = "#96bfd0"
 _DOOR = "#8b5e3c"
 _DIM = "#b8a591"
 
-_EDGE_ROLES = {"wall", "window", "door"}
-
 
 # ── Graph access helpers ─────────────────────────────────────────────────────
 
