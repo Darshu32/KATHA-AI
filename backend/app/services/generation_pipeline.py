@@ -783,11 +783,14 @@ async def run_initial_generation(
     # positions. A deliberate no-op for single-room graphs (today's default),
     # so existing behaviour is unchanged until program generation lands.
     graph_data, _layout_solution = maybe_solve_layout(graph_data)
-    if _layout_solution is not None:
-        # Multi-room plan solved → furnish each room in world coordinates
-        # (the LLM's furniture is authored single-room and lands in the wrong
-        # rooms). Replaces the mis-framed objects with grounded per-room pieces.
-        graph_data = furnish_rooms(graph_data)
+    # Furnish each PLACED room in world coordinates. The LLM authors furniture as
+    # if single-room, so in a multi-room graph it lands in the wrong rooms (all
+    # clustered in room 1). furnish_rooms re-grounds each piece inside its room;
+    # it's a no-op for <2 placed rooms, so single-room graphs are unchanged.
+    # Must run whenever the graph is multi-room + placed — NOT only after a fresh
+    # solve: the LLM frequently pre-places the rooms, which makes maybe_solve_layout
+    # a no-op (solution=None) and previously left the furniture mis-framed.
+    graph_data = furnish_rooms(graph_data)
 
     # Step 2 — Persist (capture prompt so re-renders inherit context)
     version = await save_graph_version(

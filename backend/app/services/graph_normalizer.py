@@ -236,7 +236,20 @@ def _clamp(value: float, lo: float, hi: float) -> float:
 
 
 def _normalize_object_dimensions(graph: dict[str, Any], report: dict[str, Any]) -> None:
-    """Scale oversized footprints to fit and clamp centres inside the room."""
+    """Scale oversized footprints to fit and clamp centres inside the room.
+
+    SINGLE-ROOM ONLY. In a multi-room graph the objects are in WORLD coordinates
+    spread across several placed rooms (sized + positioned by the layout solver
+    and furnish_rooms). Clamping them to the PRIMARY room's bounds — as this does
+    via ``_room_dimensions`` = spaces[0] — would cram every piece into room 1 and
+    shove furniture across walls. So skip it once ≥2 rooms are placed.
+    """
+    placed_spaces = [
+        s for s in (graph.get("spaces") or [])
+        if isinstance(s, dict) and isinstance(s.get("position"), dict) and isinstance(s.get("dimensions"), dict)
+    ]
+    if len(placed_spaces) >= 2:
+        return
     room = _room_dimensions(graph)
     room_l, room_w = room["length"], room["width"]
     if room_l <= 0 or room_w <= 0:
