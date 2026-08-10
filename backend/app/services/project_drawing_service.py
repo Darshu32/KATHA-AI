@@ -23,9 +23,128 @@ def generate_floor_plan_package(graph_data: dict) -> dict:
         "drawing_type": "floor_plan",
         "floor_plan": drawing["floor_plan"],
         "drawing": drawing,
-        "preview_svg": render_floor_plan_svg(drawing),
+        # Multi-room-aware preview: draws EVERY placed room + its furniture in
+        # world coords. The legacy single-room render_floor_plan_svg collapsed
+        # multi-room plans into one box with all furniture clamped/overlapping.
+        "preview_svg": render_multiroom_plan_svg(graph_data),
         "summary": _build_summary(graph_data, drawing),
     }
+
+
+def render_multiroom_plan_svg(graph_data: dict) -> str:
+    """Floor-plan preview that renders EVERY placed room (walls + name + area),
+    furniture in world coordinates inside each room, and doors on the walls that
+    adjacent rooms share. Falls back to a single-room shell. Replaces the legacy
+    single-room renderer that collapsed multi-room plans into one box."""
+    W, H, PAD = SVG_WIDTH, SVG_HEIGHT, SVG_PADDING
+
+    def _m(v) -> float:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return 0.0
+        return f / 1000.0 if abs(f) > 40 else f  # graph is metres; halve a stray mm
+
+    raw = [s for s in (graph_data.get("spaces") or []) if isinstance(s, dict) and isinstance(s.get("dimensions"), dict)]
+    positioned = [s for s in raw if isinstance(s.get("position"), dict)
+                  and s["position"].get("x") is not None and s["position"].get("z") is not None]
+    rooms: list[dict] = []
+    for i, s in enumerate(positioned or raw[:1]):
+        d = s["dimensions"]
+        L, Wd = _m(d.get("length")), _m(d.get("width"))
+        if L <= 0 or Wd <= 0:
+            continue
+        p = s.get("position") or {}
+        rooms.append({
+            "id": str(s.get("id") or s.get("name") or f"room_{i + 1}"),
+            "name": str(s.get("name") or s.get("room_type") or s.get("type") or f"Room {i + 1}").replace("_", " "),
+            "x": _m(p.get("x")) if p.get("x") is not None else 0.0,
+            "z": _m(p.get("z")) if p.get("z") is not None else 0.0,
+            "l": L, "w": Wd,
+        })
+    if not rooms:
+        return _empty_plan_svg()
+
+    _SKIP = {"door", "window", "opening", "doorway", "wall", "floor", "slab", "building"}
+    furn: list[dict] = []
+    for o in (graph_data.get("objects") or []):
+        if not isinstance(o, dict) or str(o.get("type", "")).lower() in _SKIP:
+            continue
+        p, d = o.get("position") or {}, o.get("dimensions") or {}
+        furn.append({
+            "type": str(o.get("type") or "item").replace("_", " "),
+            "x": _m(p.get("x")), "z": _m(p.get("z")),
+            "l": max(_m(d.get("length")), 0.2) or 0.5,
+            "w": max(_m(d.get("width")), 0.2) or 0.5,
+        })
+
+    xs = [r["x"] for r in rooms] + [r["x"] + r["l"] for r in rooms]
+    zs = [r["z"] for r in rooms] + [r["z"] + r["w"] for r in rooms]
+    minx, maxx, minz, maxz = min(xs), max(xs), min(zs), max(zs)
+    vbW, vbH = (maxx - minx) or 1.0, (maxz - minz) or 1.0
+    scale = min((W - 2 * PAD) / vbW, (H - 2 * PAD) / vbH)
+    ox = PAD + (W - 2 * PAD - vbW * scale) / 2
+    oy = PAD + (H - 2 * PAD - vbH * scale) / 2
+
+    def mp(x: float, z: float) -> tuple[float, float]:
+        return ox + (x - minx) * scale, oy + (z - minz) * scale
+
+    out = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" fill="none">',
+        '<rect width="100%" height="100%" fill="#fcf7ef"/>',
+        f'<text x="{PAD}" y="32" fill="#7d6b58" font-size="16" font-weight="700">Generated Floor Plan</text>',
+    ]
+    for r in rooms:
+        x, y = mp(r["x"], r["z"])
+        w, h = r["l"] * scale, r["w"] * scale
+        cx = x + w / 2
+        nfs = min(13.0, max(8.0, (w * 0.9) / max(len(r["name"]) * 0.55, 1)))
+        out.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" fill="#fbf7f0" stroke="#4c3d30" stroke-width="4" stroke-linejoin="round"/>')
+        out.append(f'<text x="{cx:.1f}" y="{y + nfs + 4:.1f}" text-anchor="middle" fill="#2c221a" font-size="{nfs:.1f}" font-weight="700">{escape(r["name"][:22])}</text>')
+        out.append(f'<text x="{cx:.1f}" y="{y + nfs * 2 + 6:.1f}" text-anchor="middle" fill="#9d8a75" font-size="{nfs * 0.8:.1f}">{r["l"] * r["w"]:.1f} m²</text>')
+    for f in furn:
+        x, y = mp(f["x"] - f["l"] / 2, f["z"] - f["w"] / 2)
+        w, h = f["l"] * scale, f["w"] * scale
+        out.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="4" fill="#d9c7b1" stroke="#8a7357" stroke-width="1.5"/>')
+        lbl = f["type"][:16]
+        fs = min(11.0, (w * 0.9) / max(len(lbl) * 0.55, 1), h * 0.6)
+        if fs >= 6.0:
+            out.append(f'<text x="{x + w / 2:.1f}" y="{y + h / 2 + fs * 0.35:.1f}" text-anchor="middle" fill="#3f3f46" font-size="{fs:.1f}">{escape(lbl)}</text>')
+    rmap = {r["id"]: r for r in rooms}
+    eps = 0.35
+    for adj in (graph_data.get("adjacencies") or []):
+        if not isinstance(adj, dict):
+            continue
+        a, b = rmap.get(str(adj.get("a"))), rmap.get(str(adj.get("b")))
+        if not a or not b:
+            continue
+        door = None
+        if abs((a["x"] + a["l"]) - b["x"]) < eps or abs((b["x"] + b["l"]) - a["x"]) < eps:
+            wx = a["x"] + a["l"] if abs((a["x"] + a["l"]) - b["x"]) < eps else a["x"]
+            z0, z1 = max(a["z"], b["z"]), min(a["z"] + a["w"], b["z"] + b["w"])
+            if z1 - z0 > 0.6:
+                door = ("v", wx, (z0 + z1) / 2, min(0.9, z1 - z0 - 0.2))
+        elif abs((a["z"] + a["w"]) - b["z"]) < eps or abs((b["z"] + b["w"]) - a["z"]) < eps:
+            wz = a["z"] + a["w"] if abs((a["z"] + a["w"]) - b["z"]) < eps else a["z"]
+            x0, x1 = max(a["x"], b["x"]), min(a["x"] + a["l"], b["x"] + b["l"])
+            if x1 - x0 > 0.6:
+                door = ("h", wz, (x0 + x1) / 2, min(0.9, x1 - x0 - 0.2))
+        if not door:
+            continue
+        kind, fixed, center, size = door
+        p1 = mp(fixed, center - size / 2) if kind == "v" else mp(center - size / 2, fixed)
+        p2 = mp(fixed, center + size / 2) if kind == "v" else mp(center + size / 2, fixed)
+        out.append(f'<line x1="{p1[0]:.1f}" y1="{p1[1]:.1f}" x2="{p2[0]:.1f}" y2="{p2[1]:.1f}" stroke="#fcf7ef" stroke-width="6"/>')
+        out.append(f'<line x1="{p1[0]:.1f}" y1="{p1[1]:.1f}" x2="{p2[0]:.1f}" y2="{p2[1]:.1f}" stroke="#8b5e3c" stroke-width="2.5" stroke-dasharray="4 3"/>')
+    out.append("</svg>")
+    return "\n".join(out)
+
+
+def _empty_plan_svg() -> str:
+    return (f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {SVG_WIDTH} {SVG_HEIGHT}" fill="none">'
+            '<rect width="100%" height="100%" fill="#fcf7ef"/>'
+            f'<text x="{SVG_WIDTH // 2}" y="{SVG_HEIGHT // 2}" text-anchor="middle" '
+            'fill="#9d8a75" font-size="14">No placed rooms to draw yet.</text></svg>')
 
 
 def _build_input_data(graph_data: dict) -> dict:
