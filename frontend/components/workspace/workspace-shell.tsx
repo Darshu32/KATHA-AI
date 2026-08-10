@@ -83,7 +83,7 @@ export default function WorkspaceShell() {
         await chat.stream(
           text,
           history,
-          chatMode === "auto" ? null : chatMode,
+          chatMode,
           {
             onToken: (token) => {
               appendToLastMessage(capturedConvId, token);

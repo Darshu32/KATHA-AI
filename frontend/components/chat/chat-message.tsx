@@ -3,6 +3,7 @@
 import { motion } from "framer-motion";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import MermaidDiagram from "./mermaid-diagram";
 import {
   Bot,
   User,
@@ -111,6 +112,11 @@ export default function ChatMessage({ message }: ChatMessageProps) {
             </div>
           )}
         </div>
+
+        {/* Mermaid Diagram — Deep Mode (mandatory visual) */}
+        {!isUser && message.diagram && (
+          <MermaidDiagram chart={message.diagram} />
+        )}
 
         {/* AI-Generated Image */}
         {!isUser && message.images && message.images.length > 0 && (

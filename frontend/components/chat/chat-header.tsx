@@ -9,7 +9,6 @@ import {
   ChevronDown,
   Zap,
   BookOpen,
-  Gauge,
 } from "lucide-react";
 import { useActiveNotebookSections, useChatStore, useNotesStore } from "@/lib/store";
 import type { ChatMode } from "@/lib/types";
@@ -22,9 +21,8 @@ interface ChatHeaderProps {
 }
 
 const MODES: { value: ChatMode; label: string; icon: typeof Zap; hint: string }[] = [
-  { value: "auto", label: "Auto", icon: Gauge, hint: "Balanced depth" },
   { value: "quick", label: "Quick", icon: Zap, hint: "Short answers" },
-  { value: "deep", label: "Deep", icon: BookOpen, hint: "Research mode" },
+  { value: "deep", label: "Deep", icon: BookOpen, hint: "Diagram, video & notes" },
 ];
 
 export default function ChatHeader({

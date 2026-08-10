@@ -18,7 +18,7 @@ export type ProjectType =
 
 // ── Chat Types ─────────────────────────────────────────────────────────────
 
-export type ChatMode = "quick" | "deep" | "auto";
+export type ChatMode = "quick" | "deep";
 
 export interface ChatMedia {
   url: string;
@@ -57,6 +57,7 @@ export interface Message {
   images?: ChatMedia[];
   video?: ChatMedia | null;
   youtubeLinks?: ChatMedia[];
+  diagram?: string;            // Deep mode — a Mermaid diagram of the concept
   researchPapers?: ResearchPaper[];
   referenceLinks?: ReferenceLink[];
   suggestions?: string[];

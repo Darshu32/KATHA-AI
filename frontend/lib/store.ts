@@ -98,7 +98,7 @@ export const useChatStore = create<ChatState>()(
       activeConversationId: null,
       isStreaming: false,
       sidebarOpen: true,
-      chatMode: "auto" as ChatMode,
+      chatMode: "quick" as ChatMode,
 
       createConversation: () => {
         const id = crypto.randomUUID();

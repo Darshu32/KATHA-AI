@@ -270,6 +270,7 @@ export interface ChatStreamEvent {
   content?: string;
   suggestions?: string[];
   image_prompt?: string | null;
+  diagram?: string | null;
   video_query?: string | null;
   youtube_query?: string | null;
   research_query?: string | null;
@@ -289,6 +290,7 @@ export interface ChatDoneData {
   content: string;
   suggestions: string[];
   image_prompt: string | null;
+  diagram: string | null;
   video_query: string | null;
   youtube_query: string | null;
   research_query: string | null;
@@ -362,6 +364,7 @@ export const chat = {
                 content: event.content ?? "",
                 suggestions: event.suggestions ?? [],
                 image_prompt: event.image_prompt ?? null,
+                diagram: event.diagram ?? null,
                 video_query: event.video_query ?? null,
                 youtube_query: event.youtube_query ?? null,
                 research_query: event.research_query ?? null,

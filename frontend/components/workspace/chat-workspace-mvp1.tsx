@@ -57,8 +57,7 @@ function extractPlainText(node: React.ReactNode): string {
 
 const MODES: { id: ChatMode; label: string; tagline: string }[] = [
   { id: "quick", label: "Quick", tagline: "short, focused answers" },
-  { id: "deep", label: "Deep", tagline: "long-form with notes" },
-  { id: "auto", label: "Auto", tagline: "adapts to the question" },
+  { id: "deep", label: "Deep", tagline: "long-form with diagram, video & notes" },
 ];
 
 export default function ChatWorkspaceMvp1() {
@@ -103,8 +102,9 @@ export default function ChatWorkspaceMvp1() {
     }
   }, [activeConversation?.messages.length, isStreaming]);
 
+  // Notes are a Deep-mode feature only: show the panel in Deep, hide it in Quick.
   useEffect(() => {
-    if (chatMode === "deep") setNotesPanelOpen(true);
+    setNotesPanelOpen(chatMode === "deep");
   }, [chatMode, setNotesPanelOpen]);
 
   // First-mount mobile guard — collapse the conversation sidebar on
@@ -174,6 +174,7 @@ export default function ChatWorkspaceMvp1() {
                 content: data.content,
                 isStreaming: false,
                 suggestions: data.suggestions,
+                diagram: data.diagram ?? undefined,
                 referenceLinks: data.reference_links?.map((r) => ({
                   title: r.title,
                   url: r.url,
@@ -185,6 +186,31 @@ export default function ChatWorkspaceMvp1() {
                       | "other") ?? "other",
                 })),
               });
+
+              // Deep mode always surfaces an on-topic video (mandatory visual):
+              // search YouTube for the guaranteed query and attach the result to
+              // the message. Best-effort — the answer is already rendered.
+              if (data.mode === "deep" && data.youtube_query && convoId) {
+                chatApi
+                  .searchYoutube(data.youtube_query, 3)
+                  .then((res) => {
+                    const vids = (res?.videos ?? []).map((v) => ({
+                      url: v.url,
+                      thumbnail: v.thumbnail,
+                      title: v.title,
+                      source: v.channel,
+                      type: "youtube" as const,
+                      video_id: v.video_id,
+                      channel: v.channel,
+                    }));
+                    if (vids.length) {
+                      updateLastMessageFull(convoId, { youtubeLinks: vids });
+                    }
+                  })
+                  .catch(() => {
+                    /* video is best-effort; the message is already shown */
+                  });
+              }
               // BRD §1A — fold any brief snapshot from this Deep
               // response into the conversation. The store no-ops when
               // ``brief`` is null (i.e. the user was asking a knowledge
