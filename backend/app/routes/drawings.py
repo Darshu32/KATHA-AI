@@ -201,6 +201,7 @@ async def get_elevation_view(
     project_id: str,
     version: int | None = Query(default=None, ge=1),
     scope: str = Query(default="interior"),
+    face: str | None = Query(default=None, description="north|south|east|west; default = longest side"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -208,7 +209,7 @@ async def get_elevation_view(
     if scope.lower() in PIECE_SCOPES:
         result = render_elevation_view(piece=_piece_from_graph(graph))
     else:
-        result = generate_elevation_package(graph)
+        result = generate_elevation_package(graph, face=face)
     return _view_response(project_id, target_version.version, result)
 
 
@@ -217,6 +218,8 @@ async def get_section_view(
     project_id: str,
     version: int | None = Query(default=None, ge=1),
     scope: str = Query(default="interior"),
+    cut_axis: str | None = Query(default=None, description="x|z; default cuts ⊥ z"),
+    cut_at: float | None = Query(default=None, description="cut position in metres; default passes through the most rooms"),
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
@@ -224,7 +227,7 @@ async def get_section_view(
     if scope.lower() in PIECE_SCOPES:
         result = render_section_view(piece=_piece_from_graph(graph))
     else:
-        result = generate_section_package(graph)
+        result = generate_section_package(graph, cut_axis=cut_axis, cut_at=cut_at)
     return _view_response(project_id, target_version.version, result)
 
 

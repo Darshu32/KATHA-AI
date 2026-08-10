@@ -5,6 +5,14 @@ from __future__ import annotations
 from html import escape
 
 from app.services import drawing_engine
+from app.services.spatial.graph_geometry import (
+    furnishable_objects,
+    object_rect,
+    placed_spaces,
+    room_id,
+    room_name,
+    room_rect,
+)
 
 SVG_PADDING = 56
 SVG_WIDTH = 960
@@ -38,44 +46,34 @@ def render_multiroom_plan_svg(graph_data: dict) -> str:
     single-room renderer that collapsed multi-room plans into one box."""
     W, H, PAD = SVG_WIDTH, SVG_HEIGHT, SVG_PADDING
 
-    def _m(v) -> float:
-        try:
-            f = float(v)
-        except (TypeError, ValueError):
-            return 0.0
-        return f / 1000.0 if abs(f) > 40 else f  # graph is metres; halve a stray mm
-
-    raw = [s for s in (graph_data.get("spaces") or []) if isinstance(s, dict) and isinstance(s.get("dimensions"), dict)]
-    positioned = [s for s in raw if isinstance(s.get("position"), dict)
-                  and s["position"].get("x") is not None and s["position"].get("z") is not None]
+    # Rooms and furniture come from the shared geometry core (graph_geometry) —
+    # the same placed-space rule and object footprints every other working
+    # drawing projects from. Fall back to the first dimensioned room as an
+    # unplaced shell so an un-solved graph still previews something.
+    spaces = placed_spaces(graph_data)
+    if not spaces:
+        spaces = [s for s in (graph_data.get("spaces") or [])
+                  if isinstance(s, dict) and isinstance(s.get("dimensions"), dict)][:1]
     rooms: list[dict] = []
-    for i, s in enumerate(positioned or raw[:1]):
-        d = s["dimensions"]
-        L, Wd = _m(d.get("length")), _m(d.get("width"))
-        if L <= 0 or Wd <= 0:
+    for i, s in enumerate(spaces):
+        r = room_rect(s)
+        if (r.x1 - r.x0) <= 0 or (r.z1 - r.z0) <= 0:
             continue
-        p = s.get("position") or {}
         rooms.append({
-            "id": str(s.get("id") or s.get("name") or f"room_{i + 1}"),
-            "name": str(s.get("name") or s.get("room_type") or s.get("type") or f"Room {i + 1}").replace("_", " "),
-            "x": _m(p.get("x")) if p.get("x") is not None else 0.0,
-            "z": _m(p.get("z")) if p.get("z") is not None else 0.0,
-            "l": L, "w": Wd,
+            "id": room_id(s, i),
+            "name": room_name(s, i),
+            "x": r.x0, "z": r.z0, "l": r.x1 - r.x0, "w": r.z1 - r.z0,
         })
     if not rooms:
         return _empty_plan_svg()
 
-    _SKIP = {"door", "window", "opening", "doorway", "wall", "floor", "slab", "building"}
     furn: list[dict] = []
-    for o in (graph_data.get("objects") or []):
-        if not isinstance(o, dict) or str(o.get("type", "")).lower() in _SKIP:
-            continue
-        p, d = o.get("position") or {}, o.get("dimensions") or {}
+    for o in furnishable_objects(graph_data):
+        r = object_rect(o)
         furn.append({
             "type": str(o.get("type") or "item").replace("_", " "),
-            "x": _m(p.get("x")), "z": _m(p.get("z")),
-            "l": max(_m(d.get("length")), 0.2) or 0.5,
-            "w": max(_m(d.get("width")), 0.2) or 0.5,
+            "x": (r.x0 + r.x1) / 2, "z": (r.z0 + r.z1) / 2,
+            "l": r.x1 - r.x0, "w": r.z1 - r.z0,
         })
 
     xs = [r["x"] for r in rooms] + [r["x"] + r["l"] for r in rooms]
