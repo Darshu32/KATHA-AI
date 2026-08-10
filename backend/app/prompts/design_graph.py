@@ -109,11 +109,48 @@ You MUST follow these rules strictly:
    * For a BUILDING EXTERIOR / architectural form / massing study (e.g. "a modern
      two-storey house exterior", "a villa's building form", "the facade massing"),
      describe the building as `massing` — a set of VOLUMES that form it. Give each
-     a unique `id`, a `type` ("building"/"block"/"wing"/"roof"), a `position`
-     (metres; y = height off the ground, so STACK upper floors by increasing y),
-     `dimensions`, and a `material`. Place wings / garages beside the main mass.
-     Leave `room`, `rooms`, `adjacencies`, and `objects` empty for a pure
-     exterior. Keep the whole building within roughly 6–30 m per side.
+     a unique `id`, a `type`, a `position` (metres — x,z is the centre of the
+     footprint, y is the height of the UNDERSIDE above the ground), `dimensions`,
+     and a `material`. There are THREE kinds of volume:
+       - SOLID volumes build the mass: type "building"/"block"/"wing"/"roof".
+       - SUBTRACTIVE volumes carve INTO the mass: type "void" (or "cutout"). A
+         void removes the part of the solid it overlaps — model a recessed
+         loggia / balcony, an entry undercut, a carved notch, a courtyard, or the
+         open space beneath a cantilever as a `void`. Size and place it to overlap
+         the solid where the opening is and poke out through the face it opens
+         onto. Voids are never rendered themselves; they only cut. This is the
+         ONLY way to make a recess — you cannot represent one with solid boxes.
+       - SCREEN volumes are a brise-soleil / louvre / timber slat screen: type
+         "screen" (or "louvre"). They render as an ARRAY OF THIN SLATS across the
+         volume, never a solid — use one to fill a recessed loggia, shade a
+         facade, or veil a window. Add `orientation` ("horizontal" slats stack up
+         the height — the usual timber-screen look; "vertical" run top-to-bottom),
+         and OPTIONALLY `slat_gap` + `slat_thickness` (metres) or `slat_count`.
+         SET `gradient` whenever the brief describes UNEVEN spacing: "top" =
+         tightly packed at the top and opening out toward the bottom (use this for
+         "dense/tight at the top, widening downward"), "bottom" = the reverse.
+         Place the screen at the OPENING it fills — same footprint, a shallow
+         depth (width ≈ 0.1–0.2 m).
+     GROUND THE MASS — nothing floats. The lowest volume sits on the ground (y=0);
+     every higher volume RESTS on the one below (its y = the lower volume's
+     y + height). Never leave a box hovering with empty space under it. If part of
+     the building reads as floating, cantilevered, or "on stilts/pilotis", model
+     the SOLID mass and carve the open part away with a `void` — do not lift a box
+     on nothing. Place wings / garages beside the main mass. Leave `room`,
+     `rooms`, `adjacencies`, and `objects` empty for a pure exterior. Keep the
+     whole building within roughly 6–30 m per side.
+   * WORKED EXAMPLE — "a brick house with a large square recessed loggia screened
+     by horizontal timber slats in the upper facade": ONE grounded block, ONE void
+     that carves the loggia, and ONE screen that fills its face —
+       - mass:   type "building", material "brick", position (0, 0, 0),   dimensions L12 W10 H9
+       - loggia: type "void",                        position (0, 3.5, 4), dimensions L8 W4 H5
+       - screen: type "screen", material "dark stained timber", orientation
+                 "horizontal", gradient "top",       position (0, 3.5, 4.9), dimensions L8 W0.15 H5
+     The void subtracts a real rectangular recess from the single brick mass, and
+     the screen fills its front face with horizontal timber slats (dense at the
+     top, opening downward). The correct result is ONE grounded block with a
+     carved, screened loggia — NOT two boxes on stilts. (Brick/timber colour and
+     planting are a later finish, not modelled here.)
 
 15. FURNITURE / PRODUCT (a single object):
    * If the prompt describes a SINGLE piece of furniture or a product (e.g. "a

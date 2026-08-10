@@ -95,9 +95,11 @@ def test_elevation_detects_openings() -> None:
     out = generate_elevation_package(_living_room())
     assert out["summary"]["openings"] == 1
     svg = out["preview_svg"]
-    # 4-up sheet: each wall labelled, and the window rendered as a glazed hole.
-    assert "South Elevation" in svg and "East Elevation" in svg
-    assert "#96bfd0" in svg  # glazing tint proves a window opening was cut
+    # Building elevation: the longest side faces the viewer (South), and the
+    # window is drawn glazed on the face.
+    assert out["summary"]["face"] == "south"
+    assert "South Elevation" in svg
+    assert "#96bfd0" in svg  # glazing tint proves the window opening is shown
 
 
 def test_isometric_reports_room_envelope() -> None:

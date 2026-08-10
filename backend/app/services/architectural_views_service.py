@@ -21,10 +21,24 @@ Coordinate model (post-normalization, metric):
 
 from __future__ import annotations
 
+import logging
 from html import escape
 from typing import Any
 
+from app.services.spatial.graph_geometry import (
+    Rect,
+    assign_objects,
+    bbox_of_rects,
+    depictable_objects,
+    layout_rooms,
+    object_rect,
+    room_id,
+    room_name,
+    room_rect,
+)
 from app.services.wall_model import derive_wall_model
+
+logger = logging.getLogger(__name__)
 
 CW = 960
 CH = 640
@@ -40,8 +54,6 @@ _FILL = "#d9c7b1"
 _OPENING = "#96bfd0"
 _DOOR = "#8b5e3c"
 _DIM = "#b8a591"
-
-_EDGE_ROLES = {"wall", "window", "door"}
 
 
 # ── Graph access helpers ─────────────────────────────────────────────────────
@@ -147,268 +159,280 @@ def _vdim(y1: float, y2: float, x: float, text: str) -> str:
 # ── Section view ─────────────────────────────────────────────────────────────
 
 
-def generate_section_package(graph: dict) -> dict:
-    """Vertical cut through the room at mid-depth, looking along the depth axis.
+def generate_section_package(
+    graph: dict, cut_axis: str | None = None, cut_at: float | None = None
+) -> dict:
+    """Building cross-section through the placed rooms.
 
-    Horizontal axis = room length (x), vertical = height (y). The two side walls
-    (west @ x=0, east @ x=L) are cut by the plane, so their openings appear as
-    **real gaps in the poché** (from the shared ``wall_model``). Furniture that
-    the plane crosses is poché-filled; the rest is ghosted behind. Openings on
-    the walls parallel to the cut are outlined as "beyond".
+    A single vertical cut plane — perpendicular to z by default — is positioned
+    to pass through the most rooms (tie broken toward the building centre). Only
+    the rooms it crosses are drawn, left to right, each with its floor line,
+    ceiling line and cut side-walls in poché; a wall two adjacent rooms share is
+    drawn once. Furniture the plane passes through is drawn solid, furniture in a
+    cut room that the plane misses is ghosted, and objects in rooms outside the
+    cut are accounted for (placements) but not drawn. ``cut_axis`` ('x'|'z') and
+    ``cut_at`` (metres) override the computed default so a later UI can pick the
+    line without any backend change.
     """
-    L, W, H = _room(graph)
-    model = derive_wall_model(graph)
-    walls = {w["side"]: w for w in model["walls"]}
-    objs = [_obj_box(o) for o in _objects(graph)]
-    furniture = [o for o in objs if o["role"] not in _EDGE_ROLES]
-    cut_z = W / 2.0
+    rooms = layout_rooms(graph)
+    room_specs = [(room_id(s, i), room_name(s, i), room_rect(s)) for i, s in enumerate(rooms)]
+    depictable = depictable_objects(graph)
+    by_room, orphans = assign_objects(graph, objects=depictable, rooms=rooms)
+    bb = bbox_of_rects([r for _, _, r in room_specs])
+
+    axis = (cut_axis or "z").lower()
+    if axis not in ("x", "z"):
+        axis = "z"
+
+    # In-plane horizontal coord u (x when cutting ⊥z, else z); depth is the axis.
+    def u_span(r: Rect) -> tuple[float, float]:
+        return (r.x0, r.x1) if axis == "z" else (r.z0, r.z1)
+
+    def depth_span(r: Rect) -> tuple[float, float]:
+        return (r.z0, r.z1) if axis == "z" else (r.x0, r.x1)
+
+    if not room_specs or bb is None:
+        seg = _svg_open("Section", "No placed rooms to cut")
+        seg.append("</svg>")
+        return {
+            "drawing_type": "section_view", "preview_svg": "".join(seg), "placements": [],
+            "summary": {"cut_axis": axis, "cut_at_m": 0.0, "ceiling_height_m": 0.0,
+                        "rooms_in_cut": 0, "rooms_total": 0, "objects_cut": 0,
+                        "objects_behind": 0, "openings": 0},
+        }
+
+    cut = _choose_cut(room_specs, axis, cut_at, bb)
+    cut_rooms = sorted(
+        [rs for rs in room_specs if depth_span(rs[2])[0] <= cut < depth_span(rs[2])[1]],
+        key=lambda t: u_span(t[2])[0],
+    )
+    if not cut_rooms:  # an explicit cut_at that missed every room
+        cut_rooms = sorted(room_specs, key=lambda t: u_span(t[2])[0])
+    cut_room_ids = {rid for rid, _, _ in cut_rooms}
+
+    u0 = min(u_span(r)[0] for _, _, r in cut_rooms)
+    u1 = max(u_span(r)[1] for _, _, r in cut_rooms)
+    Hmax = max(r.y1 for _, _, r in cut_rooms)
+    span_u = (u1 - u0) or 1.0
 
     plot_w, plot_h = CW - PAD * 2, CH - PAD * 2 - 30
-    s = min(plot_w / L, plot_h / H)
-    ox = PAD + (plot_w - L * s) / 2
-    floor_y = PAD + 30 + H * s  # y grows downward in SVG; floor at bottom
+    s = min(plot_w / span_u, plot_h / Hmax)
+    ox = PAD + (plot_w - span_u * s) / 2
+    floor_y = PAD + 30 + Hmax * s  # y grows downward in SVG; floor at bottom
 
-    def px(x: float) -> float:
-        return ox + x * s
+    def px(u: float) -> float:
+        return ox + (u - u0) * s
 
-    def py(y: float) -> float:  # world y (height) → screen
+    def py(y: float) -> float:
         return floor_y - y * s
 
+    title = _label(room_specs[0][1]) if len(room_specs) == 1 else _label(str(graph.get("design_type") or "Floor Plate"))
     seg = _svg_open(
-        f"Section A–A — {_label(_room_type(graph))}",
-        f"Cut at mid-depth ({cut_z:.2f} m) · ceiling {H:.2f} m · width {L:.2f} m",
+        f"Section — {title}",
+        f"Cut ⊥ {axis} at {cut:.2f} m · {len(cut_rooms)} of {len(room_specs)} room"
+        f"{'s' if len(room_specs) != 1 else ''} · ceiling {Hmax:.2f} m · width {span_u:.2f} m",
     )
-    wall_t = max(model["thickness"] * s, 6)
 
-    def _crosses(op: dict) -> bool:
-        return op["center"] - op["width"] / 2 <= cut_z <= op["center"] + op["width"] / 2
+    # Floor line spanning the whole cut.
+    seg.append(f'<line x1="{px(u0):.1f}" y1="{floor_y:.1f}" x2="{px(u1):.1f}" y2="{floor_y:.1f}" stroke="{_INK}" stroke-width="3"/>')
 
-    west_cross = [op for op in walls["west"]["openings"] if _crosses(op)]
-    east_cross = [op for op in walls["east"]["openings"] if _crosses(op)]
+    # Ceiling line + name per room; poché side walls, sharing deduplicated by u.
+    wall_heights: dict[float, float] = {}
+    for _rid, name, r in cut_rooms:
+        ru0, ru1 = u_span(r)
+        H = r.y1
+        seg.append(f'<line x1="{px(ru0):.1f}" y1="{py(H):.1f}" x2="{px(ru1):.1f}" y2="{py(H):.1f}" stroke="{_INK}" stroke-width="2"/>')
+        seg.append(f'<text x="{(px(ru0)+px(ru1))/2:.1f}" y="{py(H)+16:.1f}" text-anchor="middle" fill="{_INK}" font-size="11" font-weight="700">{escape(name[:18])}</text>')
+        for u in (ru0, ru1):
+            k = round(u, 3)
+            wall_heights[k] = max(wall_heights.get(k, 0.0), H)
+    wall_t = max(0.1 * s, 6)  # ~100 mm poché
+    for u, H in wall_heights.items():
+        seg.append(f'<rect x="{px(u)-wall_t/2:.1f}" y="{py(H):.1f}" width="{wall_t:.1f}" height="{H*s:.1f}" fill="url(#poche)" stroke="{_INK}" stroke-width="1.4"/>')
 
-    # Ceiling slab + floor line, then the two cut side walls with real gaps.
-    seg.append(f'<rect x="{px(0)-wall_t:.1f}" y="{py(H)-wall_t:.1f}" width="{L*s+wall_t*2:.1f}" height="{wall_t:.1f}" fill="url(#poche)" stroke="{_INK}" stroke-width="1.5"/>')
-    seg.append(f'<line x1="{px(0):.1f}" y1="{floor_y:.1f}" x2="{px(L):.1f}" y2="{floor_y:.1f}" stroke="{_INK}" stroke-width="3"/>')
-    _draw_section_side_wall(seg, px(0) - wall_t, wall_t, west_cross, floor_y, H, s)
-    _draw_section_side_wall(seg, px(L), wall_t, east_cross, floor_y, H, s)
-
-    # Furniture: cut (plane passes through) vs behind (ghosted).
-    cut_items, behind = [], []
-    for o in furniture:
-        z0, z1 = o["z"] - o["dz"] / 2, o["z"] + o["dz"] / 2
-        (cut_items if z0 <= cut_z <= z1 else behind).append(o)
-
-    for o in sorted(behind, key=lambda b: -b["z"]):
-        x = px(o["x"] - o["dx"] / 2)
-        w = o["dx"] * s
-        h = o["dy"] * s
-        seg.append(f'<rect x="{x:.1f}" y="{floor_y-h:.1f}" width="{w:.1f}" height="{h:.1f}" fill="none" stroke="{_INK_SOFT}" stroke-width="1.2" stroke-dasharray="4 3"/>')
-
-    for o in cut_items:
-        x = px(o["x"] - o["dx"] / 2)
-        w = o["dx"] * s
-        h = o["dy"] * s
-        seg.append(f'<rect x="{x:.1f}" y="{floor_y-h:.1f}" width="{w:.1f}" height="{h:.1f}" rx="3" fill="{_FILL}" stroke="{_POCHE}" stroke-width="2"/>')
-        seg.append(f'<text x="{x+w/2:.1f}" y="{floor_y-h-4:.1f}" text-anchor="middle" fill="#2c221a" font-size="10">{_label(o["name"])[:16]}</text>')
-
-    # Openings on the walls parallel to the cut (north/south run along x) and any
-    # side-wall opening the plane misses — drawn as "beyond" outlines so every
-    # opening is still represented.
-    for side in ("north", "south"):
-        for op in walls[side]["openings"]:
-            x = px(op["center"] - op["width"] / 2)
-            w = op["width"] * s
-            top = py(op["head"])
-            h = (op["head"] - op["sill"]) * s
-            stroke = _OPENING if op["kind"] == "window" else _DOOR
-            seg.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{w:.1f}" height="{h:.1f}" fill="none" stroke="{stroke}" stroke-width="1.6" stroke-dasharray="3 3"/>')
-    for side, xw in (("west", px(0)), ("east", px(L))):
-        crossed = west_cross if side == "west" else east_cross
-        for op in walls[side]["openings"]:
-            if op in crossed:
-                continue
-            seg.append(f'<line x1="{xw:.1f}" y1="{py(op["head"]):.1f}" x2="{xw:.1f}" y2="{py(op["sill"]):.1f}" stroke="{_INK_SOFT}" stroke-width="2" stroke-dasharray="3 3"/>')
+    # Objects: solid if the plane passes through, ghosted if behind, in cut rooms.
+    cut_ids, behind_ids, off_ids = [], [], []
+    for rid, _name, _r in cut_rooms:
+        for o in by_room.get(rid, []):
+            orc = object_rect(o)
+            ou0, ou1 = (orc.x0, orc.x1) if axis == "z" else (orc.z0, orc.z1)
+            od0, od1 = depth_span(orc)
+            h = orc.y1
+            if od0 <= cut <= od1:  # plane passes through the piece
+                role = str(o.get("role") or "").lower()
+                fill = _OPENING if role == "window" else _DOOR if role == "door" else _FILL
+                seg.append(f'<rect x="{px(ou0):.1f}" y="{floor_y-h*s:.1f}" width="{(ou1-ou0)*s:.1f}" height="{h*s:.1f}" rx="3" fill="{fill}" stroke="{_POCHE}" stroke-width="2"/>')
+                seg.append(f'<text x="{(px(ou0)+px(ou1))/2:.1f}" y="{floor_y-h*s-4:.1f}" text-anchor="middle" fill="#2c221a" font-size="9">{_label(str(o.get("name") or o.get("type") or "item"))[:14]}</text>')
+                cut_ids.append(o.get("id"))
+            else:  # in a cut room but the plane misses it — ghost behind
+                seg.append(f'<rect x="{px(ou0):.1f}" y="{floor_y-h*s:.1f}" width="{(ou1-ou0)*s:.1f}" height="{h*s:.1f}" fill="none" stroke="{_INK_SOFT}" stroke-width="1.1" stroke-dasharray="4 3"/>')
+                behind_ids.append(o.get("id"))
+    for rid, objs in by_room.items():
+        if rid not in cut_room_ids:
+            off_ids.extend(o.get("id") for o in objs)
+    off_ids.extend(o.get("id") for o in orphans)
 
     # Dimensions.
-    seg.append(_vdim(py(H), floor_y, px(0) - wall_t - 16, f"{H:.2f} m"))
-    seg.append(_hdim(px(0), px(L), floor_y + 34, f"{L:.2f} m"))
+    seg.append(_vdim(py(Hmax), floor_y, px(u0) - 16, f"{Hmax:.2f} m"))
+    seg.append(_hdim(px(u0), px(u1), floor_y + 34, f"{span_u:.2f} m"))
     seg.append("</svg>")
 
     placements = (
-        [{"id": o["id"], "role": o["role"], "mode": "cut"} for o in cut_items]
-        + [{"id": o["id"], "role": o["role"], "mode": "behind"} for o in behind]
-        + [
-            {"id": op["source_id"], "role": op["kind"], "mode": "opening", "wall": w["side"]}
-            for w in model["walls"]
-            for op in w["openings"]
-        ]
+        [{"id": i, "mode": "cut"} for i in cut_ids]
+        + [{"id": i, "mode": "behind"} for i in behind_ids]
+        + [{"id": i, "mode": "off_cut"} for i in off_ids]
     )
-    opening_count = sum(len(w["openings"]) for w in model["walls"])
+    openings = sum(1 for o in depictable if str(o.get("role") or "").lower() in ("window", "door"))
     return {
         "drawing_type": "section_view",
         "preview_svg": "".join(seg),
         "placements": placements,
         "summary": {
-            "cut_depth_m": round(cut_z, 2),
-            "ceiling_height_m": round(H, 2),
-            "objects_cut": len(cut_items),
-            "openings": opening_count,
+            "cut_axis": axis,
+            "cut_at_m": round(cut, 2),
+            "ceiling_height_m": round(Hmax, 2),
+            "rooms_in_cut": len(cut_rooms),
+            "rooms_total": len(room_specs),
+            "objects_cut": len(cut_ids),
+            "objects_behind": len(behind_ids),
+            "openings": openings,
         },
     }
 
 
-def _draw_section_side_wall(
-    seg: list[str],
-    bx: float,
-    block_w: float,
-    crossing: list[dict],
-    floor_y: float,
-    H: float,
-    s: float,
-) -> None:
-    """Poché one cut side wall as a full-height block minus opening gaps."""
-    def _y(h: float) -> float:
-        return floor_y - h * s
+def _choose_cut(room_specs: list, axis: str, cut_at: float | None, bb: Rect) -> float:
+    """Cut position that passes through the most rooms; tie → nearest bbox centre.
 
-    gaps = sorted((op["sill"], op["head"], op) for op in crossing)
-    cursor = 0.0
-    for sill, head, _op in gaps:
-        if sill > cursor:  # solid poché below the opening
-            seg.append(f'<rect x="{bx:.1f}" y="{_y(sill):.1f}" width="{block_w:.1f}" height="{(sill-cursor)*s:.1f}" fill="url(#poche)" stroke="{_INK}" stroke-width="1.5"/>')
-        cursor = max(cursor, head)
-    if cursor < H:  # solid poché above the topmost opening (up to ceiling)
-        seg.append(f'<rect x="{bx:.1f}" y="{_y(H):.1f}" width="{block_w:.1f}" height="{(H-cursor)*s:.1f}" fill="url(#poche)" stroke="{_INK}" stroke-width="1.5"/>')
-    # Opening symbols in the gaps.
-    for sill, head, op in gaps:
-        fill = _OPENING if op["kind"] == "window" else _DOOR
-        seg.append(f'<rect x="{bx:.1f}" y="{_y(head):.1f}" width="{block_w:.1f}" height="{(head-sill)*s:.1f}" fill="{fill}" fill-opacity="0.45" stroke="{_INK}" stroke-width="1.4"/>')
+    Candidates are each room's mid-depth; ``cut_at`` (metres) overrides. Depth is
+    z when cutting ⊥z (the default), else x.
+    """
+    if cut_at is not None:
+        return float(cut_at)
+
+    def depth_span(r: Rect) -> tuple[float, float]:
+        return (r.z0, r.z1) if axis == "z" else (r.x0, r.x1)
+
+    centre = (bb.z0 + bb.z1) / 2 if axis == "z" else (bb.x0 + bb.x1) / 2
+    candidates = [sum(depth_span(r)) / 2 for _, _, r in room_specs]
+    if not candidates:
+        return centre
+
+    def count_through(z: float) -> int:
+        return sum(1 for _, _, r in room_specs if depth_span(r)[0] <= z < depth_span(r)[1])
+
+    return max(candidates, key=lambda z: (count_through(z), -abs(z - centre)))
 
 
 # ── Elevation view ───────────────────────────────────────────────────────────
 
 
-def generate_elevation_package(graph: dict) -> dict:
-    """Four-up elevation sheet (South / North / West / East).
+def generate_elevation_package(graph: dict, face: str | None = None) -> dict:
+    """Exterior building elevation — every placed room projected onto one face.
 
-    Each cell is a true elevation of one perimeter wall: the wall face to
-    scale, its window/door openings **cut as real holes** (from the shared
-    ``wall_model``), and the room's furniture projected as faint silhouettes
-    layered far-to-near. Every opening appears on exactly one wall; every piece
-    of furniture appears against every wall — so the sheet stays complete.
+    The longest side faces the viewer by default (``face`` = north|south|east|
+    west overrides; north/south look along z with x horizontal, east/west look
+    along x with z horizontal). Each room projects to a width×height block; their
+    union is the building silhouette, so rooms of different heights read as a
+    stepped roofline. Windows and doors are shown on the face (they are what you
+    see on an elevation); interior furniture is not drawn on an exterior
+    elevation, but every object is still listed in ``placements`` so nothing a
+    user designed is silently lost. ``face`` is wired for a later UI picker.
     """
-    L, W, H = _room(graph)
-    room = (L, W, H)
-    model = derive_wall_model(graph)
-    furniture = [_obj_box(o) for o in _objects(graph) if _obj_box(o)["role"] not in _EDGE_ROLES]
+    rooms = layout_rooms(graph)
+    room_specs = [(room_id(s, i), room_name(s, i), room_rect(s)) for i, s in enumerate(rooms)]
+    depictable = depictable_objects(graph)
+    bb = bbox_of_rects([r for _, _, r in room_specs])
 
-    seg = _svg_open(
-        f"Elevations — {_label(_room_type(graph))}",
-        f"South · North · West · East · openings cut to scale · walls {model['thickness']*1000:.0f} mm",
-    )
+    if not room_specs or bb is None:
+        seg = _svg_open("Elevation", "No placed rooms to project")
+        seg.append("</svg>")
+        return {
+            "drawing_type": "elevation_view", "preview_svg": "".join(seg), "placements": [],
+            "summary": {"face": "south", "wall_length_m": 0.0, "wall_height_m": 0.0, "openings": 0},
+        }
 
-    # 2×2 grid of wall elevations.
-    grid_top = PAD + 26
-    gap = 22
-    cell_w = (CW - PAD * 2 - gap) / 2
-    cell_h = (CH - grid_top - PAD - gap) / 2
-    order = ["south", "north", "west", "east"]
-    walls = {w["side"]: w for w in model["walls"]}
-    for i, side in enumerate(order):
-        cx = PAD + (i % 2) * (cell_w + gap)
-        cy = grid_top + (i // 2) * (cell_h + gap)
-        _draw_wall_elevation(seg, walls[side], room, furniture, cx, cy, cell_w, cell_h)
+    f = (face or "").lower()
+    if f in ("north", "south"):
+        axis = "z"
+    elif f in ("east", "west"):
+        axis = "x"
+    else:  # default: the longest side faces the viewer
+        axis = "z" if (bb.x1 - bb.x0) >= (bb.z1 - bb.z0) else "x"
+        f = "south" if axis == "z" else "west"
 
-    seg.append("</svg>")
+    def u_span(r: Rect) -> tuple[float, float]:
+        return (r.x0, r.x1) if axis == "z" else (r.z0, r.z1)
 
-    placements = [
-        {"id": op["source_id"], "role": op["kind"], "mode": "opening", "wall": w["side"]}
-        for w in model["walls"]
-        for op in w["openings"]
-    ] + [
-        {"id": o["id"], "role": o["role"], "mode": "silhouette", "wall": side}
-        for side in order
-        for o in furniture
-    ]
-    opening_count = sum(len(w["openings"]) for w in model["walls"])
-    return {
-        "drawing_type": "elevation_view",
-        "preview_svg": "".join(seg),
-        "placements": placements,
-        "summary": {"wall_length_m": round(L, 2), "wall_height_m": round(H, 2), "openings": opening_count},
-    }
+    u0, u1 = (bb.x0, bb.x1) if axis == "z" else (bb.z0, bb.z1)
+    Hmax = bb.y1
+    span_u = (u1 - u0) or 1.0
 
-
-def _draw_wall_elevation(
-    seg: list[str],
-    wall: dict,
-    room: tuple[float, float, float],
-    furniture: list[dict],
-    cx: float,
-    cy: float,
-    cw: float,
-    ch: float,
-) -> None:
-    """Render one wall's elevation (face + real openings + furniture) in a cell."""
-    L, W, H = room
-    side, runs, wlen = wall["side"], wall["runs"], wall["length"]
-    pad, label_h, dim_h = 16, 22, 20
-    plot_w = cw - pad * 2
-    plot_h = ch - pad - label_h - dim_h
-    s = min(plot_w / wlen, plot_h / H) if wlen > 0 and H > 0 else 1.0
-    ox = cx + pad + (plot_w - wlen * s) / 2
-    ground = cy + label_h + pad / 2 + H * s
+    plot_w, plot_h = CW - PAD * 2, CH - PAD * 2 - 30
+    s = min(plot_w / span_u, plot_h / Hmax)
+    ox = PAD + (plot_w - span_u * s) / 2
+    ground = PAD + 30 + Hmax * s
 
     def ux(u: float) -> float:
-        return ox + u * s
+        return ox + (u - u0) * s
 
     def hy(h: float) -> float:
         return ground - h * s
 
-    # Cell frame + label.
-    seg.append(f'<rect x="{cx:.1f}" y="{cy:.1f}" width="{cw:.1f}" height="{ch:.1f}" rx="10" fill="#fbf8f2" stroke="{_GRID}" stroke-width="1.2"/>')
-    seg.append(f'<text x="{cx+14:.1f}" y="{cy+22:.1f}" fill="{_INK}" font-size="12" font-weight="700">{side.title()} Elevation</text>')
+    title = _label(room_specs[0][1]) if len(room_specs) == 1 else _label(str(graph.get("design_type") or "Floor Plate"))
+    seg = _svg_open(
+        f"{f.title()} Elevation — {title}",
+        f"Building elevation · {len(room_specs)} room{'s' if len(room_specs) != 1 else ''} · "
+        f"width {span_u:.2f} m · height {Hmax:.2f} m",
+    )
 
-    # Wall face + ground line.
-    seg.append(f'<rect x="{ux(0):.1f}" y="{hy(H):.1f}" width="{wlen*s:.1f}" height="{H*s:.1f}" fill="#f6ede0" stroke="{_INK}" stroke-width="2"/>')
-    seg.append(f'<line x1="{ux(0)-10:.1f}" y1="{ground:.1f}" x2="{ux(wlen)+10:.1f}" y2="{ground:.1f}" stroke="{_INK}" stroke-width="2.5"/>')
+    # Ground line, then each room as a silhouette block (stepped roofline).
+    seg.append(f'<line x1="{ux(u0)-10:.1f}" y1="{ground:.1f}" x2="{ux(u1)+10:.1f}" y2="{ground:.1f}" stroke="{_INK}" stroke-width="2.5"/>')
+    for _rid, _name, r in sorted(room_specs, key=lambda t: u_span(t[2])[0]):
+        ru0, ru1 = u_span(r)
+        H = r.y1
+        seg.append(f'<rect x="{ux(ru0):.1f}" y="{hy(H):.1f}" width="{(ru1-ru0)*s:.1f}" height="{H*s:.1f}" fill="#f6ede0" stroke="{_INK}" stroke-width="2"/>')
 
-    # Furniture projected onto this wall, far-first (faint, so openings read).
-    proj = []
-    for o in furniture:
-        if runs == "x":
-            u, ext = o["x"], o["dx"]
-            dist = o["z"] if side == "south" else (W - o["z"])
-        else:
-            u, ext = o["z"], o["dz"]
-            dist = o["x"] if side == "west" else (L - o["x"])
-        proj.append((dist, u, ext, o["dy"]))
-    for _dist, u, ext, hh in sorted(proj, key=lambda p: -p[0]):
-        x = ux(u - ext / 2)
-        w = ext * s
-        h = hh * s
-        seg.append(f'<rect x="{x:.1f}" y="{ground-h:.1f}" width="{max(w,1):.1f}" height="{h:.1f}" rx="2" fill="{_FILL}" fill-opacity="0.3" stroke="{_POCHE}" stroke-width="1" stroke-opacity="0.5"/>')
-
-    # Openings cut as real holes in the wall face.
-    for op in wall["openings"]:
-        x = ux(op["center"] - op["width"] / 2)
-        w = op["width"] * s
-        top = hy(op["head"])
-        h = (op["head"] - op["sill"]) * s
-        # Punch: paper-fill the hole so it reads as a void through the wall.
+    # Openings on the face — windows glazed, doors leafed. Furniture is interior,
+    # so it is concealed on an exterior elevation (but still accounted for below).
+    openings = 0
+    for o in depictable:
+        role = str(o.get("role") or "").lower()
+        if role not in ("window", "door"):
+            continue
+        orc = object_rect(o)
+        ou0, ou1 = (orc.x0, orc.x1) if axis == "z" else (orc.z0, orc.z1)
+        sill = max(_num((o.get("position") or {}).get("y"), 0.0), 0.0)
+        head = min(sill + orc.y1, Hmax)
+        x, w = ux(ou0), max((ou1 - ou0) * s, 2.0)
+        top, h = hy(head), max((head - sill) * s, 2.0)
         seg.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{w:.1f}" height="{h:.1f}" fill="{_PAPER}" stroke="{_INK}" stroke-width="1.8"/>')
-        if op["kind"] == "window":
-            # Glazing tint + mullions.
+        if role == "window":
             seg.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{w:.1f}" height="{h:.1f}" fill="{_OPENING}" fill-opacity="0.28"/>')
             seg.append(f'<line x1="{x+w/2:.1f}" y1="{top:.1f}" x2="{x+w/2:.1f}" y2="{top+h:.1f}" stroke="{_INK}" stroke-width="1" stroke-opacity="0.7"/>')
-            seg.append(f'<line x1="{x:.1f}" y1="{top+h/2:.1f}" x2="{x+w:.1f}" y2="{top+h/2:.1f}" stroke="{_INK}" stroke-width="1" stroke-opacity="0.7"/>')
         else:
-            # Door leaf hint + threshold.
             seg.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{w:.1f}" height="{h:.1f}" fill="{_DOOR}" fill-opacity="0.22"/>')
-            seg.append(f'<line x1="{x+w*0.82:.1f}" y1="{top:.1f}" x2="{x+w*0.82:.1f}" y2="{top+h:.1f}" stroke="{_INK}" stroke-width="1" stroke-opacity="0.7"/>')
+        openings += 1
 
-    # Compact dimensions.
-    seg.append(_hdim(ux(0), ux(wlen), ground + 16, f"{wlen:.2f} m"))
-    seg.append(_vdim(hy(H), ground, ux(0) - 12, f"{H:.2f} m"))
+    seg.append(_hdim(ux(u0), ux(u1), ground + 20, f"{span_u:.2f} m"))
+    seg.append(_vdim(hy(Hmax), ground, ux(u0) - 14, f"{Hmax:.2f} m"))
+    seg.append("</svg>")
+
+    placements = [
+        {"id": o.get("id"), "role": str(o.get("role") or "").lower(),
+         "mode": "opening" if str(o.get("role") or "").lower() in ("window", "door") else "concealed"}
+        for o in depictable
+    ]
+    return {
+        "drawing_type": "elevation_view",
+        "preview_svg": "".join(seg),
+        "placements": placements,
+        "summary": {
+            "face": f,
+            "wall_length_m": round(span_u, 2),
+            "wall_height_m": round(Hmax, 2),
+            "openings": openings,
+        },
+    }
 
 
 # ── Isometric view ───────────────────────────────────────────────────────────
@@ -419,19 +443,46 @@ _SIN30 = 0.5
 
 
 def generate_isometric_package(graph: dict) -> dict:
-    """Axonometric massing of the room box + furniture blocks."""
-    L, W, H = _room(graph)
-    objs = [_obj_box(o) for o in _objects(graph)]
+    """Axonometric massing of every placed room + its furniture.
+
+    Rooms are drawn back-to-front (painter's order, ascending x0+z0) so a nearer
+    room occludes a farther one, and each room's furniture is emitted
+    immediately after its own box — never all rooms then all furniture — so a
+    piece can never float over the wrong room. Furniture whose centre lands in no
+    room is logged and omitted rather than misplaced (the failure mode of the
+    old spaces[0] renderer). Multi-room aware; a single-room graph collapses to
+    one box with identical envelope figures.
+    """
+    rooms = layout_rooms(graph)
+    room_specs = [(room_id(s, i), room_name(s, i), room_rect(s)) for i, s in enumerate(rooms)]
+    # Depict every non-wall object (furniture AND openings) so nothing a user
+    # designed is dropped; assign each to the room holding its centre.
+    depictable = depictable_objects(graph)
+    by_room, orphans = assign_objects(graph, objects=depictable, rooms=rooms)
+    if orphans:
+        logger.warning(
+            "isometric_orphan_objects",
+            extra={"count": len(orphans), "ids": [o.get("id") for o in orphans][:8]},
+        )
+
+    bb = bbox_of_rects([r for _, _, r in room_specs]) or Rect(0.0, 6.0, 0.0, 4.5, 0.0, 2.9)
 
     # Iso projection (metres → screen units, before pixel scale).
     def iso(x: float, y: float, z: float) -> tuple[float, float]:
         return (x - z) * _COS30, (x + z) * _SIN30 - y
 
-    corners = [iso(x, y, z) for x in (0, L) for y in (0, H) for z in (0, W)]
-    xs = [c[0] for c in corners]
-    ys = [c[1] for c in corners]
-    span_x = max(xs) - min(xs) or 1
-    span_y = max(ys) - min(ys) or 1
+    # Scale so every room AND every depicted object fits — including orphans, so
+    # an out-of-room piece is still drawn on-canvas rather than clipped away.
+    obj_rects = [object_rect(o) for o in depictable]
+    corners = [
+        iso(X, Y, Z)
+        for r in ([r for _, _, r in room_specs] + obj_rects)
+        for X in (r.x0, r.x1) for Y in (r.y0, r.y1) for Z in (r.z0, r.z1)
+    ]
+    xs = [c[0] for c in corners] or [0.0]
+    ys = [c[1] for c in corners] or [0.0]
+    span_x = (max(xs) - min(xs)) or 1.0
+    span_y = (max(ys) - min(ys)) or 1.0
     plot_w, plot_h = CW - PAD * 2, CH - PAD * 2 - 30
     s = min(plot_w / span_x, plot_h / span_y)
     ox = PAD + (plot_w - span_x * s) / 2 - min(xs) * s
@@ -441,59 +492,91 @@ def generate_isometric_package(graph: dict) -> dict:
         ix, iy = iso(x, y, z)
         return ox + ix * s, oy + iy * s
 
+    bw, bd, bh = bb.x1 - bb.x0, bb.z1 - bb.z0, bb.y1
+    n = len(room_specs)
+    title = _label(room_specs[0][1]) if n == 1 else _label(str(graph.get("design_type") or "Floor Plate"))
     seg = _svg_open(
-        f"Isometric — {_label(_room_type(graph))}",
-        f"{L:.2f} × {W:.2f} × {H:.2f} m · axonometric massing",
+        f"Isometric — {title}",
+        f"{bw:.2f} × {bd:.2f} × {bh:.2f} m · {n} room{'s' if n != 1 else ''} · axonometric massing",
     )
 
-    # Room floor + back walls (wireframe).
-    f00, fL0, fLW, f0W = sp(0, 0, 0), sp(L, 0, 0), sp(L, 0, W), sp(0, 0, W)
-    seg.append(f'<polygon points="{f00[0]:.1f},{f00[1]:.1f} {fL0[0]:.1f},{fL0[1]:.1f} {fLW[0]:.1f},{fLW[1]:.1f} {f0W[0]:.1f},{f0W[1]:.1f}" fill="#f3e9d8" stroke="{_INK}" stroke-width="1.6"/>')
-    for (bx, bz) in ((0, 0), (L, 0), (0, W)):
-        b, t = sp(bx, 0, bz), sp(bx, H, bz)
-        seg.append(f'<line x1="{b[0]:.1f}" y1="{b[1]:.1f}" x2="{t[0]:.1f}" y2="{t[1]:.1f}" stroke="{_INK_SOFT}" stroke-width="1.3"/>')
-    # Ceiling outline.
-    c00, cL0, cLW, c0W = sp(0, H, 0), sp(L, H, 0), sp(L, H, W), sp(0, H, W)
-    seg.append(f'<polyline points="{cL0[0]:.1f},{cL0[1]:.1f} {c00[0]:.1f},{c00[1]:.1f} {c0W[0]:.1f},{c0W[1]:.1f}" fill="none" stroke="{_INK_SOFT}" stroke-width="1.2" stroke-dasharray="4 3"/>')
+    # Back-to-front: draw each room's box, then that room's furniture, then move on.
+    for rid, name, r in sorted(room_specs, key=lambda t: t[2].x0 + t[2].z0):
+        H = r.y1
+        f00, fL0, fLW, f0W = sp(r.x0, 0, r.z0), sp(r.x1, 0, r.z0), sp(r.x1, 0, r.z1), sp(r.x0, 0, r.z1)
+        seg.append(f'<polygon points="{f00[0]:.1f},{f00[1]:.1f} {fL0[0]:.1f},{fL0[1]:.1f} {fLW[0]:.1f},{fLW[1]:.1f} {f0W[0]:.1f},{f0W[1]:.1f}" fill="#f3e9d8" fill-opacity="0.92" stroke="{_INK}" stroke-width="1.6"/>')
+        for (bx, bz) in ((r.x0, r.z0), (r.x1, r.z0), (r.x0, r.z1)):
+            b, t = sp(bx, 0, bz), sp(bx, H, bz)
+            seg.append(f'<line x1="{b[0]:.1f}" y1="{b[1]:.1f}" x2="{t[0]:.1f}" y2="{t[1]:.1f}" stroke="{_INK_SOFT}" stroke-width="1.3"/>')
+        c00, cL0, c0W = sp(r.x0, H, r.z0), sp(r.x1, H, r.z0), sp(r.x0, H, r.z1)
+        seg.append(f'<polyline points="{cL0[0]:.1f},{cL0[1]:.1f} {c00[0]:.1f},{c00[1]:.1f} {c0W[0]:.1f},{c0W[1]:.1f}" fill="none" stroke="{_INK_SOFT}" stroke-width="1.2" stroke-dasharray="4 3"/>')
+        nl = sp((r.x0 + r.x1) / 2, H, (r.z0 + r.z1) / 2)
+        seg.append(f'<text x="{nl[0]:.1f}" y="{nl[1]-4:.1f}" text-anchor="middle" fill="{_INK}" font-size="11" font-weight="700">{escape(name[:18])}</text>')
 
-    # Furniture boxes, far (small x+z) first.
-    drawn = [o for o in objs if o["role"] != "wall"]
-    for o in sorted(drawn, key=lambda b: b["x"] + b["z"]):
-        x0, x1 = o["x"] - o["dx"] / 2, o["x"] + o["dx"] / 2
-        z0, z1 = o["z"] - o["dz"] / 2, o["z"] + o["dz"] / 2
-        h = o["dy"]
-        fill = _OPENING if o["role"] == "window" else _DOOR if o["role"] == "door" else _FILL
-        # Three visible faces: top, left (x1 side), front (z1 side).
-        top = [sp(x0, h, z0), sp(x1, h, z0), sp(x1, h, z1), sp(x0, h, z1)]
-        left = [sp(x1, 0, z0), sp(x1, h, z0), sp(x1, h, z1), sp(x1, 0, z1)]
-        front = [sp(x0, 0, z1), sp(x1, 0, z1), sp(x1, h, z1), sp(x0, h, z1)]
-        for face, shade in ((front, 0.85), (left, 0.7), (top, 1.0)):
-            pts = " ".join(f"{p[0]:.1f},{p[1]:.1f}" for p in face)
-            seg.append(f'<polygon points="{pts}" fill="{fill}" fill-opacity="{shade*0.7:.2f}" stroke="{_POCHE}" stroke-width="1.3"/>')
-        lbl = sp(o["x"], h, o["z"])
-        seg.append(f'<text x="{lbl[0]:.1f}" y="{lbl[1]-4:.1f}" text-anchor="middle" fill="#2c221a" font-size="9">{_label(o["name"])[:14]}</text>')
+        for o in sorted(by_room.get(rid, []), key=_obj_centre_sum):
+            _iso_draw_object(seg, sp, o)
+
+    # Orphans (centre in no room) are anomalies — draw them last at their true
+    # world position so they stay visible (fidelity) without being crammed into
+    # a room they do not belong to (the old collapse bug).
+    for o in sorted(orphans, key=_obj_centre_sum):
+        _iso_draw_object(seg, sp, o)
 
     seg.append("</svg>")
-    placements = [{"id": o["id"], "role": o["role"], "mode": "massing"} for o in drawn]
+    total_objs = len([o for o in (graph.get("objects") or []) if isinstance(o, dict)])
+    placements = [
+        {"id": o.get("id"), "role": o.get("role") or "furniture",
+         "mode": "orphan" if o in orphans else "massing"}
+        for o in depictable
+    ]
     return {
         "drawing_type": "isometric_view",
         "preview_svg": "".join(seg),
         "placements": placements,
-        "summary": {"length_m": round(L, 2), "width_m": round(W, 2), "height_m": round(H, 2), "objects": len(objs)},
+        "summary": {
+            "length_m": round(bw, 2), "width_m": round(bd, 2), "height_m": round(bh, 2),
+            "rooms": n, "objects": total_objs, "orphans": len(orphans),
+        },
     }
+
+
+def _obj_centre_sum(o: dict) -> float:
+    """Painter-order key for furniture: farther pieces (smaller x+z centre) first."""
+    r = object_rect(o)
+    return (r.x0 + r.x1 + r.z0 + r.z1) / 2.0
+
+
+def _iso_draw_object(seg: list[str], sp, o: dict) -> None:
+    """Draw one object as a shaded axonometric box (three visible faces) at its
+    world position, coloured by role: windows glazed, doors timber, else furniture."""
+    r = object_rect(o)
+    x0, x1, z0, z1, h = r.x0, r.x1, r.z0, r.z1, r.y1
+    role = str(o.get("role") or "").lower()
+    fill = _OPENING if role == "window" else _DOOR if role == "door" else _FILL
+    top = [sp(x0, h, z0), sp(x1, h, z0), sp(x1, h, z1), sp(x0, h, z1)]
+    left = [sp(x1, 0, z0), sp(x1, h, z0), sp(x1, h, z1), sp(x1, 0, z1)]
+    front = [sp(x0, 0, z1), sp(x1, 0, z1), sp(x1, h, z1), sp(x0, h, z1)]
+    for face, shade in ((front, 0.85), (left, 0.7), (top, 1.0)):
+        pts = " ".join(f"{p[0]:.1f},{p[1]:.1f}" for p in face)
+        seg.append(f'<polygon points="{pts}" fill="{fill}" fill-opacity="{shade*0.7:.2f}" stroke="{_POCHE}" stroke-width="1.3"/>')
+    lbl = sp((x0 + x1) / 2, h, (z0 + z1) / 2)
+    seg.append(f'<text x="{lbl[0]:.1f}" y="{lbl[1]-4:.1f}" text-anchor="middle" fill="#2c221a" font-size="9">{_label(str(o.get("name") or o.get("type") or "item"))[:14]}</text>')
 
 
 # ── Detail sheet ─────────────────────────────────────────────────────────────
 
 
 def generate_detail_package(graph: dict) -> dict:
-    """Architectural junction callouts derived from the room + its materials.
+    """Architectural junction callouts for one chosen room + its materials.
 
-    Four standard interior construction details — wall/floor, wall/ceiling,
-    window jamb, door threshold — annotated with the design's own material
-    palette. Deterministic; replaces the furniture joinery/hardware sheet.
+    A detail is a close-up of one junction, so this deterministically picks a
+    subject — the room with the largest footprint — and names it in the title
+    block, then draws its four standard interior construction details (wall/
+    floor, wall/ceiling, window jamb, door threshold) annotated with the
+    design's own material palette. Always renders (single- or multi-room);
+    never claims to show more than the one room it chose.
     """
-    L, W, H = _room(graph)
+    subject_name = _largest_room_name(graph) or _label(_room_type(graph))
     materials = [
         str(m.get("name")).strip()
         for m in (graph.get("materials") or [])
@@ -512,8 +595,8 @@ def generate_detail_package(graph: dict) -> dict:
     ]
 
     seg = _svg_open(
-        f"Detail Sheet — {_label(_room_type(graph))}",
-        f"Key interior junctions · wall finish: {wall_mat}",
+        f"Detail Sheet — {_label(subject_name)}",
+        f"Junctions for the largest room ({_label(subject_name)}) · wall finish: {wall_mat}",
     )
     cell_w = (CW - PAD * 2 - 30) / 2
     cell_h = (CH - PAD - 80 - 30) / 2
@@ -530,8 +613,25 @@ def generate_detail_package(graph: dict) -> dict:
     return {
         "drawing_type": "detail_sheet",
         "preview_svg": "".join(seg),
-        "summary": {"detail_count": len(details), "materials_cited": materials[:3]},
+        "summary": {
+            "detail_count": len(details),
+            "materials_cited": materials[:3],
+            "subject_room": subject_name,
+            "subject": "wall/floor junction",
+        },
     }
+
+
+def _largest_room_name(graph: dict) -> str | None:
+    """Name of the placed room with the largest footprint (the detail subject)."""
+    rooms = layout_rooms(graph)
+    if not rooms:
+        return None
+    idx = max(
+        range(len(rooms)),
+        key=lambda i: (lambda r: (r.x1 - r.x0) * (r.z1 - r.z0))(room_rect(rooms[i])),
+    )
+    return room_name(rooms[idx], idx)
 
 
 def _detail_schematic(cx: float, cy: float, cw: float, ch: float, kind: str) -> list[str]:

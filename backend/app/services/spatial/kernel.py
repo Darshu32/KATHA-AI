@@ -47,6 +47,10 @@ _TYPE_DEFAULT = {
     "roof": (0.5, 0.42, 0.38), "ground": (0.82, 0.83, 0.8), "sofa": (0.55, 0.5, 0.46),
     "table": (0.6, 0.45, 0.32), "bed": (0.7, 0.66, 0.6), "chair": (0.5, 0.45, 0.4),
     "rug": (0.7, 0.5, 0.45), "cabinet": (0.55, 0.42, 0.3),
+    # Facade screens / brise-soleil default to a stained-timber tone.
+    "screen": (0.36, 0.26, 0.18), "louver": (0.36, 0.26, 0.18),
+    "louvre": (0.36, 0.26, 0.18), "brise_soleil": (0.36, 0.26, 0.18),
+    "slats": (0.36, 0.26, 0.18), "jali": (0.58, 0.48, 0.38),
 }
 
 
@@ -64,6 +68,54 @@ def _parse_color(raw, fallback=(0.78, 0.76, 0.72)):
     return fallback
 
 
+# Architectural material → representative colour. Scanned as substrings (first
+# hit wins, specifics first) so a descriptive material string like "pale
+# cream-beige Roman brick" or "dark stained timber" resolves to a sensible tone
+# in the clay render — no img2img, no external service, fully deterministic.
+_MATERIAL_COLORS = [
+    ("terracotta", (0.72, 0.42, 0.30)), ("brick", (0.78, 0.60, 0.48)),
+    ("sandstone", (0.82, 0.72, 0.55)), ("limestone", (0.85, 0.82, 0.72)),
+    ("travertine", (0.84, 0.78, 0.66)), ("marble", (0.90, 0.89, 0.86)),
+    ("granite", (0.50, 0.49, 0.48)), ("slate", (0.36, 0.39, 0.42)),
+    ("stone", (0.70, 0.68, 0.62)), ("concrete", (0.68, 0.67, 0.64)),
+    ("plaster", (0.88, 0.86, 0.80)), ("stucco", (0.87, 0.84, 0.77)),
+    ("render", (0.86, 0.84, 0.78)), ("teak", (0.55, 0.38, 0.23)),
+    ("walnut", (0.40, 0.28, 0.19)), ("oak", (0.62, 0.48, 0.32)),
+    ("timber", (0.52, 0.37, 0.24)), ("wood", (0.55, 0.40, 0.26)),
+    ("bamboo", (0.74, 0.62, 0.40)), ("corten", (0.55, 0.34, 0.24)),
+    ("copper", (0.72, 0.45, 0.30)), ("bronze", (0.55, 0.44, 0.28)),
+    ("steel", (0.62, 0.64, 0.67)), ("aluminium", (0.72, 0.74, 0.76)),
+    ("aluminum", (0.72, 0.74, 0.76)), ("metal", (0.60, 0.62, 0.65)),
+    ("cream", (0.90, 0.86, 0.76)), ("ivory", (0.92, 0.90, 0.82)),
+    ("charcoal", (0.26, 0.26, 0.27)),
+]
+
+
+def _material_color(name) -> tuple | None:
+    """Resolve a descriptive material string to a colour, or None.
+
+    Substring-matches architectural materials and the basic CSS palette, then
+    applies simple tone modifiers ("pale"/"light" lighten, "dark" darkens) so
+    "pale cream-beige brick" reads light and "dark stained timber" reads deep.
+    """
+    if not isinstance(name, str) or not name.strip():
+        return None
+    s = name.lower()
+    hit = next((rgb for kw, rgb in _MATERIAL_COLORS if kw in s), None)
+    if hit is None:
+        # Basic CSS colours are short words ("tan", "red") — match on word
+        # boundaries so "tan" doesn't fire inside "unobtanium"/"titanium".
+        words = set(s.replace("-", " ").replace("/", " ").split())
+        hit = next((rgb for kw, rgb in _CSS.items() if kw in words), None)
+    if hit is None:
+        return None
+    if any(w in s for w in ("dark", "charcoal", "ebony", "espresso", "walnut stain")):
+        hit = tuple(c * 0.72 for c in hit)
+    elif any(w in s for w in ("pale", "light", "off-white", "bleached", "whitewash")):
+        hit = tuple(min(1.0, c * 0.55 + 0.45) for c in hit)
+    return hit
+
+
 def _color_for(obj: dict, materials_by_key: dict) -> tuple:
     c = obj.get("color")
     if isinstance(c, str) and c.strip():
@@ -71,17 +123,27 @@ def _color_for(obj: dict, materials_by_key: dict) -> tuple:
         if parsed:
             return parsed
     mref = obj.get("material")
-    if isinstance(mref, str):
+    if isinstance(mref, str) and mref.strip():
         mat = materials_by_key.get(mref) or materials_by_key.get(mref.lower())
         if mat:
             parsed = _parse_color(mat.get("color"), None)
             if parsed:
                 return parsed
+            named = _material_color(mat.get("name") or mref)
+            if named:
+                return named
+        named = _material_color(mref)  # resolve the descriptive material string
+        if named:
+            return named
     return _TYPE_DEFAULT.get(str(obj.get("type", "")).lower(), (0.78, 0.76, 0.72))
 
 
 # ── geometry ─────────────────────────────────────────────────────────────────
 _VOID_TYPES = {"atrium", "courtyard", "void", "shaft", "lightwell", "cutout"}
+# Facade screens: one object → an ARRAY of thin slat solids (a brise-soleil /
+# louvre / timber screen), not a single box. Built by ``_screen_slats``.
+_SCREEN_TYPES = {"screen", "louver", "louvre", "louvers", "louvres",
+                 "brise_soleil", "brise-soleil", "slats", "grille", "jali"}
 # Object types that hang on a wall / ceiling and keep their authored height;
 # everything else is floor-placed (the LLM's vertical coordinate is unreliable —
 # often depth, which otherwise floats the piece metres off the floor).
@@ -112,6 +174,50 @@ def _box(l: float, h: float, w: float, cx: float, cy: float, cz: float, rot_y_de
     if abs(rot_y_deg) > 1e-6:
         m = m.rotate((0.0, rot_y_deg, 0.0))
     return m.translate((cx, cy, cz))
+
+
+def _screen_slats(obj: dict, unit: str | None) -> list:
+    """Expand a screen/louvre/brise-soleil object into an ARRAY of thin slat
+    boxes across its region — the geometry a single box can never represent.
+
+    The region is the object's footprint (position = centre-base) × height.
+    ``orientation`` picks the slat run: "horizontal" (default) stacks slats up
+    the Y axis; "vertical" stacks them across X. Slat count comes from
+    ``slat_count`` or is derived from ``slat_thickness`` + ``slat_gap``. An
+    optional ``gradient`` ("top"/"bottom") biases the spacing denser toward that
+    end — the signature move of a screen that reads solid at the top and opens up
+    lower down. Rotation about vertical is honoured so an angled screen works.
+    """
+    d = obj.get("dimensions") or {}
+    L = _to_m(d.get("length"), unit) or 2.0     # x extent
+    Wd = _to_m(d.get("width"), unit) or 0.12    # z depth of each slat
+    H = _to_m(d.get("height"), unit) or 2.0     # y extent
+    p = obj.get("position") or {}
+    cx, cy, cz = float(p.get("x", 0) or 0), float(p.get("y", 0) or 0), float(p.get("z", 0) or 0)
+    rot = (obj.get("rotation") or {}).get("y", 0) or 0 if isinstance(obj.get("rotation"), dict) else 0
+
+    vertical = str(obj.get("orientation") or "horizontal").lower().startswith("vert")
+    span = L if vertical else H
+    t = _to_m(obj.get("slat_thickness"), unit) or 0.05
+    gap = _to_m(obj.get("slat_gap"), unit) or max(t, 0.05)
+    count = obj.get("slat_count")
+    n = int(count) if count else max(2, int(span / max(t + gap, 1e-3)))
+    n = max(2, min(n, 48))  # cap for performance — 48 slats is plenty
+
+    grad = str(obj.get("gradient") or "").lower()
+    gamma = 0.55 if grad in ("top", "top_dense", "dense_top") else \
+        (1.8 if grad in ("bottom", "bottom_dense", "dense_bottom") else 1.0)
+    usable = max(span - t, 1e-3)
+
+    slats = []
+    for i in range(n):
+        f = i / (n - 1)
+        pos = usable * (f ** gamma)
+        if vertical:
+            slats.append(_box(t, H, Wd, cx - L / 2 + t / 2 + pos, cy, cz, float(rot)))
+        else:
+            slats.append(_box(L, t, Wd, cx, cy + pos, cz, float(rot)))
+    return slats
 
 
 # Object types that mean "this is a site/building, not a room" — so a large
@@ -283,8 +389,14 @@ def build_scene(graph: dict) -> tuple[list[Solid], tuple, str]:
         interior = False
 
     raw = []
+    screen_objs = []
     for obj in graph.get("objects") or []:
         if not isinstance(obj, dict):
+            continue
+        otype = str(obj.get("type") or "").lower()
+        # A screen/louvre is one object → many slats; expand it separately.
+        if otype in _SCREEN_TYPES:
+            screen_objs.append(obj)
             continue
         d = obj.get("dimensions") or {}
         unit = d.get("unit")
@@ -296,7 +408,6 @@ def build_scene(graph: dict) -> tuple[list[Solid], tuple, str]:
         # Floor-place furniture in INTERIORS (the LLM's vertical coord is
         # unreliable there). Keep the authored height for wall/ceiling items, and
         # for exterior massing (multi-storey volumes must keep their level).
-        otype = str(obj.get("type") or "").lower()
         cy = 0.0 if (interior and otype not in _WALL_MOUNTED) else float(p.get("y", 0) or 0)
         rot = (obj.get("rotation") or {}).get("y", 0) or 0
         raw.append((obj, _box(l, h, w, cx, cy, cz, float(rot))))
@@ -346,6 +457,15 @@ def build_scene(graph: dict) -> tuple[list[Solid], tuple, str]:
             type=str(o.get("type") or "object"),
             color=_color_for(o, materials_by_key), manifold=m,
         ))
+
+    # Facade screens: each becomes an array of slat solids (a real brise-soleil).
+    for so in screen_objs:
+        unit = (so.get("dimensions") or {}).get("unit")
+        color = _color_for(so, materials_by_key)
+        base_id = str(so.get("id") or so.get("name") or "screen")
+        sname = str(so.get("name") or so.get("type") or "screen")
+        for j, sm in enumerate(_screen_slats(so, unit)):
+            solids.append(Solid(f"{base_id}_slat{j}", sname, "screen", color, sm))
 
     lo = np.array([np.inf] * 3)
     hi = np.array([-np.inf] * 3)

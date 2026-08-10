@@ -97,11 +97,11 @@ const DRAWINGS_CATALOGUE: {
   /** True when the project-scoped fetch path is wired in api-client. */
   wired: boolean;
 }[] = [
-  { id: "plan_view",       name: "Plan View",       summary: "Top-down — overall dims, key measurements, section refs, hatches.",                 wired: true },
-  { id: "elevation_view",  name: "Elevation View",  summary: "Front/side — heights, leg-base proportions, hardware + detail callouts.",          wired: true },
-  { id: "section_view",    name: "Section View",    summary: "Cut-through — internal layers, joints, seat depth, leg taper details.",            wired: true },
-  { id: "isometric_view",  name: "Isometric View",  summary: "3D iso — overall form, material finishes, superimposed dimensions.",               wired: true },
-  { id: "detail_sheet",    name: "Detail Sheet",    summary: "Zoomed details — joints, hardware, edge profiles, seams, transitions.",            wired: true },
+  { id: "plan_view",       name: "Plan View",       summary: "Top-down — every room, walls, furniture, doors, and overall dimensions.",           wired: true },
+  { id: "elevation_view",  name: "Elevation View",  summary: "Exterior face — building silhouette, room heights, window & door openings.",       wired: true },
+  { id: "section_view",    name: "Section View",    summary: "Vertical cut — rooms in section, floor/ceiling, poché walls, furniture at the cut.", wired: true },
+  { id: "isometric_view",  name: "Isometric View",  summary: "3D axonometric — every room massed with its furniture placed inside it.",          wired: true },
+  { id: "detail_sheet",    name: "Detail Sheet",    summary: "Construction junctions — wall/floor, wall/ceiling, jamb, threshold for the main room.", wired: true },
 ];
 
 /* BRD §2B diagram catalogue. Each id MUST match a generator in the
@@ -521,6 +521,15 @@ export default function ImageWorkspaceMvp2() {
         lighting,
         view_mode: viewMode,
         drawing_type: "3d-render",
+        // Site + climate brief → the backend reasons from constraints for
+        // exterior designs (e.g. adds a brise-soleil on a sun-exposed facade)
+        // and returns design_rationale. Built from the left-rail Space & Site
+        // (orientation) + Regulatory (climate zone); absent fields are a no-op.
+        site: {
+          climate_zone: briefRegulatory.climatic_zone || undefined,
+          facade_orientation: briefSpace.orientation || undefined,
+          location: briefSpace.site_notes?.trim() || undefined,
+        },
       });
 
       if (!graphRes.image_url) {
@@ -535,6 +544,19 @@ export default function ImageWorkspaceMvp2() {
         setGenerateNotice(
           "Design graph generated. Render skipped — GEMINI_API_KEY not set or provider failed.",
         );
+      }
+
+      // Surface the climate-responsive design decisions the backend reasoned
+      // from the site & climate brief (design_reasoning) — the "what it decided
+      // and why". Present only for exterior designs given a site brief.
+      if (graphRes.design_rationale?.length) {
+        const n = graphRes.design_rationale.length;
+        useToastStore.getState().notify({
+          type: "success",
+          title: `Design decisions · ${n} applied`,
+          message: graphRes.design_rationale[0],
+        });
+        setGenerateNotice("Your brief shaped this design — " + graphRes.design_rationale[0]);
       }
 
       // 3 — push combined record (image_url comes from the same response)
@@ -2772,7 +2794,7 @@ function ViewsTab({
   };
 
   // Fires the right project-scoped backend call. plan_view → floor-plan
-  // package; the other working drawings → their LLM-backed view route;
+  // package; the other working drawings → their deterministic geometry view route;
   // diagrams → design.generateDiagrams, which targets a single diagram_id.
   const open = async (kind: "drawing" | "diagram", id: string, name: string) => {
     if (!hasActiveProject || !activeProjectId) {

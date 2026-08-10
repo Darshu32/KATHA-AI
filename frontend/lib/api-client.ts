@@ -762,6 +762,10 @@ export const design = {
       ratio?: string;
       quality?: string;
       drawing_type?: string;
+      // Site + climate brief. When present on an exterior/architecture design,
+      // the backend reasons from constraints (design_reasoning) — e.g. adds a
+      // brise-soleil on a sun-exposed facade — and returns design_rationale.
+      site?: { location?: string; climate_zone?: string; facade_orientation?: string };
     },
   ) =>
     request<{
@@ -771,6 +775,8 @@ export const design = {
       estimate: unknown;
       image_url: string | null;
       objects_bbox: Array<{ id: string; name: string; type: string; x: number; y: number; w: number; h: number }>;
+      // Climate-responsive design decisions + rationale ("what it decided & why").
+      design_rationale?: string[];
       // BRD §1B / §9.1 — validation report runs inline with the
       // generation pipeline so the Problems terminal tab has real
       // content from the very first render.
