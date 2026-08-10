@@ -125,10 +125,12 @@ You MUST follow these rules strictly:
          volume, never a solid — use one to fill a recessed loggia, shade a
          facade, or veil a window. Add `orientation` ("horizontal" slats stack up
          the height — the usual timber-screen look; "vertical" run top-to-bottom),
-         and OPTIONALLY `slat_gap` + `slat_thickness` (metres) or `slat_count`,
-         and `gradient` ("top" = tightly packed at the top and opening out toward
-         the bottom, "bottom" = the reverse). Place the screen at the OPENING it
-         fills — same footprint, a shallow depth (width ≈ 0.1–0.2 m).
+         and OPTIONALLY `slat_gap` + `slat_thickness` (metres) or `slat_count`.
+         SET `gradient` whenever the brief describes UNEVEN spacing: "top" =
+         tightly packed at the top and opening out toward the bottom (use this for
+         "dense/tight at the top, widening downward"), "bottom" = the reverse.
+         Place the screen at the OPENING it fills — same footprint, a shallow
+         depth (width ≈ 0.1–0.2 m).
      GROUND THE MASS — nothing floats. The lowest volume sits on the ground (y=0);
      every higher volume RESTS on the one below (its y = the lower volume's
      y + height). Never leave a box hovering with empty space under it. If part of

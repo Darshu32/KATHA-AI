@@ -9,7 +9,7 @@ kernel end of that contract through the real normalize + build_scene path.
 from __future__ import annotations
 
 from app.services.graph_normalizer import normalize_graph
-from app.services.spatial.kernel import build_scene
+from app.services.spatial.kernel import _material_color, build_scene
 
 _FULL_BOX = 12.0 * 10.0 * 9.0  # the mass before any carving
 
@@ -104,6 +104,31 @@ def test_vertical_screen_stacks_across_x():
     for s in slats:  # thin in X, full height in Y
         b = s.manifold.bounding_box()
         assert (b[3] - b[0]) < 0.2 and (b[4] - b[1]) > 3.0
+
+
+def test_material_color_resolves_descriptive_strings():
+    brick = _material_color("pale cream-beige Roman brick")
+    timber = _material_color("dark stained timber")
+    assert brick is not None and timber is not None
+    assert sum(brick) > sum(timber)                     # brick reads lighter than dark timber
+    assert _material_color("pale brick")[0] > _material_color("brick")[0]   # "pale" lightens
+    assert _material_color("dark timber")[0] < _material_color("timber")[0]  # "dark" darkens
+    assert _material_color("unobtanium") is None        # unknown → falls through to type default
+
+
+def test_massing_solids_take_their_material_colour():
+    g, _ = normalize_graph({
+        "design_type": "architecture", "site": {"unit": "metric"}, "spaces": [],
+        "materials": [], "objects": [
+            {"id": "mass", "type": "building", "role": "massing",
+             "material": "pale cream-beige Roman brick",
+             "position": {"x": 0, "y": 0, "z": 0},
+             "dimensions": {"length": 12, "width": 10, "height": 9}}]})
+    solids, _bbox, _kind = build_scene(g)
+    mass = next(s for s in solids if s.id == "mass")
+    # Not the grey clay default (0.86, 0.85, 0.82) — a warm brick tone instead.
+    assert mass.color != (0.86, 0.85, 0.82)
+    assert mass.color[0] > mass.color[2]  # warm: more red than blue
 
 
 def test_gradient_biases_slat_spacing():

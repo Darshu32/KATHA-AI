@@ -68,6 +68,54 @@ def _parse_color(raw, fallback=(0.78, 0.76, 0.72)):
     return fallback
 
 
+# Architectural material → representative colour. Scanned as substrings (first
+# hit wins, specifics first) so a descriptive material string like "pale
+# cream-beige Roman brick" or "dark stained timber" resolves to a sensible tone
+# in the clay render — no img2img, no external service, fully deterministic.
+_MATERIAL_COLORS = [
+    ("terracotta", (0.72, 0.42, 0.30)), ("brick", (0.78, 0.60, 0.48)),
+    ("sandstone", (0.82, 0.72, 0.55)), ("limestone", (0.85, 0.82, 0.72)),
+    ("travertine", (0.84, 0.78, 0.66)), ("marble", (0.90, 0.89, 0.86)),
+    ("granite", (0.50, 0.49, 0.48)), ("slate", (0.36, 0.39, 0.42)),
+    ("stone", (0.70, 0.68, 0.62)), ("concrete", (0.68, 0.67, 0.64)),
+    ("plaster", (0.88, 0.86, 0.80)), ("stucco", (0.87, 0.84, 0.77)),
+    ("render", (0.86, 0.84, 0.78)), ("teak", (0.55, 0.38, 0.23)),
+    ("walnut", (0.40, 0.28, 0.19)), ("oak", (0.62, 0.48, 0.32)),
+    ("timber", (0.52, 0.37, 0.24)), ("wood", (0.55, 0.40, 0.26)),
+    ("bamboo", (0.74, 0.62, 0.40)), ("corten", (0.55, 0.34, 0.24)),
+    ("copper", (0.72, 0.45, 0.30)), ("bronze", (0.55, 0.44, 0.28)),
+    ("steel", (0.62, 0.64, 0.67)), ("aluminium", (0.72, 0.74, 0.76)),
+    ("aluminum", (0.72, 0.74, 0.76)), ("metal", (0.60, 0.62, 0.65)),
+    ("cream", (0.90, 0.86, 0.76)), ("ivory", (0.92, 0.90, 0.82)),
+    ("charcoal", (0.26, 0.26, 0.27)),
+]
+
+
+def _material_color(name) -> tuple | None:
+    """Resolve a descriptive material string to a colour, or None.
+
+    Substring-matches architectural materials and the basic CSS palette, then
+    applies simple tone modifiers ("pale"/"light" lighten, "dark" darkens) so
+    "pale cream-beige brick" reads light and "dark stained timber" reads deep.
+    """
+    if not isinstance(name, str) or not name.strip():
+        return None
+    s = name.lower()
+    hit = next((rgb for kw, rgb in _MATERIAL_COLORS if kw in s), None)
+    if hit is None:
+        # Basic CSS colours are short words ("tan", "red") — match on word
+        # boundaries so "tan" doesn't fire inside "unobtanium"/"titanium".
+        words = set(s.replace("-", " ").replace("/", " ").split())
+        hit = next((rgb for kw, rgb in _CSS.items() if kw in words), None)
+    if hit is None:
+        return None
+    if any(w in s for w in ("dark", "charcoal", "ebony", "espresso", "walnut stain")):
+        hit = tuple(c * 0.72 for c in hit)
+    elif any(w in s for w in ("pale", "light", "off-white", "bleached", "whitewash")):
+        hit = tuple(min(1.0, c * 0.55 + 0.45) for c in hit)
+    return hit
+
+
 def _color_for(obj: dict, materials_by_key: dict) -> tuple:
     c = obj.get("color")
     if isinstance(c, str) and c.strip():
@@ -75,12 +123,18 @@ def _color_for(obj: dict, materials_by_key: dict) -> tuple:
         if parsed:
             return parsed
     mref = obj.get("material")
-    if isinstance(mref, str):
+    if isinstance(mref, str) and mref.strip():
         mat = materials_by_key.get(mref) or materials_by_key.get(mref.lower())
         if mat:
             parsed = _parse_color(mat.get("color"), None)
             if parsed:
                 return parsed
+            named = _material_color(mat.get("name") or mref)
+            if named:
+                return named
+        named = _material_color(mref)  # resolve the descriptive material string
+        if named:
+            return named
     return _TYPE_DEFAULT.get(str(obj.get("type", "")).lower(), (0.78, 0.76, 0.72))
 
 
