@@ -410,6 +410,29 @@ export const chat = {
     request<{ video: { url: string; type: string } | null }>(
       "/chat/generate-video", "POST", { prompt },
     ),
+
+  /** Render note markdown to a clean, paginated PDF (server-side reportlab).
+   *  Replaces the client jsPDF path, which overlapped text on multi-section
+   *  notes. Returns the PDF blob + filename from the Content-Disposition. */
+  exportNotePdf: async (
+    title: string,
+    markdown: string,
+  ): Promise<{ blob: Blob; filename: string }> => {
+    const res = await fetch(`${API_BASE}/chat/export-note-pdf`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, markdown }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new ApiError(res.status, body);
+    }
+    const disposition = res.headers.get("Content-Disposition") ?? "";
+    const match = disposition.match(/filename="([^"]+)"/);
+    const filename = match?.[1] ?? "notes.pdf";
+    const blob = await res.blob();
+    return { blob, filename };
+  },
 };
 
 // ── Imports (BRD Layer 5B — file upload + parse) ────────────────────────

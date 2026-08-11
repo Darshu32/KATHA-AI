@@ -15,12 +15,11 @@ import { useChatStore, useImageGenStore } from "@/lib/store";
 import { useActiveNotebookSections, useNotesStore } from "@/lib/store";
 import {
   downloadTextFile,
-  notebookToHTML,
   notebookToMarkdown,
   slugifyFilename,
 } from "@/lib/notes-export";
 import { toastError, useToastStore } from "@/lib/toast-store";
-import { brief as briefApi } from "@/lib/api-client";
+import { brief as briefApi, chat as chatApi } from "@/lib/api-client";
 import NotebookView from "./notebook-view";
 import ProjectBriefPanel from "./project-brief-panel";
 
@@ -105,11 +104,8 @@ export default function NotesSidebar({ isOpen, onClose }: Props) {
     [activeTagFilters],
   );
 
-  // ``exportingPdf`` blocks a second click while jspdf is doing its
-  // (synchronously-blocking) render pass. PDFs of moderate notebooks
-  // take ~1–3 seconds; without the guard a user double-click queues
-  // two renders and the second one fights for the same hidden DOM
-  // node.
+  // ``exportingPdf`` blocks a second click while the PDF is rendering
+  // server-side, and drives the button's disabled/tooltip state.
   const [exportingPdf, setExportingPdf] = useState(false);
 
   const notebookTitle =
@@ -127,53 +123,25 @@ export default function NotesSidebar({ isOpen, onClose }: Props) {
     if (sections.length === 0 || exportingPdf) return;
     setExportingPdf(true);
     try {
-      // jspdf's ESM build is large (~700kB) — load on demand so it's
-      // not in the initial route bundle. The dynamic import is
-      // resolved by Next's chunk splitter.
-      const { default: jsPDF } = await import("jspdf");
+      // Render server-side with reportlab — real text flow, proper
+      // pagination, no overlap. (The previous client jsPDF/html2canvas
+      // path stacked text layers on top of each other on multi-section
+      // notes.) We ship the notebook markdown; the backend lays it out.
+      const md = notebookToMarkdown(sections, notebookTitle);
+      const { blob, filename } = await chatApi.exportNotePdf(notebookTitle, md);
 
-      const doc = new jsPDF({
-        unit: "pt",
-        format: "a4",
-        orientation: "portrait",
-      });
-
-      // Render to an off-screen container. We can't use display:none —
-      // jspdf.html() needs computed layout. Push it far off-canvas
-      // instead, with a fixed width matching the printed page area
-      // (A4 minus margins ≈ 515pt ≈ 686px at 96dpi).
-      const host = document.createElement("div");
-      host.style.position = "fixed";
-      host.style.top = "-10000px";
-      host.style.left = "0";
-      host.style.width = "686px";
-      host.style.background = "#ffffff";
-      host.innerHTML = notebookToHTML(sections, notebookTitle);
-      document.body.appendChild(host);
-
-      try {
-        await doc.html(host, {
-          // Margins in points (72pt = 1in). A4 is 595x842pt.
-          margin: [40, 36, 40, 36],
-          // Auto-paginate when content overflows.
-          autoPaging: "text",
-          // Scale: ratio of PDF unit width to source HTML width.
-          // 515pt page area / 686px source = ~0.751.
-          html2canvas: {
-            scale: 0.751,
-            backgroundColor: "#ffffff",
-            // Avoid CORS taint from any inlined images we don't ship
-            // yet (images-in-notes is a future phase).
-            useCORS: true,
-          },
-        });
-        doc.save(`${slugifyFilename(notebookTitle)}.pdf`);
-      } finally {
-        host.remove();
-      }
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename || `${slugifyFilename(notebookTitle)}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error("[notes] PDF export failed", err);
+      toastError(err, "Could not export PDF");
     } finally {
       setExportingPdf(false);
     }
