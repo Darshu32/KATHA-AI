@@ -90,6 +90,7 @@ export function parseDeepModeToNotes(
   content: string,
   messageId: string,
   conversationId: string,
+  sourceTitle?: string,
 ): NoteSection {
   const blocks: NoteBlock[] = [];
 
@@ -143,11 +144,16 @@ export function parseDeepModeToNotes(
     }
   }
 
-  // Generate section title from the first heading or first 60 chars
+  // Title the note from the user's own question when we have it (predictable,
+  // clean) — falling back to the first heading or the first 60 chars only when
+  // no question was passed. This avoids titling a note with the model's prose
+  // (e.g. "Here is a visual representation of an HVAC system…").
+  const cleanSource = (sourceTitle ?? "").replace(/[#*\n]/g, "").trim();
   const sectionTitle =
-    headings.length > 0
+    cleanSource ||
+    (headings.length > 0
       ? headings[0].title.replace(/concept\s*(explanation)?/i, "").trim() || headings[0].title
-      : content.slice(0, 60).replace(/[#*\n]/g, "").trim();
+      : content.slice(0, 60).replace(/[#*\n]/g, "").trim());
 
   return {
     id: crypto.randomUUID(),

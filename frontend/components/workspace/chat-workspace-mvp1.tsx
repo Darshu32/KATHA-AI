@@ -238,6 +238,7 @@ export default function ChatWorkspaceMvp1() {
                     data.content,
                     placeholder.id,
                     convoId,
+                    trimmed, // title the note from the user's question, not the model's prose
                   );
                   useNotesStore.getState().addSection(section);
 

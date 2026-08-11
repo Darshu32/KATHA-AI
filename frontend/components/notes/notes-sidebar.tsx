@@ -211,21 +211,24 @@ export default function NotesSidebar({ isOpen, onClose }: Props) {
                  *  download. PDF button shows a brief disabled
                  *  state during render to prevent double-clicks
                  *  from queuing two renders. */}
-                <button
-                  onClick={handleDownloadMarkdown}
-                  disabled={sectionCount === 0}
-                  className="p-1.5 text-ink-mute hover:text-ink-deep rounded-lg hover:bg-paper-soft transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-ink-mute disabled:cursor-not-allowed"
-                  title="Download notebook as Markdown"
-                  aria-label="Download notebook as Markdown"
-                >
-                  <Download size={15} />
-                </button>
+                {/* Primary download = PDF (a production document, opens in a
+                 *  PDF viewer — not a raw .md that opens in a code editor).
+                 *  Markdown stays as a secondary option for power users. */}
                 <button
                   onClick={handleDownloadPDF}
                   disabled={sectionCount === 0 || exportingPdf}
                   className="p-1.5 text-ink-mute hover:text-ink-deep rounded-lg hover:bg-paper-soft transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-ink-mute disabled:cursor-not-allowed"
                   title={exportingPdf ? "Generating PDF…" : "Download notebook as PDF"}
                   aria-label="Download notebook as PDF"
+                >
+                  <Download size={15} />
+                </button>
+                <button
+                  onClick={handleDownloadMarkdown}
+                  disabled={sectionCount === 0}
+                  className="p-1.5 text-ink-mute hover:text-ink-deep rounded-lg hover:bg-paper-soft transition-colors disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-ink-mute disabled:cursor-not-allowed"
+                  title="Download notebook as Markdown"
+                  aria-label="Download notebook as Markdown"
                 >
                   <FileText size={15} />
                 </button>

@@ -117,12 +117,10 @@ export function sectionToMarkdown(section: NoteSection): string {
     const tagStr = section.tags.map((t) => `\`#${t}\``).join(" ");
     lines.push(`Tags: ${tagStr}`);
   }
-  // Image (Phase 4). The data URI works in every markdown renderer
-  // we care about; readers that don't support inline images simply
-  // show the alt text. We deliberately use the section title as alt
-  // text (rather than "image") so screen readers get something
-  // meaningful.
-  if (section.imageUrl) {
+  // Image (Phase 4). Only embed a real hosted URL — a base64 data URI would
+  // bloat the .md into thousands of unreadable lines (and choke editors), so we
+  // skip it here. The image is still rendered in the PDF export and in-app.
+  if (section.imageUrl && !section.imageUrl.startsWith("data:")) {
     lines.push("");
     lines.push(`![${section.title}](${section.imageUrl})`);
   }
