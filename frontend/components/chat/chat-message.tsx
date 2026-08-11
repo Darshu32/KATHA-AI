@@ -84,6 +84,17 @@ export default function ChatMessage({ message }: ChatMessageProps) {
                   remarkPlugins={[remarkGfm]}
                   components={{
                     code: ({ className, children, ...props }) => {
+                      const text = String(children ?? "");
+                      // Render Mermaid code blocks as real diagrams, not raw text —
+                      // the model often embeds the diagram in the prose this way.
+                      const isMermaid =
+                        /language-mermaid/.test(className ?? "") ||
+                        /^\s*(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|journey|mindmap|timeline|gitGraph)[\s\n]/.test(
+                          text,
+                        );
+                      if (isMermaid && text.trim()) {
+                        return <MermaidDiagram chart={text} />;
+                      }
                       const isBlock = className?.includes("language-");
                       if (isBlock) {
                         return (
@@ -113,10 +124,14 @@ export default function ChatMessage({ message }: ChatMessageProps) {
           )}
         </div>
 
-        {/* Mermaid Diagram — Deep Mode (mandatory visual) */}
-        {!isUser && message.diagram && (
-          <MermaidDiagram chart={message.diagram} />
-        )}
+        {/* Mermaid Diagram — Deep Mode. Render the model's `diagram` field only
+            when it did not already embed a mermaid block in the prose above
+            (the code-block renderer handles that case), so we never double up. */}
+        {!isUser &&
+          message.diagram &&
+          !/(?:```mermaid|(?:^|\n)\s*(?:flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|journey|mindmap|timeline|gitGraph)[\s\n])/.test(
+            message.content ?? "",
+          ) && <MermaidDiagram chart={message.diagram} />}
 
         {/* AI-Generated Image */}
         {!isUser && message.images && message.images.length > 0 && (

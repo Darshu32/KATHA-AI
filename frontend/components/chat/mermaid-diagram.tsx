@@ -1,33 +1,35 @@
 "use client";
 
-import { useEffect, useId, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+
+// Module-level counter so every render() call gets a unique DOM id — React's
+// dev double-invoke (and multiple diagrams on a page) would otherwise collide.
+let _seq = 0;
 
 /**
  * Renders a Mermaid diagram string (from Deep-mode chat) to inline SVG.
  *
  * Mermaid is browser-only and heavy, so it is imported lazily inside the effect
- * — never during SSR, and out of the initial bundle. The diagram text comes from
- * the model, so it is rendered with securityLevel "strict" (labels sanitised),
- * and if it fails to parse we fall back to showing the raw source rather than
- * crashing the message.
+ * — never during SSR, and out of the initial bundle. If the text fails to parse
+ * we fall back to showing the raw source rather than crashing the message.
  */
 export default function MermaidDiagram({ chart }: { chart: string }) {
   const ref = useRef<HTMLDivElement>(null);
   const [failed, setFailed] = useState(false);
-  const rawId = useId().replace(/[^a-zA-Z0-9]/g, "");
 
   useEffect(() => {
     let cancelled = false;
+    const id = `mmd-${(_seq += 1)}`;
     (async () => {
       try {
         const mermaid = (await import("mermaid")).default;
         mermaid.initialize({
           startOnLoad: false,
-          securityLevel: "strict",
+          securityLevel: "loose",
           theme: "neutral",
           fontFamily: "inherit",
         });
-        const { svg } = await mermaid.render(`mmd-${rawId}`, chart.trim());
+        const { svg } = await mermaid.render(id, chart.trim());
         if (!cancelled && ref.current) {
           ref.current.innerHTML = svg;
           setFailed(false);
@@ -39,7 +41,7 @@ export default function MermaidDiagram({ chart }: { chart: string }) {
     return () => {
       cancelled = true;
     };
-  }, [chart, rawId]);
+  }, [chart]);
 
   if (failed) {
     return (
