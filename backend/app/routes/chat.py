@@ -60,6 +60,9 @@ class VideoGenerateRequest(BaseModel):
 class NotePdfRequest(BaseModel):
     title: str = Field(default="Notes", max_length=300)
     markdown: str = Field(min_length=1, max_length=400_000)
+    # Maps ![](key) markers → PNG data URIs for client-rasterised mermaid
+    # diagrams (mermaid can't render server-side). Optional.
+    images: dict[str, str] | None = None
 
 
 # ── Media Endpoints ─────────────────────────────────────────────────────────
@@ -73,7 +76,7 @@ async def export_note_pdf(body: NotePdfRequest):
     reportlab lays out real text flow instead. Returns the PDF as an
     attachment so the browser saves it straight to disk.
     """
-    pdf = render_notes_pdf(body.title, body.markdown)
+    pdf = render_notes_pdf(body.title, body.markdown, body.images)
     safe = re.sub(r"[^a-zA-Z0-9._-]+", "-", body.title).strip("-").lower() or "notes"
     return Response(
         content=pdf,

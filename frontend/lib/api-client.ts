@@ -417,11 +417,12 @@ export const chat = {
   exportNotePdf: async (
     title: string,
     markdown: string,
+    images?: Record<string, string>,
   ): Promise<{ blob: Blob; filename: string }> => {
     const res = await fetch(`${API_BASE}/chat/export-note-pdf`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title, markdown }),
+      body: JSON.stringify({ title, markdown, images }),
     });
     if (!res.ok) {
       const body = await res.text().catch(() => "");

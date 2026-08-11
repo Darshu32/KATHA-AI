@@ -14,10 +14,12 @@ import {
 import { useChatStore, useImageGenStore } from "@/lib/store";
 import { useActiveNotebookSections, useNotesStore } from "@/lib/store";
 import {
+  diagramMarkerKey,
   downloadTextFile,
   notebookToMarkdown,
   slugifyFilename,
 } from "@/lib/notes-export";
+import { mermaidToPng } from "@/lib/mermaid-render";
 import { toastError, useToastStore } from "@/lib/toast-store";
 import { brief as briefApi, chat as chatApi } from "@/lib/api-client";
 import NotebookView from "./notebook-view";
@@ -123,12 +125,34 @@ export default function NotesSidebar({ isOpen, onClose }: Props) {
     if (sections.length === 0 || exportingPdf) return;
     setExportingPdf(true);
     try {
+      // Rasterise each section's mermaid diagram to a PNG here in the browser
+      // (the server can't run mermaid). Ones that succeed get an image marker
+      // in the markdown + an entry in the images map; any that fail fall back
+      // to a ```mermaid fence — still readable, just not a picture.
+      const images: Record<string, string> = {};
+      const diagramImageKeys = new Set<string>();
+      await Promise.all(
+        sections
+          .filter((s) => s.diagram)
+          .map(async (s) => {
+            const png = await mermaidToPng(s.diagram!);
+            if (png) {
+              images[diagramMarkerKey(s.id)] = png;
+              diagramImageKeys.add(s.id);
+            }
+          }),
+      );
+
       // Render server-side with reportlab — real text flow, proper
       // pagination, no overlap. (The previous client jsPDF/html2canvas
       // path stacked text layers on top of each other on multi-section
       // notes.) We ship the notebook markdown; the backend lays it out.
-      const md = notebookToMarkdown(sections, notebookTitle);
-      const { blob, filename } = await chatApi.exportNotePdf(notebookTitle, md);
+      const md = notebookToMarkdown(sections, notebookTitle, { diagramImageKeys });
+      const { blob, filename } = await chatApi.exportNotePdf(
+        notebookTitle,
+        md,
+        Object.keys(images).length ? images : undefined,
+      );
 
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");

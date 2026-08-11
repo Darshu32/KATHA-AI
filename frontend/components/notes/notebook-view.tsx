@@ -9,6 +9,7 @@ import NoteSectionImage from "./note-section-image";
 import NoteSectionTags from "./note-section-tags";
 import NoteBlock from "./note-block";
 import AddBlockMenu from "./add-block-menu";
+import MermaidDiagram from "@/components/chat/mermaid-diagram";
 
 export default function NotebookView() {
   const sections = useActiveNotebookSections();
@@ -90,6 +91,14 @@ export default function NotebookView() {
               imageUrl={section.imageUrl}
               alt={section.title}
             />
+          )}
+
+          {/* Deep-mode diagram — rendered as a real Mermaid figure, the same
+              way it appears in the chat message. */}
+          {section.diagram && (
+            <div className="mb-1">
+              <MermaidDiagram chart={section.diagram} />
+            </div>
           )}
 
           <NoteSectionTags sectionId={section.id} tags={section.tags ?? []} />

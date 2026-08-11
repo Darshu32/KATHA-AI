@@ -239,6 +239,7 @@ export default function ChatWorkspaceMvp1() {
                     placeholder.id,
                     convoId,
                     trimmed, // title the note from the user's question, not the model's prose
+                    data.diagram ?? undefined, // render the deep-mode diagram in the note
                   );
                   useNotesStore.getState().addSection(section);
 
@@ -844,6 +845,8 @@ function MessageActions({
         message.content || "",
         message.id,
         conversationId,
+        undefined,
+        message.diagram,
       );
       useNotesStore.getState().addSection(section);
       // Open the notes panel so the architect sees the new section

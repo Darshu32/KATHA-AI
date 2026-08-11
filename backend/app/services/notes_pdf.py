@@ -6,6 +6,7 @@ properly paginated PDF with reportlab Platypus — real text flow, no overlap.
 """
 from __future__ import annotations
 
+import base64
 import io
 import re
 from xml.sax.saxutils import escape as _esc
@@ -14,7 +15,9 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
 from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
 from reportlab.platypus import (
+    Image as RLImage,
     ListFlowable,
     Paragraph,
     SimpleDocTemplate,
@@ -30,7 +33,7 @@ _CODE_BG = colors.HexColor("#f2efe9")
 _BOLD = re.compile(r"\*\*(.+?)\*\*")
 _CODE = re.compile(r"`([^`]+)`")
 _ITAL = re.compile(r"(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)")
-_IMG = re.compile(r"^!\[.*\]\(.*\)\s*$")
+_IMG = re.compile(r"^!\[.*\]\((.*?)\)\s*$")
 _HEAD = re.compile(r"^(#{1,3})\s+(.+)$")
 _BULLET = re.compile(r"^[-*]\s+(.+)$")
 _NUM = re.compile(r"^\d+[.)]\s+(.+)$")
@@ -66,7 +69,35 @@ def _inline(text: str) -> str:
     return s
 
 
-def _flowables(markdown: str, st: dict) -> list:
+def _image_flowable(key: str, images: dict | None, max_w: float):
+    """Embed a base64 PNG referenced by an ``![](key)`` marker.
+
+    ``images`` maps a marker key (e.g. a section-diagram id) to a PNG data
+    URI the browser rasterised — mermaid can't render server-side, so the
+    client hands us a ready-made picture. Returns None (marker skipped) when
+    the key is unknown or the payload isn't decodable.
+    """
+    src = (images or {}).get(key)
+    if not src or "base64," not in src:
+        return None
+    try:
+        raw = base64.b64decode(src.split("base64,", 1)[1])
+        iw, ih = ImageReader(io.BytesIO(raw)).getSize()
+        if not iw or not ih:
+            return None
+        draw_w = min(max_w, iw * 0.5)          # undo the 2x export scale, cap to column
+        draw_h = draw_w * ih / iw
+        if draw_h > 460:                        # keep one diagram from filling a page
+            draw_h = 460
+            draw_w = draw_h * iw / ih
+        img = RLImage(io.BytesIO(raw), width=draw_w, height=draw_h)
+        img.hAlign = "CENTER"
+        return img
+    except Exception:
+        return None
+
+
+def _flowables(markdown: str, st: dict, images: dict | None, max_w: float) -> list:
     flow: list = []
     bullets: list = []
     lines = (markdown or "").split("\n")
@@ -101,7 +132,13 @@ def _flowables(markdown: str, st: dict) -> list:
             flush_bullets()
             i += 1
             continue
-        if _IMG.match(line):                  # skip images (base64 or otherwise)
+        mi = _IMG.match(line)
+        if mi:                                # image marker → embed if we have it
+            flush_bullets()
+            img = _image_flowable(mi.group(1), images, max_w)
+            if img is not None:
+                flow.append(img)
+                flow.append(Spacer(1, 6))
             i += 1
             continue
 
@@ -140,12 +177,18 @@ def _flowables(markdown: str, st: dict) -> list:
     return flow
 
 
-def render_notes_pdf(title: str, markdown: str) -> bytes:
-    """Render note ``markdown`` to a clean A4 PDF and return the bytes."""
+def render_notes_pdf(title: str, markdown: str, images: dict | None = None) -> bytes:
+    """Render note ``markdown`` to a clean A4 PDF and return the bytes.
+
+    ``images`` optionally maps ``![](key)`` markers to PNG data URIs (used for
+    client-rasterised mermaid diagrams the server can't render itself).
+    """
     buf = io.BytesIO()
+    margin = 18 * mm
     doc = SimpleDocTemplate(
         buf, pagesize=A4, title=(title or "Notes"),
-        topMargin=20 * mm, bottomMargin=18 * mm, leftMargin=18 * mm, rightMargin=18 * mm,
+        topMargin=20 * mm, bottomMargin=margin, leftMargin=margin, rightMargin=margin,
     )
-    doc.build(_flowables(markdown, _styles()) or [Spacer(1, 1)])
+    max_w = A4[0] - 2 * margin
+    doc.build(_flowables(markdown, _styles(), images, max_w) or [Spacer(1, 1)])
     return buf.getvalue()
