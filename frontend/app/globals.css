@@ -86,6 +86,13 @@ body {
   background-color: var(--paper);
   color: var(--ink);
   font-family: var(--sans-stack);
+  /* Only the Roman (400) weight of Avenir LT Pro is available, so switch OFF
+     synthetic bold: every heavier font-weight (medium/semibold/bold) renders
+     the TRUE Avenir Roman instead of a browser-faked bold. Hierarchy comes
+     from size + spacing, not weight. Italic synthesis stays on. Forward-
+     compatible: add real Medium/Heavy files in layout.tsx and delete this line
+     to bring genuine bold back. */
+  font-synthesis: style;
   font-feature-settings: "kern", "calt";
   font-size: 15px;
   line-height: 1.55;
