@@ -28,6 +28,7 @@ import type {
   Vec3,
   NoteBlock,
   NoteSection,
+  NoteVideo,
   Notebook,
   ProjectType,
   ConvBrief,
@@ -934,6 +935,8 @@ interface NotesState {
   // image. Both flavors mark the section dirty so the change syncs
   // to the server on the next debounce.
   setSectionImage: (sectionId: string, imageUrl: string | null) => void;
+  // Deep-mode video for a section (or null to clear). Marks dirty for sync.
+  setSectionVideo: (sectionId: string, video: NoteVideo | null) => void;
 
   // Sync helpers — called by ``useNotesPersist``.
   hydrateConversation: (conversationId: string, sections: NoteSection[]) => void;
@@ -1179,6 +1182,20 @@ export const useNotesStore = create<NotesState>()(
             s.notebooksByConversation,
             sectionId,
             (sec) => ({ ...sec, imageUrl }),
+          );
+          if (!ownerCid) return s;
+          return {
+            notebooksByConversation: notebooks,
+            dirtySectionIds: addUnique(s.dirtySectionIds, sectionId),
+          };
+        }),
+
+      setSectionVideo: (sectionId, video) =>
+        set((s) => {
+          const { notebooks, ownerCid } = withUpdatedSection(
+            s.notebooksByConversation,
+            sectionId,
+            (sec) => ({ ...sec, video }),
           );
           if (!ownerCid) return s;
           return {

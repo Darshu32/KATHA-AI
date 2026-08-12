@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback } from "react";
-import { NotebookPen } from "lucide-react";
+import { NotebookPen, Play } from "lucide-react";
 import { useActiveNotebookSections, useNotesStore } from "@/lib/store";
 import type { NoteBlockType } from "@/lib/types";
 import NoteSectionHeader from "./note-section-header";
@@ -99,6 +99,38 @@ export default function NotebookView() {
             <div className="mb-1">
               <MermaidDiagram chart={section.diagram} />
             </div>
+          )}
+
+          {/* Deep-mode video — a "Watch on YouTube" card (thumbnail when we
+              have a specific video, a play glyph for the search fallback). */}
+          {section.video?.url && (
+            <a
+              href={section.video.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="group mb-1.5 flex items-center gap-2 rounded-lg border border-hairline bg-paper-soft px-2.5 py-2 transition-colors hover:bg-paper-deep"
+            >
+              {section.video.thumbnail ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={section.video.thumbnail}
+                  alt=""
+                  className="h-10 w-16 flex-shrink-0 rounded object-cover"
+                />
+              ) : (
+                <span className="flex h-10 w-16 flex-shrink-0 items-center justify-center rounded bg-[#ffe9e6]">
+                  <Play size={16} className="text-[#e53e3e]" fill="#e53e3e" />
+                </span>
+              )}
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-[#e53e3e]">
+                  <Play size={10} fill="#e53e3e" /> Watch on YouTube
+                </span>
+                <span className="block truncate text-xs text-ink-soft group-hover:text-ink-deep">
+                  {section.video.title || "Related video"}
+                </span>
+              </span>
+            </a>
           )}
 
           <NoteSectionTags sectionId={section.id} tags={section.tags ?? []} />

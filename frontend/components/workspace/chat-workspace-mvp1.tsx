@@ -190,6 +190,11 @@ export default function ChatWorkspaceMvp1() {
               // Deep mode always surfaces an on-topic video (mandatory visual):
               // search YouTube for the guaranteed query and attach the result to
               // the message. Best-effort — the answer is already rendered.
+              //
+              // ``noteSectionId`` is filled in by the note-creation branch below,
+              // which runs synchronously (before this fetch resolves), so the
+              // .then can also pin the video onto the persisted note.
+              let noteSectionId: string | undefined;
               if (data.mode === "deep" && data.youtube_query && convoId) {
                 chatApi
                   .searchYoutube(data.youtube_query, 3)
@@ -205,6 +210,15 @@ export default function ChatWorkspaceMvp1() {
                     }));
                     if (vids.length) {
                       updateLastMessageFull(convoId, { youtubeLinks: vids });
+                      if (noteSectionId) {
+                        const v = vids[0];
+                        useNotesStore.getState().setSectionVideo(noteSectionId, {
+                          url: v.url,
+                          title: v.title,
+                          thumbnail: v.thumbnail ?? "",
+                          channel: v.channel ?? v.source ?? "",
+                        });
+                      }
                     }
                   })
                   .catch(() => {
@@ -242,6 +256,9 @@ export default function ChatWorkspaceMvp1() {
                     data.diagram ?? undefined, // render the deep-mode diagram in the note
                   );
                   useNotesStore.getState().addSection(section);
+                  // Let the YouTube fetch above (resolves after this runs) pin
+                  // its video onto this note, not just the chat message.
+                  noteSectionId = section.id;
 
                   // Phase 4 — auto-generate the section image in
                   // the background. We deliberately *don't* await
@@ -849,6 +866,16 @@ function MessageActions({
         message.diagram,
       );
       useNotesStore.getState().addSection(section);
+      // Carry the message's video onto the saved note too.
+      const yt = message.youtubeLinks?.[0] ?? message.video ?? null;
+      if (yt) {
+        useNotesStore.getState().setSectionVideo(section.id, {
+          url: yt.url,
+          title: yt.title,
+          thumbnail: yt.thumbnail ?? "",
+          channel: yt.channel ?? yt.source ?? "",
+        });
+      }
       // Open the notes panel so the architect sees the new section
       // land in the right rail — closes the loop visually.
       useNotesStore.getState().setNotesPanelOpen(true);

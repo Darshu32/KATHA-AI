@@ -150,6 +150,13 @@ export function sectionToMarkdown(section: NoteSection, opts?: SectionMarkdownOp
       lines.push("```");
     }
   }
+  // Video (Deep mode) — a clickable "Watch on YouTube" link. Renders as a real
+  // link in both the PDF (reportlab <a>) and plain markdown.
+  if (section.video?.url) {
+    const vt = (section.video.title || "").replace(/[[\]]/g, "").trim();
+    lines.push("");
+    lines.push(`[Watch on YouTube${vt ? ` — ${vt}` : ""}](${section.video.url})`);
+  }
   lines.push("");
 
   // Each block on its own paragraph block. Blank line between

@@ -33,6 +33,7 @@ _CODE_BG = colors.HexColor("#f2efe9")
 _BOLD = re.compile(r"\*\*(.+?)\*\*")
 _CODE = re.compile(r"`([^`]+)`")
 _ITAL = re.compile(r"(?<!\*)\*(?!\s)(.+?)(?<!\s)\*(?!\*)")
+_LINK = re.compile(r"(?<!\!)\[([^\]]+)\]\(([^)]+)\)")  # [text](url), not ![img](url)
 _IMG = re.compile(r"^!\[.*\]\((.*?)\)\s*$")
 _HEAD = re.compile(r"^(#{1,3})\s+(.+)$")
 _BULLET = re.compile(r"^[-*]\s+(.+)$")
@@ -63,6 +64,7 @@ def _styles() -> dict:
 def _inline(text: str) -> str:
     """Escape XML, then convert markdown inline spans to reportlab mini-HTML."""
     s = _esc(text)
+    s = _LINK.sub(r'<a href="\2" color="#1a5fb4"><u>\1</u></a>', s)
     s = _BOLD.sub(r"<b>\1</b>", s)
     s = _CODE.sub(r'<font face="Courier">\1</font>', s)
     s = _ITAL.sub(r"<i>\1</i>", s)
