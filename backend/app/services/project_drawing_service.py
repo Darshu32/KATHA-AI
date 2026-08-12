@@ -95,11 +95,7 @@ def render_multiroom_plan_svg(graph_data: dict) -> str:
     for r in rooms:
         x, y = mp(r["x"], r["z"])
         w, h = r["l"] * scale, r["w"] * scale
-        cx = x + w / 2
-        nfs = min(13.0, max(8.0, (w * 0.9) / max(len(r["name"]) * 0.55, 1)))
         out.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" fill="#fbf7f0" stroke="#4c3d30" stroke-width="4" stroke-linejoin="round"/>')
-        out.append(f'<text x="{cx:.1f}" y="{y + nfs + 4:.1f}" text-anchor="middle" fill="#2c221a" font-size="{nfs:.1f}" font-weight="700">{escape(r["name"][:22])}</text>')
-        out.append(f'<text x="{cx:.1f}" y="{y + nfs * 2 + 6:.1f}" text-anchor="middle" fill="#9d8a75" font-size="{nfs * 0.8:.1f}">{r["l"] * r["w"]:.1f} m²</text>')
     for f in furn:
         x, y = mp(f["x"] - f["l"] / 2, f["z"] - f["w"] / 2)
         w, h = f["l"] * scale, f["w"] * scale
@@ -134,6 +130,19 @@ def render_multiroom_plan_svg(graph_data: dict) -> str:
         p2 = mp(fixed, center + size / 2) if kind == "v" else mp(center + size / 2, fixed)
         out.append(f'<line x1="{p1[0]:.1f}" y1="{p1[1]:.1f}" x2="{p2[0]:.1f}" y2="{p2[1]:.1f}" stroke="#fcf7ef" stroke-width="6"/>')
         out.append(f'<line x1="{p1[0]:.1f}" y1="{p1[1]:.1f}" x2="{p2[0]:.1f}" y2="{p2[1]:.1f}" stroke="#8b5e3c" stroke-width="2.5" stroke-dasharray="4 3"/>')
+    # Room name + area tags drawn LAST (on top of furniture) as a top-left
+    # corner tag with a paper pill — so the label is never hidden behind a piece.
+    for r in rooms:
+        x, y = mp(r["x"], r["z"])
+        w = r["l"] * scale
+        name = r["name"][:22]
+        area = f'{r["l"] * r["w"]:.1f} m²'
+        nfs = min(13.0, max(8.0, (w * 0.9) / max(len(name) * 0.55, 1)))
+        tw = max(len(name) * nfs * 0.55, len(area) * nfs * 0.8 * 0.55) + 10
+        lx, ly = x + 5, y + 5
+        out.append(f'<rect x="{lx - 4:.1f}" y="{ly:.1f}" width="{tw:.1f}" height="{nfs * 2 + 12:.1f}" rx="3" fill="#fbf7f0" fill-opacity="0.9"/>')
+        out.append(f'<text x="{lx:.1f}" y="{ly + nfs + 2:.1f}" fill="#2c221a" font-size="{nfs:.1f}" font-weight="700">{escape(name)}</text>')
+        out.append(f'<text x="{lx:.1f}" y="{ly + nfs * 2 + 4:.1f}" fill="#9d8a75" font-size="{nfs * 0.8:.1f}">{escape(area)}</text>')
     out.append("</svg>")
     return "\n".join(out)
 
