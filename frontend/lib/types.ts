@@ -557,6 +557,13 @@ export interface NoteBlock {
   createdAt: string;
 }
 
+export interface NoteVideo {
+  url: string;
+  title: string;
+  thumbnail: string; // "" when the link is a YouTube search fallback (no single video)
+  channel: string;
+}
+
 export interface NoteSection {
   id: string;
   title: string;
@@ -578,6 +585,9 @@ export interface NoteSection {
   // diagram in the note view, and rasterised → embedded in the PDF export.
   // ``undefined`` for notes with no diagram.
   diagram?: string;
+  // Deep-mode on-topic YouTube video (or a search-URL fallback when no Data
+  // API key). Rendered as a card in the note; a clickable link in exports.
+  video?: NoteVideo | null;
 }
 
 export interface Notebook {

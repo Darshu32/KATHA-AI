@@ -300,8 +300,8 @@ async def search_youtube(
     s = _settings()
     api_key = s.youtube_api_key
     if not api_key or not api_key.strip():
-        logger.info("YOUTUBE_API_KEY not configured")
-        return []
+        logger.info("YOUTUBE_API_KEY not configured — using search-URL fallback")
+        return _youtube_search_fallback(query)
 
     url = "https://www.googleapis.com/youtube/v3/search"
     params: dict[str, Any] = {
@@ -349,11 +349,34 @@ async def search_youtube(
                 "type": "youtube",
             })
 
-        return results
+        return results or _youtube_search_fallback(query)
 
     except Exception as exc:
         logger.error("YouTube search failed: %s", exc)
-        return []
+        return _youtube_search_fallback(query)
+
+
+def _youtube_search_fallback(query: str) -> list[dict[str, str]]:
+    """A guaranteed, on-topic 'Watch on YouTube' link when the Data API is
+    unavailable (no key / quota exhausted / request failed / no hits).
+
+    Points at YouTube *search results* for the topic rather than a specific
+    video — so Deep mode's mandatory video link is always present and relevant,
+    never a silent blank. No thumbnail (there's no single video to picture);
+    callers render a play glyph instead.
+    """
+    from urllib.parse import quote_plus
+
+    q = quote_plus(f"{query} architecture")
+    return [{
+        "video_id": "",
+        "title": query,
+        "thumbnail": "",
+        "channel": "YouTube search",
+        "url": f"https://www.youtube.com/results?search_query={q}",
+        "source": "youtube",
+        "type": "youtube",
+    }]
 
 
 # ── Research Paper Search (Semantic Scholar) ────────────────────────────────
