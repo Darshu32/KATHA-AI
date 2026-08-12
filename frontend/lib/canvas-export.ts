@@ -17,7 +17,9 @@ const ACTIVE_VIEW_SELECTORS = {
 
 function findActiveView(): { kind: "svg"; el: SVGSVGElement } | { kind: "canvas"; el: HTMLCanvasElement } | null {
   const svg = document.querySelector<SVGSVGElement>(ACTIVE_VIEW_SELECTORS.svg);
-  if (svg && svg.offsetParent !== null) return { kind: "svg", el: svg };
+  // ``offsetParent`` isn't on SVGSVGElement; a rendered (non-display:none) SVG
+  // has a non-zero client rect, which is the visibility test we actually want.
+  if (svg && svg.getBoundingClientRect().width > 0) return { kind: "svg", el: svg };
   const canvas = document.querySelector<HTMLCanvasElement>(ACTIVE_VIEW_SELECTORS.canvas);
   if (canvas) return { kind: "canvas", el: canvas };
   return null;
