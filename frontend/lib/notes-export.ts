@@ -102,8 +102,21 @@ function blockToMarkdown(block: NoteBlock): string {
 
 // ── Section-level rendering ────────────────────────────────────────────
 
+/** Marker URL the PDF backend swaps for a rasterised diagram PNG. Keyed by
+ *  section id so the ``images`` map the client sends lines up 1:1. */
+export function diagramMarkerKey(sectionId: string): string {
+  return `__DIAGRAM__${sectionId}`;
+}
+
+export interface SectionMarkdownOpts {
+  // Section ids whose mermaid diagram was successfully rasterised to a PNG and
+  // will be sent alongside the markdown. For these we emit an image marker the
+  // backend embeds; for the rest we fall back to a ```mermaid fence.
+  diagramImageKeys?: Set<string>;
+}
+
 /** Serialize one section to a self-contained markdown document. */
-export function sectionToMarkdown(section: NoteSection): string {
+export function sectionToMarkdown(section: NoteSection, opts?: SectionMarkdownOpts): string {
   const dateStr = formatHumanDate(section.date);
 
   // Section header: H1 title + italic date line + tag line (if any)
@@ -117,14 +130,25 @@ export function sectionToMarkdown(section: NoteSection): string {
     const tagStr = section.tags.map((t) => `\`#${t}\``).join(" ");
     lines.push(`Tags: ${tagStr}`);
   }
-  // Image (Phase 4). The data URI works in every markdown renderer
-  // we care about; readers that don't support inline images simply
-  // show the alt text. We deliberately use the section title as alt
-  // text (rather than "image") so screen readers get something
-  // meaningful.
-  if (section.imageUrl) {
+  // Image (Phase 4). Only embed a real hosted URL — a base64 data URI would
+  // bloat the .md into thousands of unreadable lines (and choke editors), so we
+  // skip it here. The image is still rendered in the PDF export and in-app.
+  if (section.imageUrl && !section.imageUrl.startsWith("data:")) {
     lines.push("");
     lines.push(`![${section.title}](${section.imageUrl})`);
+  }
+  // Diagram (Deep mode). PDF export → an image marker the backend swaps for
+  // the rasterised PNG; plain markdown → a ```mermaid fence, which
+  // GitHub/VS Code/Notion render natively.
+  if (section.diagram) {
+    lines.push("");
+    if (opts?.diagramImageKeys?.has(section.id)) {
+      lines.push(`![diagram](${diagramMarkerKey(section.id)})`);
+    } else {
+      lines.push("```mermaid");
+      lines.push(section.diagram);
+      lines.push("```");
+    }
   }
   lines.push("");
 
@@ -164,6 +188,7 @@ export function sectionToMarkdown(section: NoteSection): string {
 export function notebookToMarkdown(
   sections: NoteSection[],
   notebookTitle?: string,
+  opts?: SectionMarkdownOpts,
 ): string {
   if (sections.length === 0) {
     return notebookTitle
@@ -174,7 +199,7 @@ export function notebookToMarkdown(
   if (notebookTitle) {
     parts.push(`# ${notebookTitle}`, "");
   }
-  parts.push(sections.map(sectionToMarkdown).join("\n---\n\n"));
+  parts.push(sections.map((s) => sectionToMarkdown(s, opts)).join("\n---\n\n"));
   return parts.join("\n");
 }
 

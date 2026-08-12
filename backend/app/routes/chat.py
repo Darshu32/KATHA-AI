@@ -1,12 +1,14 @@
 """Chat routes — SSE streaming + media endpoints for Architecture Knowledge Intelligence."""
 
 import logging
+import re
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app.services.chat_engine import stream_chat_response
+from app.services.notes_pdf import render_notes_pdf
 from app.services.image_service import (
     generate_image,
     search_youtube,
@@ -55,7 +57,32 @@ class VideoGenerateRequest(BaseModel):
     prompt: str = Field(min_length=1, max_length=1000)
 
 
+class NotePdfRequest(BaseModel):
+    title: str = Field(default="Notes", max_length=300)
+    markdown: str = Field(min_length=1, max_length=400_000)
+    # Maps ![](key) markers → PNG data URIs for client-rasterised mermaid
+    # diagrams (mermaid can't render server-side). Optional.
+    images: dict[str, str] | None = None
+
+
 # ── Media Endpoints ─────────────────────────────────────────────────────────
+
+
+@router.post("/export-note-pdf")
+async def export_note_pdf(body: NotePdfRequest):
+    """Render note markdown to a clean, paginated PDF.
+
+    The client jsPDF/html2canvas path overlapped text on multi-section notes;
+    reportlab lays out real text flow instead. Returns the PDF as an
+    attachment so the browser saves it straight to disk.
+    """
+    pdf = render_notes_pdf(body.title, body.markdown, body.images)
+    safe = re.sub(r"[^a-zA-Z0-9._-]+", "-", body.title).strip("-").lower() or "notes"
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{safe}.pdf"'},
+    )
 
 
 @router.post("/generate-image")

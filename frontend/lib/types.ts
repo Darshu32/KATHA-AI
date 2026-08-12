@@ -18,7 +18,7 @@ export type ProjectType =
 
 // ── Chat Types ─────────────────────────────────────────────────────────────
 
-export type ChatMode = "quick" | "deep" | "auto";
+export type ChatMode = "quick" | "deep";
 
 export interface ChatMedia {
   url: string;
@@ -57,6 +57,7 @@ export interface Message {
   images?: ChatMedia[];
   video?: ChatMedia | null;
   youtubeLinks?: ChatMedia[];
+  diagram?: string;            // Deep mode — a Mermaid diagram of the concept
   researchPapers?: ResearchPaper[];
   referenceLinks?: ReferenceLink[];
   suggestions?: string[];
@@ -573,6 +574,10 @@ export interface NoteSection {
   // ``null`` when no image has been generated (or when the user
   // removed it). Capped at ~4MB on the wire.
   imageUrl: string | null;
+  // Deep-mode Mermaid diagram source for this section. Rendered as a real
+  // diagram in the note view, and rasterised → embedded in the PDF export.
+  // ``undefined`` for notes with no diagram.
+  diagram?: string;
 }
 
 export interface Notebook {

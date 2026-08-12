@@ -86,41 +86,74 @@ function detectCalloutVariant(heading: string): CalloutVariant | null {
   return null;
 }
 
+// Mermaid diagram-type keywords — used to recognise an *untagged* ``` fence
+// whose body is actually a diagram (the model doesn't always label it
+// ```mermaid).
+const MERMAID_KEYWORDS =
+  /^(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram(?:-v2)?|erDiagram|gantt|pie|journey|mindmap|timeline|gitGraph|quadrantChart|requirementDiagram)\b/;
+
+/** Lift any mermaid fenced block out of the prose. Returns the cleaned prose
+ *  (so the diagram source never renders as a raw code block in the note) plus
+ *  the first diagram found, if any. */
+function extractAndStripMermaid(md: string): { cleaned: string; diagram: string | null } {
+  let found: string | null = null;
+  const cleaned = md
+    .replace(/```([a-zA-Z]*)\s*\n([\s\S]*?)```/g, (full, lang: string, body: string) => {
+      const l = (lang || "").toLowerCase();
+      const isMermaid = l === "mermaid" || (!l && MERMAID_KEYWORDS.test(body.trim()));
+      if (isMermaid) {
+        if (!found) found = body.trim();
+        return "";
+      }
+      return full;
+    })
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return { cleaned, diagram: found };
+}
+
 export function parseDeepModeToNotes(
   content: string,
   messageId: string,
   conversationId: string,
+  sourceTitle?: string,
+  diagram?: string,
 ): NoteSection {
   const blocks: NoteBlock[] = [];
+
+  // Pull the mermaid diagram out of the prose first: it's rendered as a real
+  // diagram (note view) / embedded image (PDF), not dumped as source text.
+  const { cleaned: body, diagram: inlineDiagram } = extractAndStripMermaid(content);
+  const finalDiagram = (diagram && diagram.trim()) || inlineDiagram || undefined;
 
   // Split by ## or ### headings
   const sectionRegex = /^#{2,3}\s+(?:\d+[.)]\s*)?(.+)$/gm;
   const headings: { title: string; start: number; end: number }[] = [];
   let match: RegExpExecArray | null;
 
-  while ((match = sectionRegex.exec(content)) !== null) {
+  while ((match = sectionRegex.exec(body)) !== null) {
     headings.push({ title: match[1].trim(), start: match.index, end: 0 });
   }
 
   // Set end positions
   for (let i = 0; i < headings.length; i++) {
-    headings[i].end = i + 1 < headings.length ? headings[i + 1].start : content.length;
+    headings[i].end = i + 1 < headings.length ? headings[i + 1].start : body.length;
   }
 
   if (headings.length === 0) {
     // No headings found — dump everything as paragraphs
-    const parsed = parseSectionContent(content);
-    blocks.push(...(parsed.length ? parsed : [makeBlock("paragraph", content.slice(0, 500))]));
+    const parsed = parseSectionContent(body);
+    blocks.push(...(parsed.length ? parsed : [makeBlock("paragraph", body.slice(0, 500))]));
   } else {
     // Add any content before first heading
-    const preamble = content.slice(0, headings[0].start).trim();
+    const preamble = body.slice(0, headings[0].start).trim();
     if (preamble) {
       blocks.push(makeBlock("paragraph", preamble));
     }
 
     for (const heading of headings) {
-      const sectionBody = content.slice(
-        heading.start + content.slice(heading.start).indexOf("\n") + 1,
+      const sectionBody = body.slice(
+        heading.start + body.slice(heading.start).indexOf("\n") + 1,
         heading.end,
       ).trim();
 
@@ -143,11 +176,16 @@ export function parseDeepModeToNotes(
     }
   }
 
-  // Generate section title from the first heading or first 60 chars
+  // Title the note from the user's own question when we have it (predictable,
+  // clean) — falling back to the first heading or the first 60 chars only when
+  // no question was passed. This avoids titling a note with the model's prose
+  // (e.g. "Here is a visual representation of an HVAC system…").
+  const cleanSource = (sourceTitle ?? "").replace(/[#*\n]/g, "").trim();
   const sectionTitle =
-    headings.length > 0
+    cleanSource ||
+    (headings.length > 0
       ? headings[0].title.replace(/concept\s*(explanation)?/i, "").trim() || headings[0].title
-      : content.slice(0, 60).replace(/[#*\n]/g, "").trim();
+      : body.slice(0, 60).replace(/[#*\n]/g, "").trim());
 
   return {
     id: crypto.randomUUID(),
@@ -165,5 +203,8 @@ export function parseDeepModeToNotes(
     // (see chat-workspace-mvp1.tsx). Until that resolves, the field
     // is null and the UI hides the image slot.
     imageUrl: null,
+    // Deep-mode diagram (from the backend's dedicated field, or lifted from
+    // the prose above). Rendered live in the note; rasterised for the PDF.
+    diagram: finalDiagram,
   };
 }

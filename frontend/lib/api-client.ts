@@ -270,6 +270,7 @@ export interface ChatStreamEvent {
   content?: string;
   suggestions?: string[];
   image_prompt?: string | null;
+  diagram?: string | null;
   video_query?: string | null;
   youtube_query?: string | null;
   research_query?: string | null;
@@ -289,6 +290,7 @@ export interface ChatDoneData {
   content: string;
   suggestions: string[];
   image_prompt: string | null;
+  diagram: string | null;
   video_query: string | null;
   youtube_query: string | null;
   research_query: string | null;
@@ -362,6 +364,7 @@ export const chat = {
                 content: event.content ?? "",
                 suggestions: event.suggestions ?? [],
                 image_prompt: event.image_prompt ?? null,
+                diagram: event.diagram ?? null,
                 video_query: event.video_query ?? null,
                 youtube_query: event.youtube_query ?? null,
                 research_query: event.research_query ?? null,
@@ -407,6 +410,30 @@ export const chat = {
     request<{ video: { url: string; type: string } | null }>(
       "/chat/generate-video", "POST", { prompt },
     ),
+
+  /** Render note markdown to a clean, paginated PDF (server-side reportlab).
+   *  Replaces the client jsPDF path, which overlapped text on multi-section
+   *  notes. Returns the PDF blob + filename from the Content-Disposition. */
+  exportNotePdf: async (
+    title: string,
+    markdown: string,
+    images?: Record<string, string>,
+  ): Promise<{ blob: Blob; filename: string }> => {
+    const res = await fetch(`${API_BASE}/chat/export-note-pdf`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title, markdown, images }),
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new ApiError(res.status, body);
+    }
+    const disposition = res.headers.get("Content-Disposition") ?? "";
+    const match = disposition.match(/filename="([^"]+)"/);
+    const filename = match?.[1] ?? "notes.pdf";
+    const blob = await res.blob();
+    return { blob, filename };
+  },
 };
 
 // ── Imports (BRD Layer 5B — file upload + parse) ────────────────────────
