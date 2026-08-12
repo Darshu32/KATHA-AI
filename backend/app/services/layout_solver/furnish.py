@@ -106,24 +106,74 @@ def _category(text: str) -> str:
     return ""
 
 
-def _place(placement: str, x0: float, z0: float, length: float, width: float,
-           fl: float, fw: float, margin: float = 0.12) -> tuple[float, float]:
-    """Centre (cx, cz) of a piece, kept inside the room rectangle."""
-    if placement == "back":
-        cx, cz = x0 + length / 2, z0 + width - fw / 2 - margin
-    elif placement == "front":
-        cx, cz = x0 + length / 2, z0 + fw / 2 + margin
-    elif placement == "left":
-        cx, cz = x0 + fl / 2 + margin, z0 + width / 2
-    elif placement == "right":
-        cx, cz = x0 + length - fl / 2 - margin, z0 + width / 2
-    elif placement == "corner":
-        cx, cz = x0 + fl / 2 + margin, z0 + fw / 2 + margin
-    else:  # center
-        cx, cz = x0 + length / 2, z0 + width / 2
-    cx = min(max(cx, x0 + fl / 2), x0 + length - fl / 2)
-    cz = min(max(cz, z0 + fw / 2), z0 + width - fw / 2)
-    return cx, cz
+def _rect(cx: float, cz: float, fl: float, fw: float) -> tuple[float, float, float, float]:
+    return (cx - fl / 2, cz - fw / 2, cx + fl / 2, cz + fw / 2)
+
+
+def _overlaps(a: tuple, b: tuple, clear: float) -> bool:
+    return (a[0] < b[2] + clear and a[2] > b[0] - clear
+            and a[1] < b[3] + clear and a[3] > b[1] - clear)
+
+
+def _candidates(placement: str, x0: float, z0: float, length: float, width: float,
+                fl: float, fw: float, margin: float) -> list[tuple[float, float]]:
+    """Ordered candidate centres — ideal spot first, then slide along the wall
+    (centre-out) so a blocked piece steps aside instead of stacking."""
+    xlo, xhi = x0 + fl / 2, x0 + length - fl / 2
+    zlo, zhi = z0 + fw / 2, z0 + width - fw / 2
+
+    def scan(lo: float, hi: float, n: int = 9) -> list[float]:
+        if hi <= lo:
+            return [(lo + hi) / 2]
+        pts = [lo + (hi - lo) * i / (n - 1) for i in range(n)]
+        pts.sort(key=lambda v: abs(v - (lo + hi) / 2))  # centre-out
+        return pts
+
+    if placement in ("back", "front"):
+        cz = (z0 + width - fw / 2 - margin) if placement == "back" else (z0 + fw / 2 + margin)
+        cz = min(max(cz, zlo), zhi)
+        return [(x, cz) for x in scan(xlo, xhi)]
+    if placement in ("left", "right"):
+        cx = (x0 + fl / 2 + margin) if placement == "left" else (x0 + length - fl / 2 - margin)
+        cx = min(max(cx, xlo), xhi)
+        return [(cx, z) for z in scan(zlo, zhi)]
+    if placement == "corner":
+        return [(xlo, zlo), (xhi, zlo), (xlo, zhi), (xhi, zhi), ((xlo + xhi) / 2, (zlo + zhi) / 2)]
+    # center — small centre-out grid
+    cands: list[tuple[float, float]] = []
+    for x in scan(xlo, xhi, 5):
+        for z in scan(zlo, zhi, 5):
+            cands.append((x, z))
+    return cands
+
+
+def _place_free(placement: str, x0: float, z0: float, length: float, width: float,
+                fl: float, fw: float, occupied: list, margin: float,
+                clear: float) -> tuple[float, float] | None:
+    """First candidate centre that fits inside the room and clears every
+    already-placed piece. ``None`` when nothing fits (piece is dropped)."""
+    for cx, cz in _candidates(placement, x0, z0, length, width, fl, fw, margin):
+        r = _rect(cx, cz, fl, fw)
+        if (r[0] < x0 - 1e-6 or r[1] < z0 - 1e-6
+                or r[2] > x0 + length + 1e-6 or r[3] > z0 + width + 1e-6):
+            continue
+        if any(_overlaps(r, o, clear) for o in occupied):
+            continue
+        return cx, cz
+    return None
+
+
+# If a piece can't sit on its preferred wall (blocked by the anchor piece),
+# try the others before giving up — a wardrobe crowded off the side walls
+# still belongs at the foot of the bed rather than nowhere.
+_FALLBACKS: dict[str, list[str]] = {
+    "left": ["left", "right", "back", "front"],
+    "right": ["right", "left", "back", "front"],
+    "back": ["back", "front", "left", "right"],
+    "front": ["front", "back", "left", "right"],
+    "center": ["center", "back", "front"],
+    "corner": ["corner", "back", "front", "left", "right"],
+}
 
 
 def _furnish_one(space: dict) -> list[dict]:
@@ -132,12 +182,30 @@ def _furnish_one(space: dict) -> list[dict]:
         return []
     x0, z0 = float(space["position"]["x"]), float(space["position"]["z"])
     length, width = float(space["dimensions"]["length"]), float(space["dimensions"]["width"])
+    margin, clear = 0.12, 0.06
+    occupied: list[tuple] = []   # rects of pieces already placed in this room
     out: list[dict] = []
-    for ftype, (fl, fw), height, placement in _FURNITURE.get(cat, []):
-        fl2, fw2 = min(fl, length * 0.85), min(fw, width * 0.85)  # shrink to fit
-        if fl2 <= 0.1 or fw2 <= 0.1:
-            continue
-        cx, cz = _place(placement, x0, z0, length, width, fl2, fw2)
+    # Catalogue order is anchor-first (bed / sofa / counter before the rest), so
+    # the big piece claims its spot and smaller ones route around it.
+    for ftype, (fl0, fw0), height, placement in _FURNITURE.get(cat, []):
+        placed: tuple | None = None
+        for pl in _FALLBACKS.get(placement, [placement]):
+            # Rotate wall-hugging pieces so their depth faces the side wall — a
+            # wardrobe against a side wall is 0.6 m deep and 1.6 m along it, not
+            # a 1.6 m slab jutting into the room. Re-derive per candidate wall.
+            fl, fw = (fw0, fl0) if pl in ("left", "right") else (fl0, fw0)
+            fl2 = min(fl, length - 2 * clear)   # keep real sizes; only trim to fit
+            fw2 = min(fw, width - 2 * clear)
+            if fl2 <= 0.1 or fw2 <= 0.1:
+                continue
+            spot = _place_free(pl, x0, z0, length, width, fl2, fw2, occupied, margin, clear)
+            if spot is not None:
+                placed = (spot[0], spot[1], fl2, fw2)
+                break
+        if placed is None:
+            continue  # no non-overlapping fit on any wall — omit rather than stack
+        cx, cz, fl2, fw2 = placed
+        occupied.append(_rect(cx, cz, fl2, fw2))
         out.append({
             "id": f"{space['id']}_{ftype}",
             "type": ftype,

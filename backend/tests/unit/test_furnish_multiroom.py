@@ -89,6 +89,47 @@ def test_rooms_get_type_appropriate_furniture():
     assert {"sofa", "counter", "bed", "wc"} <= types      # living / kitchen / bedroom / bath
 
 
+def test_no_two_pieces_overlap_within_a_room():
+    """Collision-aware placement — two pieces in the same room must not stack
+    (regression for the bed-on-wardrobe / counter-on-appliance overlap)."""
+    def _rect(o):
+        p, d = o["position"], o["dimensions"]
+        return (p["x"] - d["length"] / 2, p["z"] - d["width"] / 2,
+                p["x"] + d["length"] / 2, p["z"] + d["width"] / 2)
+
+    out = furnish_rooms(_apartment())
+    spaces = out["spaces"]
+    by_room: dict[str, list] = {}
+    for o in out["objects"]:
+        room = _containing_room(o, spaces)
+        assert room is not None, f"{o['type']} not in any room"
+        by_room.setdefault(room["id"], []).append(o)
+
+    for rid, objs in by_room.items():
+        rects = [_rect(o) for o in objs]
+        for i in range(len(rects)):
+            for j in range(i + 1, len(rects)):
+                a, b = rects[i], rects[j]
+                ix = max(0.0, min(a[2], b[2]) - max(a[0], b[0]))
+                iz = max(0.0, min(a[3], b[3]) - max(a[1], b[1]))
+                assert ix * iz < 0.02, (
+                    f"{objs[i]['type']} overlaps {objs[j]['type']} in {rid} by {ix * iz:.2f} m²"
+                )
+
+
+def test_wall_pieces_are_oriented_flush():
+    """A side-wall piece (wardrobe) is rotated so its depth faces the wall —
+    the along-wall run is longer than the depth into the room."""
+    out = furnish_rooms(_apartment())
+    wardrobes = [o for o in out["objects"] if o["type"] == "wardrobe"]
+    assert wardrobes, "expected at least one wardrobe in the apartment"
+    # A wardrobe is 1.6 m along the wall × 0.6 m deep — after any fit-trim the
+    # piece should never be a near-square slab jutting into the room.
+    for w in wardrobes:
+        d = w["dimensions"]
+        assert min(d["length"], d["width"]) <= 0.7 + 1e-6
+
+
 def test_every_piece_sits_fully_inside_its_room():
     out = furnish_rooms(_apartment())
     spaces = out["spaces"]
