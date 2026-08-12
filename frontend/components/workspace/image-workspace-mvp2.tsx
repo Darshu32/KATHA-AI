@@ -157,7 +157,10 @@ export default function ImageWorkspaceMvp2() {
   const projectTypeDefs = useConfigStore((s) => s.projectTypeDefs);
   const themesList = useConfigStore((s) => s.themes);
   const loadAll = useConfigStore((s) => s.loadAll);
-  const token = useAuthStore((s) => s.token);
+  // Coerce null → undefined at the source: every API call and child prop here
+  // expects ``string | undefined`` (no auth ⇒ no Authorization header), and the
+  // store models "signed out" as null. One coercion keeps all call sites typed.
+  const token = useAuthStore((s) => s.token) ?? undefined;
 
   const [scope, setScope] = useState<Scope>("interior");
   const [dim, setDim] = useState<Dim>("3d");
