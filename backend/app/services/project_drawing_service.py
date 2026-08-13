@@ -18,6 +18,15 @@ SVG_PADDING = 56
 SVG_WIDTH = 960
 SVG_HEIGHT = 640
 
+# Warm-paper working-drawing palette (kept in step with the other preview sheets).
+_PAPER = "#fcf7ef"      # sheet background
+_FLOOR = "#fbf7f0"      # room floor fill
+_INK = "#2c221a"        # primary line / leaf ink
+_WALL = "#4c3d30"       # wall poché
+_FURN_FILL = "#e7dbc8"  # furniture footprint fill (lighter than walls so walls read first)
+_FURN_INK = "#8a7357"   # furniture outline
+_DIM = "#b8a68e"        # dimension lines + witness ticks
+
 
 def generate_floor_plan_package(graph_data: dict) -> dict:
     """Build a structured floor plan plus an SVG preview from a design graph snapshot."""
@@ -40,11 +49,15 @@ def generate_floor_plan_package(graph_data: dict) -> dict:
 
 
 def render_multiroom_plan_svg(graph_data: dict) -> str:
-    """Floor-plan preview that renders EVERY placed room (walls + name + area),
-    furniture in world coordinates inside each room, and doors on the walls that
-    adjacent rooms share. Falls back to a single-room shell. Replaces the legacy
-    single-room renderer that collapsed multi-room plans into one box."""
-    W, H, PAD = SVG_WIDTH, SVG_HEIGHT, SVG_PADDING
+    """Floor-plan preview: every placed room drawn with wall poché, its
+    furniture clamped inside the room envelope, doors on shared walls (plus an
+    entry door + swing for a lone room), overall dimension strings, a scale bar
+    and a north arrow. Falls back to a single-room shell for an un-solved graph."""
+    W, H = SVG_WIDTH, SVG_HEIGHT
+    # Asymmetric margins reserve room for the title (top), the vertical
+    # dimension string (left) and the horizontal dimension string + scale bar
+    # (bottom). Symmetric padding used to clip the dimension annotations.
+    M_L, M_R, M_T, M_B = 92, 66, 60, 96
 
     # Rooms and furniture come from the shared geometry core (graph_geometry) —
     # the same placed-space rule and object footprints every other working
@@ -67,44 +80,88 @@ def render_multiroom_plan_svg(graph_data: dict) -> str:
     if not rooms:
         return _empty_plan_svg()
 
+    # Locate each piece's room (centre; nearest as fallback) and CLAMP its
+    # footprint to that room's interior. A piece whose graph coordinates spill
+    # past a wall is slid back inside; one larger than the room is capped to it.
+    # This is what stops furniture being drawn straight through the walls.
+    def _room_of(cx: float, cz: float) -> dict:
+        for rm in rooms:
+            if rm["x"] <= cx <= rm["x"] + rm["l"] and rm["z"] <= cz <= rm["z"] + rm["w"]:
+                return rm
+        return min(rooms, key=lambda rm: abs(cx - (rm["x"] + rm["l"] / 2)) + abs(cz - (rm["z"] + rm["w"] / 2)))
+
     furn: list[dict] = []
     for o in furnishable_objects(graph_data):
         r = object_rect(o)
+        x0, x1, z0, z1 = r.x0, r.x1, r.z0, r.z1
+        rm = _room_of((x0 + x1) / 2, (z0 + z1) / 2)
+        m = 0.06  # keep a hair off the wall face so the piece reads as inside
+        ix0, ix1 = rm["x"] + m, rm["x"] + rm["l"] - m
+        iz0, iz1 = rm["z"] + m, rm["z"] + rm["w"] - m
+        if x1 - x0 > ix1 - ix0:        # wider than the room → cap to interior
+            x0, x1 = ix0, ix1
+        elif x0 < ix0:                 # crosses the left/right wall → slide in
+            x0, x1 = ix0, ix0 + (x1 - x0)
+        elif x1 > ix1:
+            x0, x1 = ix1 - (x1 - x0), ix1
+        if z1 - z0 > iz1 - iz0:
+            z0, z1 = iz0, iz1
+        elif z0 < iz0:
+            z0, z1 = iz0, iz0 + (z1 - z0)
+        elif z1 > iz1:
+            z0, z1 = iz1 - (z1 - z0), iz1
         furn.append({
             "type": str(o.get("type") or "item").replace("_", " "),
-            "x": (r.x0 + r.x1) / 2, "z": (r.z0 + r.z1) / 2,
-            "l": r.x1 - r.x0, "w": r.z1 - r.z0,
+            "x": (x0 + x1) / 2, "z": (z0 + z1) / 2,
+            "l": x1 - x0, "w": z1 - z0,
         })
 
-    xs = [r["x"] for r in rooms] + [r["x"] + r["l"] for r in rooms]
-    zs = [r["z"] for r in rooms] + [r["z"] + r["w"] for r in rooms]
-    minx, maxx, minz, maxz = min(xs), max(xs), min(zs), max(zs)
+    minx = min(r["x"] for r in rooms)
+    minz = min(r["z"] for r in rooms)
+    maxx = max(r["x"] + r["l"] for r in rooms)
+    maxz = max(r["z"] + r["w"] for r in rooms)
     vbW, vbH = (maxx - minx) or 1.0, (maxz - minz) or 1.0
-    scale = min((W - 2 * PAD) / vbW, (H - 2 * PAD) / vbH)
-    ox = PAD + (W - 2 * PAD - vbW * scale) / 2
-    oy = PAD + (H - 2 * PAD - vbH * scale) / 2
+    aw, ah = (W - M_L - M_R), (H - M_T - M_B)
+    scale = min(aw / vbW, ah / vbH)
+    ox = M_L + (aw - vbW * scale) / 2
+    oy = M_T + (ah - vbH * scale) / 2
 
     def mp(x: float, z: float) -> tuple[float, float]:
         return ox + (x - minx) * scale, oy + (z - minz) * scale
 
+    wall = max(0.12 * scale, 5.0)  # ~120 mm wall, floored so the poché always reads
+
     out = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" fill="none">',
-        '<rect width="100%" height="100%" fill="#fcf7ef"/>',
-        f'<text x="{PAD}" y="32" fill="#7d6b58" font-size="16" font-weight="700">Generated Floor Plan</text>',
+        f'<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 {W} {H}" fill="none" '
+        f'font-family="ui-sans-serif, system-ui, sans-serif">',
+        f'<rect width="100%" height="100%" fill="{_PAPER}"/>',
+        f'<text x="{M_L}" y="34" fill="#7d6b58" font-size="15" font-weight="700" '
+        f'letter-spacing="0.08em">GENERATED FLOOR PLAN</text>',
     ]
+
+    # Rooms — floor fill, then wall poché (a thick stroke straddling the edge).
     for r in rooms:
         x, y = mp(r["x"], r["z"])
         w, h = r["l"] * scale, r["w"] * scale
-        out.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" fill="#fbf7f0" stroke="#4c3d30" stroke-width="4" stroke-linejoin="round"/>')
+        out.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" fill="{_FLOOR}"/>')
+        out.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" fill="none" '
+                   f'stroke="{_WALL}" stroke-width="{wall:.1f}" stroke-linejoin="miter"/>')
+
+    # Furniture — clamped footprints with a hairline outline + fitted label.
     for f in furn:
         x, y = mp(f["x"] - f["l"] / 2, f["z"] - f["w"] / 2)
         w, h = f["l"] * scale, f["w"] * scale
-        out.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="4" fill="#d9c7b1" stroke="#8a7357" stroke-width="1.5"/>')
+        out.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" rx="3" '
+                   f'fill="{_FURN_FILL}" stroke="{_FURN_INK}" stroke-width="1.4"/>')
         lbl = f["type"][:16]
         fs = min(11.0, (w * 0.9) / max(len(lbl) * 0.55, 1), h * 0.6)
         if fs >= 6.0:
-            out.append(f'<text x="{x + w / 2:.1f}" y="{y + h / 2 + fs * 0.35:.1f}" text-anchor="middle" fill="#3f3f46" font-size="{fs:.1f}">{escape(lbl)}</text>')
+            out.append(f'<text x="{x + w / 2:.1f}" y="{y + h / 2 + fs * 0.35:.1f}" '
+                       f'text-anchor="middle" fill="#5b5048" font-size="{fs:.1f}">{escape(lbl)}</text>')
+
+    # Doors on the walls that two adjacent rooms share.
     rmap = {r["id"]: r for r in rooms}
+    door_drawn = False
     eps = 0.35
     for adj in (graph_data.get("adjacencies") or []):
         if not isinstance(adj, dict):
@@ -125,26 +182,115 @@ def render_multiroom_plan_svg(graph_data: dict) -> str:
                 door = ("h", wz, (x0 + x1) / 2, min(0.9, x1 - x0 - 0.2))
         if not door:
             continue
+        door_drawn = True
         kind, fixed, center, size = door
-        p1 = mp(fixed, center - size / 2) if kind == "v" else mp(center - size / 2, fixed)
-        p2 = mp(fixed, center + size / 2) if kind == "v" else mp(center + size / 2, fixed)
-        out.append(f'<line x1="{p1[0]:.1f}" y1="{p1[1]:.1f}" x2="{p2[0]:.1f}" y2="{p2[1]:.1f}" stroke="#fcf7ef" stroke-width="6"/>')
-        out.append(f'<line x1="{p1[0]:.1f}" y1="{p1[1]:.1f}" x2="{p2[0]:.1f}" y2="{p2[1]:.1f}" stroke="#8b5e3c" stroke-width="2.5" stroke-dasharray="4 3"/>')
-    # Room name + area tags drawn LAST (on top of furniture) as a top-left
-    # corner tag with a paper pill — so the label is never hidden behind a piece.
+        if kind == "v":
+            out += _door_swing(mp, fixed, center - size / 2, "v", size, scale, wall)
+        else:
+            out += _door_swing(mp, center - size / 2, fixed, "h", size, scale, wall)
+
+    # A lone room (or one with no shared-wall door) gets an entry door + swing
+    # centred on its front (max-z) wall so the plan never reads as sealed.
+    if not door_drawn:
+        big = max(rooms, key=lambda r: r["l"] * r["w"])
+        dw = min(0.9, big["l"] * 0.5)
+        out += _door_swing(mp, big["x"] + big["l"] / 2 - dw / 2, big["z"] + big["w"], "h", dw, scale, wall)
+
+    # Room name + area tag drawn LAST as a paper pill in the top-left corner.
     for r in rooms:
         x, y = mp(r["x"], r["z"])
         w = r["l"] * scale
         name = r["name"][:22]
         area = f'{r["l"] * r["w"]:.1f} m²'
         nfs = min(13.0, max(8.0, (w * 0.9) / max(len(name) * 0.55, 1)))
-        tw = max(len(name) * nfs * 0.55, len(area) * nfs * 0.8 * 0.55) + 10
-        lx, ly = x + 5, y + 5
-        out.append(f'<rect x="{lx - 4:.1f}" y="{ly:.1f}" width="{tw:.1f}" height="{nfs * 2 + 12:.1f}" rx="3" fill="#fbf7f0" fill-opacity="0.9"/>')
+        tw = max(len(name) * nfs * 0.55, len(area) * nfs * 0.8 * 0.55) + 12
+        lx, ly = x + wall / 2 + 5, y + wall / 2 + 5
+        out.append(f'<rect x="{lx - 4:.1f}" y="{ly:.1f}" width="{tw:.1f}" height="{nfs * 2 + 12:.1f}" rx="3" fill="#fbf7f0" fill-opacity="0.92"/>')
         out.append(f'<text x="{lx:.1f}" y="{ly + nfs + 2:.1f}" fill="#2c221a" font-size="{nfs:.1f}" font-weight="700">{escape(name)}</text>')
         out.append(f'<text x="{lx:.1f}" y="{ly + nfs * 2 + 4:.1f}" fill="#9d8a75" font-size="{nfs * 0.8:.1f}">{escape(area)}</text>')
+
+    # Overall dimension strings (width below, height at left) + scale bar + north.
+    plan_l, plan_r = ox, ox + vbW * scale
+    plan_t, plan_b = oy, oy + vbH * scale
+    out += _dim_h(plan_l, plan_r, plan_b + max(wall, 8) + 22, vbW)
+    out += _dim_v(plan_t, plan_b, plan_l - max(wall, 8) - 22, vbH)
+    out += _scale_bar(M_L, H - 30, scale)
+    out += _north_arrow(W - M_R - 14, H - 56)
+
     out.append("</svg>")
     return "\n".join(out)
+
+
+def _door_swing(mp, x_world: float, z_world: float, orient: str,
+                width_world: float, scale: float, wall: float) -> list[str]:
+    """A hinged door: a gap punched in the wall poché, the leaf shown open, and
+    a dashed quarter-circle swing arc. Hinged at ``(x_world, z_world)``; orient
+    ``h`` runs the leaf along +x (swings into the room, -z), ``v`` along +z."""
+    hx, hy = mp(x_world, z_world)
+    wpx = width_world * scale
+    if orient == "h":
+        return [
+            f'<line x1="{hx:.1f}" y1="{hy:.1f}" x2="{hx + wpx:.1f}" y2="{hy:.1f}" stroke="{_FLOOR}" stroke-width="{wall + 2:.1f}"/>',
+            f'<line x1="{hx:.1f}" y1="{hy:.1f}" x2="{hx:.1f}" y2="{hy - wpx:.1f}" stroke="{_INK}" stroke-width="1.6"/>',
+            f'<path d="M {hx:.1f} {hy - wpx:.1f} A {wpx:.1f} {wpx:.1f} 0 0 1 {hx + wpx:.1f} {hy:.1f}" fill="none" stroke="{_INK}" stroke-width="1" stroke-dasharray="3 3" opacity="0.6"/>',
+        ]
+    return [
+        f'<line x1="{hx:.1f}" y1="{hy:.1f}" x2="{hx:.1f}" y2="{hy + wpx:.1f}" stroke="{_FLOOR}" stroke-width="{wall + 2:.1f}"/>',
+        f'<line x1="{hx:.1f}" y1="{hy:.1f}" x2="{hx + wpx:.1f}" y2="{hy:.1f}" stroke="{_INK}" stroke-width="1.6"/>',
+        f'<path d="M {hx + wpx:.1f} {hy:.1f} A {wpx:.1f} {wpx:.1f} 0 0 1 {hx:.1f} {hy + wpx:.1f}" fill="none" stroke="{_INK}" stroke-width="1" stroke-dasharray="3 3" opacity="0.6"/>',
+    ]
+
+
+def _dim_h(x0: float, x1: float, y: float, meters: float) -> list[str]:
+    """Horizontal dimension string with witness ticks and a centred label."""
+    mid = (x0 + x1) / 2
+    lbl = f"{meters:.2f} m"
+    bw = len(lbl) * 6.6 + 8
+    return [
+        f'<line x1="{x0:.1f}" y1="{y - 5:.1f}" x2="{x0:.1f}" y2="{y + 5:.1f}" stroke="{_DIM}" stroke-width="1"/>',
+        f'<line x1="{x1:.1f}" y1="{y - 5:.1f}" x2="{x1:.1f}" y2="{y + 5:.1f}" stroke="{_DIM}" stroke-width="1"/>',
+        f'<line x1="{x0:.1f}" y1="{y:.1f}" x2="{x1:.1f}" y2="{y:.1f}" stroke="{_DIM}" stroke-width="1"/>',
+        f'<rect x="{mid - bw / 2:.1f}" y="{y - 8:.1f}" width="{bw:.1f}" height="16" fill="{_PAPER}"/>',
+        f'<text x="{mid:.1f}" y="{y + 4:.1f}" text-anchor="middle" fill="#6f6152" font-size="12">{lbl}</text>',
+    ]
+
+
+def _dim_v(y0: float, y1: float, x: float, meters: float) -> list[str]:
+    """Vertical dimension string with witness ticks and a rotated label."""
+    mid = (y0 + y1) / 2
+    lbl = f"{meters:.2f} m"
+    bh = len(lbl) * 6.6 + 8
+    return [
+        f'<line x1="{x - 5:.1f}" y1="{y0:.1f}" x2="{x + 5:.1f}" y2="{y0:.1f}" stroke="{_DIM}" stroke-width="1"/>',
+        f'<line x1="{x - 5:.1f}" y1="{y1:.1f}" x2="{x + 5:.1f}" y2="{y1:.1f}" stroke="{_DIM}" stroke-width="1"/>',
+        f'<line x1="{x:.1f}" y1="{y0:.1f}" x2="{x:.1f}" y2="{y1:.1f}" stroke="{_DIM}" stroke-width="1"/>',
+        f'<rect x="{x - 8:.1f}" y="{mid - bh / 2:.1f}" width="16" height="{bh:.1f}" fill="{_PAPER}"/>',
+        f'<text x="{x:.1f}" y="{mid:.1f}" text-anchor="middle" fill="#6f6152" font-size="12" transform="rotate(-90 {x:.1f} {mid:.1f})">{lbl}</text>',
+    ]
+
+
+def _scale_bar(x: float, y: float, scale: float) -> list[str]:
+    """Two-segment scale bar sized to a 'nice' round distance for this scale."""
+    seg_m = 1.0
+    for u in (0.5, 1.0, 2.0, 5.0, 10.0):
+        if u * scale <= 72:
+            seg_m = u
+    px = seg_m * scale
+    return [
+        f'<text x="{x:.1f}" y="{y - 7:.1f}" fill="#8a7a68" font-size="9.5" letter-spacing="0.08em">SCALE</text>',
+        f'<rect x="{x:.1f}" y="{y:.1f}" width="{px:.1f}" height="5" fill="{_INK}"/>',
+        f'<rect x="{x + px:.1f}" y="{y:.1f}" width="{px:.1f}" height="5" fill="none" stroke="{_INK}" stroke-width="0.9"/>',
+        f'<text x="{x:.1f}" y="{y + 16:.1f}" text-anchor="middle" fill="#8a7a68" font-size="9">0</text>',
+        f'<text x="{x + 2 * px:.1f}" y="{y + 16:.1f}" text-anchor="middle" fill="#8a7a68" font-size="9">{2 * seg_m:g} m</text>',
+    ]
+
+
+def _north_arrow(x: float, y: float) -> list[str]:
+    """A compact filled north arrow with an 'N' label."""
+    return [
+        f'<polygon points="{x:.1f},{y:.1f} {x - 6:.1f},{y + 17:.1f} {x:.1f},{y + 11:.1f} {x + 6:.1f},{y + 17:.1f}" fill="{_INK}"/>',
+        f'<text x="{x:.1f}" y="{y + 31:.1f}" text-anchor="middle" fill="#6f6152" font-size="11" font-weight="700">N</text>',
+    ]
 
 
 def _empty_plan_svg() -> str:

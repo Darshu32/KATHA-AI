@@ -3012,7 +3012,10 @@ function ViewModal({
           </button>
         </div>
         <div
-          className="flex-1 overflow-auto p-5 bg-paper-soft"
+          // Injected SVG uses a viewBox with no intrinsic width/height, so we
+          // size it to the body and let preserveAspectRatio letterbox the whole
+          // sheet into view — no scrolling to reach the dimension row / title block.
+          className="flex-1 min-h-0 overflow-hidden p-5 bg-paper-soft flex items-center justify-center [&>svg]:h-full [&>svg]:w-full [&>svg]:max-h-full"
           // SVG comes from the backend generator; it's our own server-
           // rendered output, not user input.
           dangerouslySetInnerHTML={{ __html: svg }}

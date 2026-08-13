@@ -114,6 +114,28 @@ def _label(text: str) -> str:
     return escape(text.replace("_", " ").title())
 
 
+def _clamp_rect(r: Rect, room: Rect) -> Rect:
+    """Fit an object's footprint + height inside a room's envelope: slide a piece
+    that crosses a wall back inside, cap one larger than the room. Stops furniture
+    and openings being drawn through walls or hanging off the floor — the same
+    envelope guarantee the plan preview applies (bad upstream placement is the
+    real cause; this keeps every view honest until it's fixed at the source)."""
+    def fit(a0: float, a1: float, lo: float, hi: float) -> tuple[float, float]:
+        span = a1 - a0
+        if span >= (hi - lo):
+            return lo, hi
+        if a0 < lo:
+            return lo, lo + span
+        if a1 > hi:
+            return hi - span, hi
+        return a0, a1
+
+    x0, x1 = fit(r.x0, r.x1, room.x0, room.x1)
+    z0, z1 = fit(r.z0, r.z1, room.z0, room.z1)
+    y0, y1 = fit(r.y0, r.y1, 0.0, max(room.y1, 0.05))
+    return Rect(x0, x1, z0, z1, y0, y1)
+
+
 # ── Shared SVG scaffold ──────────────────────────────────────────────────────
 
 
@@ -254,7 +276,7 @@ def generate_section_package(
     cut_ids, behind_ids, off_ids = [], [], []
     for rid, _name, _r in cut_rooms:
         for o in by_room.get(rid, []):
-            orc = object_rect(o)
+            orc = _clamp_rect(object_rect(o), _r)
             ou0, ou1 = (orc.x0, orc.x1) if axis == "z" else (orc.z0, orc.z1)
             od0, od1 = depth_span(orc)
             h = orc.y1
@@ -399,7 +421,7 @@ def generate_elevation_package(graph: dict, face: str | None = None) -> dict:
         role = str(o.get("role") or "").lower()
         if role not in ("window", "door"):
             continue
-        orc = object_rect(o)
+        orc = _clamp_rect(object_rect(o), bb)
         ou0, ou1 = (orc.x0, orc.x1) if axis == "z" else (orc.z0, orc.z1)
         sill = max(_num((o.get("position") or {}).get("y"), 0.0), 0.0)
         head = min(sill + orc.y1, Hmax)
@@ -471,12 +493,12 @@ def generate_isometric_package(graph: dict) -> dict:
     def iso(x: float, y: float, z: float) -> tuple[float, float]:
         return (x - z) * _COS30, (x + z) * _SIN30 - y
 
-    # Scale so every room AND every depicted object fits — including orphans, so
-    # an out-of-room piece is still drawn on-canvas rather than clipped away.
-    obj_rects = [object_rect(o) for o in depictable]
+    # Scale to fit every room. Both in-room objects and orphans are clamped to an
+    # envelope (their room, or the building bbox) at draw time, so everything
+    # drawn lands inside the rooms' union and no extra allowance is needed here.
     corners = [
         iso(X, Y, Z)
-        for r in ([r for _, _, r in room_specs] + obj_rects)
+        for r in [r for _, _, r in room_specs]
         for X in (r.x0, r.x1) for Y in (r.y0, r.y1) for Z in (r.z0, r.z1)
     ]
     xs = [c[0] for c in corners] or [0.0]
@@ -514,13 +536,14 @@ def generate_isometric_package(graph: dict) -> dict:
         seg.append(f'<text x="{nl[0]:.1f}" y="{nl[1]-4:.1f}" text-anchor="middle" fill="{_INK}" font-size="11" font-weight="700">{escape(name[:18])}</text>')
 
         for o in sorted(by_room.get(rid, []), key=_obj_centre_sum):
-            _iso_draw_object(seg, sp, o)
+            _iso_draw_object(seg, sp, o, r)
 
-    # Orphans (centre in no room) are anomalies — draw them last at their true
-    # world position so they stay visible (fidelity) without being crammed into
-    # a room they do not belong to (the old collapse bug).
+    # Orphans (centre in no room) are usually edge openings whose centre lands on
+    # a wall line — clamp them to the building envelope so they read as on-wall
+    # rather than hanging off the floor. Drawn last so they still stay visible;
+    # the count is logged above for anyone auditing placement.
     for o in sorted(orphans, key=_obj_centre_sum):
-        _iso_draw_object(seg, sp, o)
+        _iso_draw_object(seg, sp, o, bb)
 
     seg.append("</svg>")
     total_objs = len([o for o in (graph.get("objects") or []) if isinstance(o, dict)])
@@ -546,10 +569,14 @@ def _obj_centre_sum(o: dict) -> float:
     return (r.x0 + r.x1 + r.z0 + r.z1) / 2.0
 
 
-def _iso_draw_object(seg: list[str], sp, o: dict) -> None:
+def _iso_draw_object(seg: list[str], sp, o: dict, room: Rect | None = None) -> None:
     """Draw one object as a shaded axonometric box (three visible faces) at its
-    world position, coloured by role: windows glazed, doors timber, else furniture."""
+    world position, coloured by role: windows glazed, doors timber, else furniture.
+    When ``room`` is given the box is clamped into that room's envelope so a piece
+    is never drawn hanging off the floor or punched through a wall."""
     r = object_rect(o)
+    if room is not None:
+        r = _clamp_rect(r, room)
     x0, x1, z0, z1, h = r.x0, r.x1, r.z0, r.z1, r.y1
     role = str(o.get("role") or "").lower()
     fill = _OPENING if role == "window" else _DOOR if role == "door" else _FILL
