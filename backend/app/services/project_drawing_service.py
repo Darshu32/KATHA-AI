@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from html import escape
 
 from app.services import drawing_engine
@@ -147,6 +148,15 @@ def render_multiroom_plan_svg(graph_data: dict) -> str:
         out.append(f'<rect x="{x:.1f}" y="{y:.1f}" width="{w:.1f}" height="{h:.1f}" fill="none" '
                    f'stroke="{_WALL}" stroke-width="{wall:.1f}" stroke-linejoin="miter"/>')
 
+    # Windows — break the wall poché and glaze the reveal. Drawn from real window
+    # objects (or synthesised for a pre-openings graph) so the plan shows the same
+    # openings the elevation and section already do — one source of truth. Each is
+    # oriented by the wall it sits on, so it always reads flush in that wall.
+    for wcx, wcz, wsize in _plan_windows(graph_data):
+        along_x, snap = _window_wall(wcx, wcz, rooms)
+        cx, cz = (wcx, snap) if along_x else (snap, wcz)
+        out += _window_plan(mp, cx, cz, wsize, along_x, scale, wall)
+
     # Furniture — clamped footprints with a hairline outline + fitted label.
     for f in furn:
         x, y = mp(f["x"] - f["l"] / 2, f["z"] - f["w"] / 2)
@@ -238,6 +248,86 @@ def _door_swing(mp, x_world: float, z_world: float, orient: str,
         f'<line x1="{hx:.1f}" y1="{hy:.1f}" x2="{hx:.1f}" y2="{hy + wpx:.1f}" stroke="{_FLOOR}" stroke-width="{wall + 2:.1f}"/>',
         f'<line x1="{hx:.1f}" y1="{hy:.1f}" x2="{hx + wpx:.1f}" y2="{hy:.1f}" stroke="{_INK}" stroke-width="1.6"/>',
         f'<path d="M {hx + wpx:.1f} {hy:.1f} A {wpx:.1f} {wpx:.1f} 0 0 1 {hx:.1f} {hy + wpx:.1f}" fill="none" stroke="{_INK}" stroke-width="1" stroke-dasharray="3 3" opacity="0.6"/>',
+    ]
+
+
+def _plan_windows(graph_data: dict) -> list[tuple[float, float, float]]:
+    """``(cx, cz, size)`` of every window to draw on the plan — centre point and
+    opening width. Reads real window OBJECTS (the single source of truth once
+    openings are derived into the graph); for an older graph that carries none,
+    derives them on a throwaway copy via the same pass the elevation and section
+    trust, never mutating the input. ``size`` is the opening's LONGER extent, so
+    it is the true clear width regardless of which axis the object stored it on."""
+    from app.services.opening_reasoning import derive_openings  # lazy — avoid import cycle
+
+    def _wins(g: dict) -> list[dict]:
+        return [o for o in (g.get("objects") or [])
+                if isinstance(o, dict) and str(o.get("role") or "").lower() == "window"]
+
+    wins = _wins(graph_data) or _wins(derive_openings(copy.deepcopy(graph_data)))
+    out: list[tuple[float, float, float]] = []
+    seen: set[tuple[int, int]] = set()
+    for o in wins:
+        r = object_rect(o)
+        size = max(r.x1 - r.x0, r.z1 - r.z0)
+        if size <= 0:
+            continue
+        cx, cz = (r.x0 + r.x1) / 2, (r.z0 + r.z1) / 2
+        key = (round(cx * 20), round(cz * 20))  # ~5 cm grid — drop duplicate openings
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append((cx, cz, size))
+    return out
+
+
+def _window_wall(cx: float, cz: float, rooms: list[dict]) -> tuple[bool, float]:
+    """Which wall a window sits on and the exact wall line to place it flush on.
+    Returns ``(along_x, snap)``: ``along_x`` True = a horizontal top/bottom wall
+    (``snap`` is its Z line), False = a vertical side wall (``snap`` is its X
+    line). Decided by the nearest room EDGE — robust to however the opening stored
+    its length/width axes (an LLM round-trip or importer can swap them) and to
+    small position drift, which would otherwise leave a window off its wall."""
+    best_d, best_along_x, best_snap = float("inf"), True, cz
+    for rm in rooms:
+        x0, x1 = rm["x"], rm["x"] + rm["l"]
+        z0, z1 = rm["z"], rm["z"] + rm["w"]
+        if x0 - 0.5 <= cx <= x1 + 0.5:                    # projects onto a horizontal wall
+            for z_edge in (z0, z1):
+                if abs(cz - z_edge) < best_d:
+                    best_d, best_along_x, best_snap = abs(cz - z_edge), True, z_edge
+        if z0 - 0.5 <= cz <= z1 + 0.5:                    # projects onto a vertical wall
+            for x_edge in (x0, x1):
+                if abs(cx - x_edge) < best_d:
+                    best_d, best_along_x, best_snap = abs(cx - x_edge), False, x_edge
+    return best_along_x, best_snap
+
+
+def _window_plan(mp, cx: float, cz: float, size: float, along_x: bool,
+                 scale: float, wall: float) -> list[str]:
+    """A window in plan: the wall poché is broken over the reveal and glazed with
+    a thin double line — the standard plan window symbol. Drawn centred on the
+    opening and running ALONG its wall, so it always reads flush in the wall."""
+    half = size / 2
+    g = max(wall * 0.20, 1.6)  # glazing lines, offset either side of the wall centre
+    if along_x:
+        ax, ay = mp(cx - half, cz)
+        bx, _ = mp(cx + half, cz)
+        return [
+            f'<line x1="{ax:.1f}" y1="{ay:.1f}" x2="{bx:.1f}" y2="{ay:.1f}" stroke="{_FLOOR}" stroke-width="{wall + 2:.1f}"/>',
+            f'<line x1="{ax:.1f}" y1="{ay - wall / 2:.1f}" x2="{ax:.1f}" y2="{ay + wall / 2:.1f}" stroke="{_WALL}" stroke-width="1.3"/>',
+            f'<line x1="{bx:.1f}" y1="{ay - wall / 2:.1f}" x2="{bx:.1f}" y2="{ay + wall / 2:.1f}" stroke="{_WALL}" stroke-width="1.3"/>',
+            f'<line x1="{ax:.1f}" y1="{ay - g:.1f}" x2="{bx:.1f}" y2="{ay - g:.1f}" stroke="{_INK}" stroke-width="1"/>',
+            f'<line x1="{ax:.1f}" y1="{ay + g:.1f}" x2="{bx:.1f}" y2="{ay + g:.1f}" stroke="{_INK}" stroke-width="1"/>',
+        ]
+    ax, ay = mp(cx, cz - half)
+    _, by = mp(cx, cz + half)
+    return [
+        f'<line x1="{ax:.1f}" y1="{ay:.1f}" x2="{ax:.1f}" y2="{by:.1f}" stroke="{_FLOOR}" stroke-width="{wall + 2:.1f}"/>',
+        f'<line x1="{ax - wall / 2:.1f}" y1="{ay:.1f}" x2="{ax + wall / 2:.1f}" y2="{ay:.1f}" stroke="{_WALL}" stroke-width="1.3"/>',
+        f'<line x1="{ax - wall / 2:.1f}" y1="{by:.1f}" x2="{ax + wall / 2:.1f}" y2="{by:.1f}" stroke="{_WALL}" stroke-width="1.3"/>',
+        f'<line x1="{ax - g:.1f}" y1="{ay:.1f}" x2="{ax - g:.1f}" y2="{by:.1f}" stroke="{_INK}" stroke-width="1"/>',
+        f'<line x1="{ax + g:.1f}" y1="{ay:.1f}" x2="{ax + g:.1f}" y2="{by:.1f}" stroke="{_INK}" stroke-width="1"/>',
     ]
 
 
