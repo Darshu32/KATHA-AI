@@ -30,6 +30,8 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
+from app.config import get_settings
+
 # Default wall thickness (metres) when the graph doesn't specify one. A neutral
 # interior value; exterior walls in practice run thicker, but a single constant
 # keeps the derivation deterministic and is easily overridden later per-region.
@@ -284,14 +286,12 @@ def _sweep_axis(rooms: list[dict], axis: str, thickness: float) -> list[dict]:
     return segments
 
 
-# Opening defaults (metres): doors in partitions between adjacent rooms, windows
-# on exterior walls. Kept as module constants — these are geometry parameters,
-# not architectural knowledge.
-_DOOR_W, _DOOR_H = 0.9, 2.1
-_WIN_W, _WIN_SILL, _WIN_HEAD = 1.2, 0.9, 2.1
-_MIN_DOOR_SEG = 0.9      # a partition must be at least this long to hang a door
-#                          (kept in step with the solver's adjacency min_share)
-_MIN_WINDOW_SEG = 1.6    # an exterior wall must be at least this long for a window
+# Opening dimensions — door/window sizes, sill/head heights, and the shortest
+# wall a door/window can occupy — are read from Settings (see ``app.config``),
+# so they come from one documented, code-sourced, env-overridable place rather
+# than magic numbers. ``_add_openings`` reads them per call (get_settings is
+# cached), which keeps the generation opening-pass, the renderers and the IFC
+# export all sizing openings from the same source.
 
 
 def _adjacency_pairs(adjacencies) -> set[frozenset]:
@@ -312,31 +312,37 @@ def _adjacency_pairs(adjacencies) -> set[frozenset]:
 def _add_openings(segments: list[dict], adjacencies) -> None:
     """Place a door in each partition between adjacent rooms (from the adjacency
     graph, one per pair) and a window on each long-enough exterior wall. In-place.
-    ``center`` is measured from the segment start (0 … length)."""
+    ``center`` is measured from the segment start (0 … length). Opening sizes
+    come from Settings (code-sourced), not hardcoded literals."""
+    s = get_settings()
+    door_w, door_h = s.opening_door_width_m, s.opening_door_height_m
+    win_w = s.opening_window_width_m
+    win_sill, win_head = s.opening_window_sill_m, s.opening_window_head_m
+    min_door, min_window = s.opening_min_door_wall_m, s.opening_min_window_wall_m
     adj = _adjacency_pairs(adjacencies)
     doored: set[frozenset] = set()
     for seg in segments:
         length = seg["end"] - seg["start"]
         if seg["kind"] == "partition":
             pair = frozenset(seg["rooms"])
-            if pair in adj and pair not in doored and length >= _MIN_DOOR_SEG:
+            if pair in adj and pair not in doored and length >= min_door:
                 seg["openings"] = [{
                     "source_id": f"door-{'-'.join(sorted(seg['rooms']))}",
                     "kind": "door",
                     "center": round(length / 2, 4),
-                    "width": round(min(_DOOR_W, length * 0.6), 4),
+                    "width": round(min(door_w, length * 0.6), 4),
                     "sill": 0.0,
-                    "head": round(min(_DOOR_H, seg["height"]), 4),
+                    "head": round(min(door_h, seg["height"]), 4),
                 }]
                 doored.add(pair)
-        elif length >= _MIN_WINDOW_SEG:  # exterior wall
-            head = min(_WIN_HEAD, seg["height"])
-            sill = min(_WIN_SILL, max(head - 0.6, 0.0))
+        elif length >= min_window:  # exterior wall
+            head = min(win_head, seg["height"])
+            sill = min(win_sill, max(head - 0.6, 0.0))
             seg["openings"] = [{
                 "source_id": f"win-{seg['id']}",
                 "kind": "window",
                 "center": round(length / 2, 4),
-                "width": round(min(_WIN_W, length * 0.6), 4),
+                "width": round(min(win_w, length * 0.6), 4),
                 "sill": round(sill, 4),
                 "head": round(head, 4),
             }]

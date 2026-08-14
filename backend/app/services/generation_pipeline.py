@@ -31,6 +31,7 @@ from app.services.image_service import generate_image, resolve_theme_visual_hint
 from app.services.knowledge_validator import validate_design_graph_async
 from app.services import design_reasoning, program_reasoning
 from app.services.layout_solver import furnish_rooms, maybe_solve_layout
+from app.services.opening_reasoning import derive_openings
 from app.services.standards.knowledge_service import resolve_standard as _resolve_standard
 from app.services.standards.mep_sizing import system_cost_estimate as _mep_system_cost
 from app.services.object_bboxes import compute_object_bboxes
@@ -818,6 +819,13 @@ async def run_initial_generation(
     # solve: the LLM frequently pre-places the rooms, which makes maybe_solve_layout
     # a no-op (solution=None) and previously left the furniture mis-framed.
     graph_data = furnish_rooms(graph_data)
+
+    # Step 1c — Derive real openings from the placed geometry: windows on
+    # exterior walls, doors between adjacent rooms, written into the graph as
+    # objects so every reader (plan/section/elevation/isometric/3D/IFC) sees one
+    # source instead of synthesising them per-view from hardcoded sizes.
+    # Idempotent — a no-op when the design already carries opening objects.
+    graph_data = derive_openings(graph_data)
 
     # Step 2 — Persist (capture prompt so re-renders inherit context)
     version = await save_graph_version(

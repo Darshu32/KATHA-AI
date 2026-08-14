@@ -190,6 +190,21 @@ class Settings(BaseSettings):
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 24  # 24 hours
 
+    # ── Opening geometry (windows / doors) ───────────────
+    # The one place opening dimensions live. Values are code-sourced — NBC/IBC
+    # clear doorway width 900 mm, standard 2.1 m leaf, common residential window
+    # proportions — and env-overridable so a jurisdiction or client standard can
+    # retune them without touching geometry code. Read by the wall model, so the
+    # generation opening-pass, every 2D/3D renderer and the IFC export all size
+    # openings from this single source instead of hardcoded literals.
+    opening_door_width_m: float = 0.9       # NBC/IBC clear doorway width
+    opening_door_height_m: float = 2.1      # standard door leaf height
+    opening_window_width_m: float = 1.2     # standard residential window width
+    opening_window_sill_m: float = 0.9      # sill height above finished floor
+    opening_window_head_m: float = 2.1      # head height above finished floor
+    opening_min_door_wall_m: float = 0.9    # shortest partition that can hold a door
+    opening_min_window_wall_m: float = 1.6  # shortest exterior wall that gets a window
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",

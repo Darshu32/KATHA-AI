@@ -36,7 +36,7 @@ from app.services.spatial.graph_geometry import (
     room_name,
     room_rect,
 )
-from app.services.wall_model import derive_wall_model
+from app.services.wall_model import derive_multiroom_wall_model
 
 logger = logging.getLogger(__name__)
 
@@ -348,6 +348,17 @@ def _choose_cut(room_specs: list, axis: str, cut_at: float | None, bb: Rect) -> 
 # ── Elevation view ───────────────────────────────────────────────────────────
 
 
+def _draw_opening(out: list[str], x: float, top: float, w: float, h: float, kind: str) -> None:
+    """One opening on an elevation face — a framed reveal, glazed with a mullion
+    for a window, a filled leaf for a door."""
+    out.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{w:.1f}" height="{h:.1f}" fill="{_PAPER}" stroke="{_INK}" stroke-width="1.8"/>')
+    if kind == "door":
+        out.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{w:.1f}" height="{h:.1f}" fill="{_DOOR}" fill-opacity="0.22"/>')
+    else:
+        out.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{w:.1f}" height="{h:.1f}" fill="{_OPENING}" fill-opacity="0.28"/>')
+        out.append(f'<line x1="{x+w/2:.1f}" y1="{top:.1f}" x2="{x+w/2:.1f}" y2="{top+h:.1f}" stroke="{_INK}" stroke-width="1" stroke-opacity="0.7"/>')
+
+
 def generate_elevation_package(graph: dict, face: str | None = None) -> dict:
     """Exterior building elevation — every placed room projected onto one face.
 
@@ -414,26 +425,40 @@ def generate_elevation_package(graph: dict, face: str | None = None) -> dict:
         H = r.y1
         seg.append(f'<rect x="{ux(ru0):.1f}" y="{hy(H):.1f}" width="{(ru1-ru0)*s:.1f}" height="{H*s:.1f}" fill="#f6ede0" stroke="{_INK}" stroke-width="2"/>')
 
-    # Openings on the face — windows glazed, doors leafed. Furniture is interior,
-    # so it is concealed on an exterior elevation (but still accounted for below).
+    # Openings on the face. Prefer real window/door OBJECTS from the graph; when
+    # it carries none — multi-room plans synthesise openings in the wall model,
+    # not as objects — fall back to the wall model's windows on the face-parallel
+    # exterior walls, so the facade is never drawn blank.
     openings = 0
-    for o in depictable:
-        role = str(o.get("role") or "").lower()
-        if role not in ("window", "door"):
-            continue
-        orc = _clamp_rect(object_rect(o), bb)
-        ou0, ou1 = (orc.x0, orc.x1) if axis == "z" else (orc.z0, orc.z1)
-        sill = max(_num((o.get("position") or {}).get("y"), 0.0), 0.0)
-        head = min(sill + orc.y1, Hmax)
-        x, w = ux(ou0), max((ou1 - ou0) * s, 2.0)
-        top, h = hy(head), max((head - sill) * s, 2.0)
-        seg.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{w:.1f}" height="{h:.1f}" fill="{_PAPER}" stroke="{_INK}" stroke-width="1.8"/>')
-        if role == "window":
-            seg.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{w:.1f}" height="{h:.1f}" fill="{_OPENING}" fill-opacity="0.28"/>')
-            seg.append(f'<line x1="{x+w/2:.1f}" y1="{top:.1f}" x2="{x+w/2:.1f}" y2="{top+h:.1f}" stroke="{_INK}" stroke-width="1" stroke-opacity="0.7"/>')
-        else:
-            seg.append(f'<rect x="{x:.1f}" y="{top:.1f}" width="{w:.1f}" height="{h:.1f}" fill="{_DOOR}" fill-opacity="0.22"/>')
-        openings += 1
+    opening_objs = [o for o in depictable if str(o.get("role") or "").lower() in ("window", "door")]
+    if opening_objs:
+        for o in opening_objs:
+            if str(o.get("wall") or "") == "partition":
+                continue  # a derived interior door — not shown on an exterior elevation
+            role = str(o.get("role") or "").lower()
+            orc = _clamp_rect(object_rect(o), bb)
+            ou0, ou1 = (orc.x0, orc.x1) if axis == "z" else (orc.z0, orc.z1)
+            sill = max(_num((o.get("position") or {}).get("y"), 0.0), 0.0)
+            head = min(sill + orc.y1, Hmax)
+            x, w = ux(ou0), max((ou1 - ou0) * s, 2.0)
+            top, h = hy(head), max((head - sill) * s, 2.0)
+            _draw_opening(seg, x, top, w, h, role)
+            openings += 1
+    else:
+        face_run = "x" if axis == "z" else "z"  # walls parallel to the drawn face
+        wm_rooms = [{"id": rid, "x": r.x0, "z": r.z0, "length": r.x1 - r.x0,
+                     "width": r.z1 - r.z0, "height": r.y1} for rid, _nm, r in room_specs]
+        for wseg in derive_multiroom_wall_model(wm_rooms, graph.get("adjacencies")):
+            if wseg.get("kind") != "exterior" or wseg.get("runs") != face_run:
+                continue
+            for op in wseg.get("openings", []):
+                uc = wseg["start"] + op["center"]
+                ua, ub = uc - op["width"] / 2, uc + op["width"] / 2
+                sill, head = op["sill"], min(op["head"], Hmax)
+                x, w = ux(ua), max((ub - ua) * s, 2.0)
+                top, h = hy(head), max((head - sill) * s, 2.0)
+                _draw_opening(seg, x, top, w, h, op.get("kind", "window"))
+                openings += 1
 
     seg.append(_hdim(ux(u0), ux(u1), ground + 20, f"{span_u:.2f} m"))
     seg.append(_vdim(hy(Hmax), ground, ux(u0) - 14, f"{Hmax:.2f} m"))
