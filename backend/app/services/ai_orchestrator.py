@@ -688,9 +688,28 @@ async def edit_object_via_prompt(
     )
 
     updated_obj = json.loads(response.choices[0].message.content)
+    if not isinstance(updated_obj, dict):
+        raise ValueError("Object edit did not return a JSON object")
     for index, obj in enumerate(current_graph["objects"]):
         if obj.get("id") == object_id:
-            current_graph["objects"][index] = updated_obj
+            # MERGE the edit onto the original — never replace wholesale. The
+            # model returns only the fields it chose to touch (a "walnut top" edit
+            # comes back as just {id, type, material, dimensions}), so a wholesale
+            # replace STRIPS the object of its placement (position/rotation) and
+            # its role — teleporting it to the origin and dropping it out of every
+            # role-keyed renderer (plan/section/elevation, furnishable_objects).
+            # Keep every original field, overlay only what the model changed
+            # (deep-merging the geometry sub-dicts so a partial dimensions/position
+            # can't erase the rest), and pin identity (id/type/role): an edit
+            # restyles or resizes ONE object, it never changes what that object is.
+            merged = {**obj, **updated_obj}
+            for key in ("dimensions", "position", "rotation"):
+                if isinstance(obj.get(key), dict) and isinstance(updated_obj.get(key), dict):
+                    merged[key] = {**obj[key], **updated_obj[key]}
+            for key in ("id", "type", "role"):
+                if key in obj:
+                    merged[key] = obj[key]
+            current_graph["objects"][index] = merged
             break
 
     return current_graph
