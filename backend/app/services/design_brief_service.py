@@ -99,15 +99,16 @@ def validate_and_normalize(payload: DesignBriefIn) -> DesignBriefOut:
                 f"Building codes defaulted from project type '{payload.project_type.type.value}': {', '.join(defaults)}"
             )
 
-    # Budget sanity vs area
-    dims = payload.space.dimensions
-    area = dims.length * dims.width
-    if payload.requirements.budget is not None and area > 0:
-        per_unit = payload.requirements.budget / area
-        if per_unit < 100:
-            warnings.append(
-                f"Budget of {payload.requirements.budget} {payload.requirements.currency} over {area:.1f} {dims.unit}² is unusually low (~{per_unit:.1f}/{dims.unit}²)."
-            )
+    # Budget sanity vs area — only when both optional sections were provided.
+    if payload.space is not None and payload.requirements is not None:
+        dims = payload.space.dimensions
+        area = dims.length * dims.width
+        if payload.requirements.budget is not None and area > 0:
+            per_unit = payload.requirements.budget / area
+            if per_unit < 100:
+                warnings.append(
+                    f"Budget of {payload.requirements.budget} {payload.requirements.currency} over {area:.1f} {dims.unit}² is unusually low (~{per_unit:.1f}/{dims.unit}²)."
+                )
 
     return DesignBriefOut(
         brief_id=uuid.uuid4().hex,
@@ -122,23 +123,27 @@ def validate_and_normalize(payload: DesignBriefIn) -> DesignBriefOut:
 
 
 def brief_to_generation_context(brief: DesignBriefOut) -> dict:
-    """Flatten a validated brief into the dict shape used by the generation pipeline."""
-    dims = brief.space.dimensions
+    """Flatten a validated brief into the dict shape used by the generation pipeline.
+
+    Space and requirements are optional (an architect may save a brief before
+    filling them), so their fields resolve to None/empty when the section is
+    absent rather than raising."""
+    space, req = brief.space, brief.requirements
     return {
         "project_type": brief.project_type.type.value,
         "project_sub_type": brief.project_type.sub_type,
         "project_scale": brief.project_type.scale,
         "theme": brief.theme.theme.value,
         "theme_custom_spec": brief.theme.custom_spec,
-        "dimensions": dims.model_dump(),
-        "site_conditions": brief.space.site_conditions.model_dump(),
-        "constraints": list(brief.space.constraints),
-        "functional_needs": list(brief.requirements.functional_needs),
-        "aesthetic_preferences": list(brief.requirements.aesthetic_preferences),
-        "narrative": brief.requirements.narrative,
-        "budget": brief.requirements.budget,
-        "currency": brief.requirements.currency,
-        "timeline_weeks": brief.requirements.timeline_weeks,
+        "dimensions": space.dimensions.model_dump() if space else None,
+        "site_conditions": space.site_conditions.model_dump() if space else None,
+        "constraints": list(space.constraints) if space else [],
+        "functional_needs": list(req.functional_needs) if req else [],
+        "aesthetic_preferences": list(req.aesthetic_preferences) if req else [],
+        "narrative": req.narrative if req else "",
+        "budget": req.budget if req else None,
+        "currency": req.currency if req else None,
+        "timeline_weeks": req.timeline_weeks if req else None,
         "regulatory": {
             "country": brief.regulatory.country,
             "state": brief.regulatory.state,

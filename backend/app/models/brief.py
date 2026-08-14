@@ -204,8 +204,12 @@ class DesignBriefIn(BaseModel):
 
     project_type: ProjectTypeSection
     theme: ThemeSection
-    space: SpaceParameters
-    requirements: ClientRequirements
+    # Optional: an architect can save a brief with just project type + theme and
+    # fill the dimensions / requirements later. The frontend omits an empty
+    # section rather than send placeholder numbers, so requiring these 422'd every
+    # save that hadn't filled the (collapsed-by-default) Space + Requirements.
+    space: SpaceParameters | None = None
+    requirements: ClientRequirements | None = None
     regulatory: RegulatoryContext = Field(default_factory=RegulatoryContext)
     notes: str = Field(default="", max_length=5000)
 
@@ -215,7 +219,7 @@ class DesignBriefOut(BaseModel):
     status: str
     project_type: ProjectTypeSection
     theme: ThemeSection
-    space: SpaceParameters
-    requirements: ClientRequirements
+    space: SpaceParameters | None = None
+    requirements: ClientRequirements | None = None
     regulatory: RegulatoryContext
     warnings: list[str] = Field(default_factory=list)
