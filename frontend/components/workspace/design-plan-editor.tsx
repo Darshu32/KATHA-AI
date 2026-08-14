@@ -41,6 +41,11 @@ function toM(v: unknown, unit?: string): number {
 const STRUCTURAL = new Set(["building", "wall", "floor", "slab", "ground", "atrium", "driveway"]);
 // Openings are drawn as architectural symbols on the walls, not furniture boxes.
 const OPENING_TYPES = new Set(["door", "window", "opening", "doorway"]);
+// Labels are authored at this font-size (px) and scaled down to their world-metre
+// size with a per-text transform. Sizing SVG <text> directly in metres (~0.3
+// user-units) makes Chrome rasterise the glyph at that sub-unit size and upscale
+// it via the viewBox — which ghosts every label into unreadable doubled text.
+const LABEL_FS = 16;
 
 /* One opening on a wall — a door (leaf + swing arc) or a window (glazing line),
  * with a paper-filled gap so the wall reads as broken there. */
@@ -442,9 +447,8 @@ export default function DesignPlanEditor({
                 vectorEffect="non-scaling-stroke"
               />
               <text
-                x={r.x + r.l / 2}
-                y={r.z + nameFont * 1.3}
-                fontSize={nameFont}
+                transform={`translate(${r.x + r.l / 2} ${r.z + nameFont * 1.3}) scale(${nameFont / LABEL_FS})`}
+                fontSize={LABEL_FS}
                 textAnchor="middle"
                 fill="#1A1A1A"
                 fontWeight={600}
@@ -453,9 +457,8 @@ export default function DesignPlanEditor({
                 {r.name}
               </text>
               <text
-                x={r.x + r.l / 2}
-                y={r.z + nameFont * 2.55}
-                fontSize={nameFont * 0.78}
+                transform={`translate(${r.x + r.l / 2} ${r.z + nameFont * 2.55}) scale(${(nameFont * 0.78) / LABEL_FS})`}
+                fontSize={LABEL_FS}
                 textAnchor="middle"
                 fill="#6b7280"
                 style={{ userSelect: "none" }}
@@ -504,9 +507,8 @@ export default function DesignPlanEditor({
                 );
                 return fit >= 0.09 ? (
                   <text
-                    x={f.x}
-                    y={f.z}
-                    fontSize={fit}
+                    transform={`translate(${f.x} ${f.z}) scale(${fit / LABEL_FS})`}
+                    fontSize={LABEL_FS}
                     textAnchor="middle"
                     dominantBaseline="middle"
                     fill="#3f3f46"
