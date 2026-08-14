@@ -131,7 +131,11 @@ class Vec3(BaseModel):
 class Dimensions(BaseModel):
     length: float
     width: float
-    height: float
+    # Optional: the brief lets an architect give length + width without a ceiling
+    # height (the UI omits it when blank), and the generator derives a height
+    # downstream. Requiring it here 422'd every "footprint set, height blank"
+    # generate. Kept as a hint — real heights come from the design graph.
+    height: float | None = None
 
 
 class DesignObjectSchema(BaseModel):
