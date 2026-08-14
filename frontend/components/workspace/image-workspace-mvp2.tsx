@@ -187,6 +187,9 @@ export default function ImageWorkspaceMvp2() {
   // prompt they're typing and whether a submit is in flight. Cleared
   // after a successful edit so the popover collapses on its own.
   const [selectedObjectId, setSelectedObjectId] = useState<string | null>(null);
+  // A version whose spec landed (fast edit) but whose photoreal still needs a
+  // refresh. The effect below fires the rerender once it becomes the latest.
+  const [staleRenderVersion, setStaleRenderVersion] = useState<number | null>(null);
   const [editPrompt, setEditPrompt] = useState("");
   const [isEditing, setIsEditing] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
@@ -424,15 +427,23 @@ export default function ImageWorkspaceMvp2() {
     setEditError(null);
     setIsEditing(true);
     try {
-      const editRes = await designApi.editObject(token, activeProjectId, {
-        object_id: selectedObjectId,
-        prompt: editPrompt.trim(),
-      });
+      // render:false returns the saved spec fast (graph, estimate, validation)
+      // and skips the ~minute photoreal finish. The drawings, 3D and spec reflect
+      // the edit immediately; the image is refreshed right after by the
+      // stale-render effect below, so the edit never blocks the UI on the finish.
+      const editRes = await designApi.editObject(
+        token,
+        activeProjectId,
+        { object_id: selectedObjectId, prompt: editPrompt.trim() },
+        { render: false },
+      );
 
       addGeneration({
         id: crypto.randomUUID(),
         prompt: `${latestGeneration.prompt} — ${editPrompt.trim()}`,
-        url: editRes.image_url ?? undefined,
+        // Carry the previous image forward so the hero isn't blank while the
+        // fresh photoreal renders; the stale-render effect swaps it in.
+        url: editRes.image_url ?? latestGeneration.url,
         timestamp: new Date().toISOString(),
         theme,
         ratio,
@@ -454,6 +465,10 @@ export default function ImageWorkspaceMvp2() {
       setActiveProject(activeProjectId, editRes.version);
       setEditPrompt("");
       setSelectedObjectId(null);
+      // Refresh the photoreal once this new version is the active one. The
+      // effect (below) fires when latestGeneration catches up, so submitRerender
+      // reads fresh state instead of the stale closure we'd have here.
+      setStaleRenderVersion(editRes.version);
     } catch (e) {
       toastError(e, "Edit failed");
       setEditError(
@@ -465,6 +480,20 @@ export default function ImageWorkspaceMvp2() {
       setIsEditing(false);
     }
   };
+
+  /* After a fast (render-skipped) edit, refresh the photoreal once the new
+     version is the active/latest one. Running it here — rather than inline in
+     submitEdit — means submitRerender reads the freshly-committed state instead
+     of the stale closure it would capture mid-submit. */
+  useEffect(() => {
+    if (staleRenderVersion == null) return;
+    if (latestGeneration?.version !== staleRenderVersion) return;
+    setStaleRenderVersion(null);
+    void submitRerender();
+    // submitRerender + latestGeneration are intentionally excluded — this must
+    // fire exactly once, when the target version becomes latest.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [latestGeneration?.version, staleRenderVersion]);
 
   /* generate() — runs the full project pipeline.
    *
@@ -4732,11 +4761,18 @@ function EditPopover({
             onSubmit();
           }
         }}
-        placeholder="Change material, dimensions, position, finish…"
+        placeholder="Change material, finish, colour, or size…"
         rows={2}
         disabled={isEditing || !canEdit}
         className="w-full resize-none outline-none bg-paper border border-hairline focus:border-graphite rounded-sm py-1.5 px-2 text-[12px] text-ink leading-relaxed font-mono placeholder:text-ink-mute"
       />
+      {/* Precise placement is a direct manipulation, not a prompt — point the
+          architect at the plan editor rather than asking the LLM to guess new
+          coordinates from prose. */}
+      <p className="mt-1.5 text-[10px] text-ink-mute leading-snug">
+        To move or resize by hand, drag it in the{" "}
+        <span className="font-medium text-ink-soft">Plan</span> view.
+      </p>
       {editError ? (
         <p className="mt-1.5 text-[11px] font-mono text-brick">{editError}</p>
       ) : null}

@@ -912,6 +912,7 @@ async def run_local_edit(
     edit_prompt: str,
     project_type: str | None = None,
     region: str = "india",
+    render: bool = True,
 ) -> dict:
     """
     Edit a single object:
@@ -920,6 +921,11 @@ async def run_local_edit(
     3. Save new version (preserves the originating prompt)
     4. Recompute estimate
     5. Re-render — combines original prompt + edit hint for context
+
+    ``render=False`` returns as soon as the spec is saved (graph, estimate,
+    validation, compliance) and SKIPS the ~minute-long photoreal finish, so the
+    UI can reflect the edit instantly and refresh the image separately via
+    /render. The default renders inline for API callers that want one round-trip.
     """
 
     latest = await get_latest_version(db, project_id)
@@ -972,16 +978,20 @@ async def run_local_edit(
         db, validation=validation, jurisdiction=jurisdiction,
     )
 
-    # Render against the *updated* graph so geometric edits surface
-    # in the new render rather than just the data layer.
-    image_url, render_bytes, hotspots = await _attach_render(
-        db,
-        graph_version_id=version.id,
-        prompt=render_prompt,
-        project_type=project_type,
-        theme=theme,
-        graph_data=updated_graph,
-    )
+    # Render against the *updated* graph so geometric edits surface in the new
+    # render rather than just the data layer. The finish pass is the slow step;
+    # when render=False the caller takes the fast structural response and
+    # refreshes the photoreal itself via /render (see the ``render`` docstring).
+    image_url = render_bytes = hotspots = None
+    if render:
+        image_url, render_bytes, hotspots = await _attach_render(
+            db,
+            graph_version_id=version.id,
+            prompt=render_prompt,
+            project_type=project_type,
+            theme=theme,
+            graph_data=updated_graph,
+        )
 
     return {
         "project_id": project_id,

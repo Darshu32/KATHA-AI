@@ -241,10 +241,13 @@ async def generate_design(
 async def local_edit(
     project_id: str,
     payload: LocalEditRequest,
+    render: bool = True,
     user: User = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ):
-    """Edit a single object via prompt."""
+    """Edit a single object via prompt. ``render=false`` returns the saved spec
+    immediately (graph, estimate, validation) and skips the slow photoreal finish
+    so the UI stays responsive; the client refreshes the image via /render."""
     project = await get_project(db, project_id)
     _check_owner(project, user)
 
@@ -255,6 +258,7 @@ async def local_edit(
         edit_prompt=payload.prompt,
         project_type=project.project_type,
         region=project.region,
+        render=render,
     )
     return result
 

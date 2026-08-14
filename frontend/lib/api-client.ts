@@ -819,7 +819,15 @@ export const design = {
       `/projects/${projectId}/generate`, "POST", body, token,
     ),
 
-  editObject: (token: string | undefined, projectId: string, body: { object_id: string; prompt: string }) =>
+  // `render:false` returns the saved spec immediately and skips the slow
+  // photoreal finish — the caller refreshes the image via rerender() so the
+  // edit feels instant. Defaults to true for a single round-trip.
+  editObject: (
+    token: string | undefined,
+    projectId: string,
+    body: { object_id: string; prompt: string },
+    opts?: { render?: boolean },
+  ) =>
     request<{
       project_id: string;
       version: number;
@@ -832,7 +840,7 @@ export const design = {
       code_compliance_summary?: import("./types").CodeComplianceEntry[];
       status: string;
     }>(
-      `/projects/${projectId}/edit`, "POST", body, token,
+      `/projects/${projectId}/edit${opts?.render === false ? "?render=false" : ""}`, "POST", body, token,
     ),
 
   switchTheme: (token: string | undefined, projectId: string, body: { new_style: string; preserve_layout: boolean }) =>
