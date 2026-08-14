@@ -2,6 +2,7 @@
 
 import json
 import logging
+import math
 from copy import deepcopy
 
 from openai import AsyncOpenAI
@@ -709,6 +710,25 @@ async def edit_object_via_prompt(
             for key in ("id", "type", "role"):
                 if key in obj:
                     merged[key] = obj[key]
+            # Guardrail: never let a hallucinated value corrupt geometry. A
+            # dimension must be a positive finite number; a coordinate must be
+            # finite (0 / negative are legal). Anything else reverts to the
+            # original so a bad edit degrades to "no geometry change", never to a
+            # zero-sized or NaN object the renderers can't place.
+            md, od = merged.get("dimensions"), obj.get("dimensions")
+            if isinstance(md, dict) and isinstance(od, dict):
+                for k in ("length", "width", "height"):
+                    v = md.get(k)
+                    if k in od and not (isinstance(v, (int, float)) and not isinstance(v, bool)
+                                        and math.isfinite(v) and v > 0):
+                        md[k] = od[k]
+            mp, op = merged.get("position"), obj.get("position")
+            if isinstance(mp, dict) and isinstance(op, dict):
+                for k in ("x", "y", "z"):
+                    v = mp.get(k)
+                    if k in op and not (isinstance(v, (int, float)) and not isinstance(v, bool)
+                                        and math.isfinite(v)):
+                        mp[k] = op[k]
             current_graph["objects"][index] = merged
             break
 
