@@ -794,6 +794,30 @@ async def switch_theme(
         "change_count": len(applier_result.get("changes", [])),
         "changes": applier_result.get("changes", []),
     }
+
+    # A theme switch restyles; it must not move or resize anything. But the LLM
+    # round-trips the whole graph through DESIGN_GRAPH_JSON_SCHEMA, which has no
+    # `spaces` field and no guarantee it preserves object geometry — so it can DROP
+    # the solver-placed room geometry and SWAP an opening's length/width axes. With
+    # preserve_layout, restore the geometry from the source: the placed spaces +
+    # adjacencies verbatim, and each object's position/dimensions/rotation (keeping
+    # only the themed colour/material). Without this the plan/section/elevation
+    # render empty (no spaces) or draw windows across their walls (swapped axes).
+    if preserve_layout:
+        for key in ("spaces", "adjacencies"):
+            if current_graph.get(key):
+                refined[key] = deepcopy(current_graph[key])
+        src_by_id = {
+            o.get("id"): o
+            for o in current_graph.get("objects", [])
+            if isinstance(o, dict) and o.get("id")
+        }
+        for obj in refined.get("objects", []):
+            src = src_by_id.get(obj.get("id")) if isinstance(obj, dict) else None
+            if src:
+                for gkey in ("position", "dimensions", "rotation"):
+                    if gkey in src:
+                        obj[gkey] = deepcopy(src[gkey])
     return refined
 
 
