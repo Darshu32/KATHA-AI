@@ -36,9 +36,11 @@ def test_unfurnished_multiroom_still_renders():
     # to bail because every solid was "structural").
     built = _build_and_raster(_apartment(), 800, 600)
     assert built is not None
-    base_png, _depth, _normal, _hotspots, kind = built
+    base_png, _depth, _normal, _hotspots, kind, idbuf, solid_ids = built
     assert kind == "interior"
     assert base_png and len(base_png) > 1000          # real PNG bytes rendered
+    # id-buffer + index-aligned ids back the per-object mask (localized editing).
+    assert idbuf.shape == (600, 800) and len(solid_ids) >= 1
 
 
 def test_empty_single_room_still_returns_none():

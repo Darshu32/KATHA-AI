@@ -21,11 +21,14 @@ from app.services.design_graph_service import (
     get_latest_version,
     get_project,
     get_version,
+    get_version_by_id,
     list_versions,
+    load_render_bytes,
     set_version_bboxes,
 )
 from app.services.object_bboxes import compute_object_bboxes
 from app.services.spatial import render_design
+from app.services.spatial.render_pipeline import render_design_localized
 from app.services.spatial.gltf import scene_to_gltf
 from app.services.storage import key_to_url
 from app.services.generation_pipeline import (
@@ -464,6 +467,24 @@ async def update_object_position(
             "position": target["position"]}
 
 
+def _geometry_unchanged(parent_graph: dict, new_graph: dict, object_ids: list[str]) -> bool:
+    """True when every named object keeps the SAME position + dimensions across
+    the two graphs — i.e. the edit changed only material/finish/colour. That's
+    the condition under which the new render shares the previous camera, so a
+    localized composite over the previous image is geometrically sound (a moved
+    or resized object shifts the framing and must fall back to a full render)."""
+    def _obj(g: dict, oid: str) -> dict | None:
+        return next((o for o in (g.get("objects") or [])
+                     if isinstance(o, dict) and str(o.get("id")) == oid), None)
+    for oid in object_ids:
+        a, b = _obj(parent_graph, oid), _obj(new_graph, oid)
+        if a is None or b is None:
+            return False
+        if a.get("position") != b.get("position") or a.get("dimensions") != b.get("dimensions"):
+            return False
+    return True
+
+
 @router.post("/render")
 async def rerender_route(
     project_id: str,
@@ -480,8 +501,25 @@ async def rerender_route(
     version = await get_latest_version(db, project_id)
     if version is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No versions found")
+    graph = version.graph_data or {}
 
-    result = await render_design(version.graph_data or {})
+    # Localized edit render: when this version is a targeted, geometry-preserving
+    # edit whose parent already has a render, change ONLY the edited object's
+    # region on the hero (composite over the parent image) instead of re-finishing
+    # — and reshuffling — the whole scene. Engages only under a geometry-locked
+    # finish (ControlNet-depth); with the img2img finishes it self-defers, so any
+    # miss falls through to the full render below (today's default behaviour).
+    result = None
+    changed = [str(x) for x in (version.changed_object_ids or []) if x]
+    if changed and version.parent_version_id:
+        parent = await get_version_by_id(db, version.parent_version_id)
+        if parent and _geometry_unchanged(parent.graph_data or {}, graph, changed):
+            prev = await load_render_bytes(db, parent.id)
+            if prev:
+                result = await render_design_localized(graph, prev, changed)
+
+    if result is None or not result.image_bytes:
+        result = await render_design(graph)
     if not result or not result.image_bytes:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,

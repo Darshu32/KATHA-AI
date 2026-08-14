@@ -7,6 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.orm import DesignGraphVersion, GeneratedAsset, Project
 from app.services.graph_normalizer import normalize_graph
+from app.services.storage import read_bytes
 
 logger = logging.getLogger(__name__)
 
@@ -214,6 +215,39 @@ async def get_version(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def get_version_by_id(
+    db: AsyncSession,
+    version_id: str,
+) -> DesignGraphVersion | None:
+    result = await db.execute(
+        select(DesignGraphVersion).where(DesignGraphVersion.id == version_id)
+    )
+    return result.scalar_one_or_none()
+
+
+async def load_render_bytes(
+    db: AsyncSession,
+    graph_version_id: str,
+) -> bytes | None:
+    """Raw bytes of a version's newest finished render, or None. Used by the
+    localized edit render to composite the changed object over the prior image."""
+    asset = await get_latest_render_for_version(db, graph_version_id)
+    if asset is None or not asset.storage_key:
+        return None
+    key = asset.storage_key
+    if key.startswith("data:"):
+        import base64
+        try:
+            return base64.b64decode(key.split(",", 1)[1])
+        except Exception:  # noqa: BLE001
+            return None
+    try:
+        return await read_bytes(key)
+    except Exception:  # noqa: BLE001 — best-effort; caller falls back to a full render
+        logger.warning("could not load render bytes for version %s", graph_version_id)
+        return None
 
 
 async def list_versions(

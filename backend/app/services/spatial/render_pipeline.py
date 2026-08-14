@@ -15,7 +15,7 @@ import logging
 from dataclasses import dataclass
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageFilter
 
 from app.services.spatial.finish import build_finish_prompt, finish_render
 from app.services.spatial.kernel import Solid, _room_dims, build_scene
@@ -77,7 +77,10 @@ def _build_and_raster(graph: dict, width: int, height: int):
     if coverage < 0.02:  # camera saw essentially nothing — let the caller fall back
         logger.warning("spatial render coverage too low (%.3f) kind=%s", coverage, kind)
         return None
-    return _to_png(rgb), _to_png(depth), _to_png(nrm), hotspots, kind
+    # idbuf holds the render-order index of the solid at each pixel; the id list
+    # (index-aligned) lets a caller build a per-object mask (localized editing).
+    return (_to_png(rgb), _to_png(depth), _to_png(nrm), hotspots, kind,
+            idbuf, [s.id for s in render_solids])
 
 
 async def render_design(graph: dict, *, width: int = 1200, height: int = 800,
@@ -90,7 +93,7 @@ async def render_design(graph: dict, *, width: int = 1200, height: int = 800,
         return None
     if not built:
         return None
-    base_png, depth_png, normal_png, hotspots, kind = built
+    base_png, depth_png, normal_png, hotspots, kind, _idbuf, _solid_ids = built
 
     image_bytes, provider, finished = base_png, "katha-kernel", False
     if finish:
@@ -111,6 +114,90 @@ async def render_design(graph: dict, *, width: int = 1200, height: int = 800,
         image_bytes=image_bytes, hotspots=hotspots, base_bytes=base_png,
         depth_bytes=depth_png, normal_bytes=normal_png, provider=provider,
         kind=kind, finished=finished,
+    )
+
+
+def _feathered_object_mask(idbuf, solid_ids, object_ids, target_wh,
+                           grow: int = 23, blur: int = 8):
+    """A 0..1 blend weight (target size): 1 over the given objects' pixels
+    (dilated + feathered so the composite has no hard seam), 0 elsewhere. The
+    id-buffer shares the render's camera, so the mask lands exactly on the
+    objects; the dilation is generous so the finish's generative overflow beyond
+    the geometry silhouette (and the object's OLD pixels in the base image) are
+    covered too. Returns None when none of the objects are visible in frame."""
+    wanted = set(object_ids)
+    sel = np.zeros(idbuf.shape, dtype=bool)
+    for oi, sid in enumerate(solid_ids):
+        if sid in wanted:
+            sel |= (idbuf == oi)
+    if not sel.any():
+        return None
+    m = Image.fromarray((sel * 255).astype(np.uint8), "L")
+    if grow:
+        m = m.filter(ImageFilter.MaxFilter(grow if grow % 2 else grow + 1))
+    if blur:
+        m = m.filter(ImageFilter.GaussianBlur(blur))
+    if m.size != tuple(target_wh):
+        m = m.resize(tuple(target_wh))
+    return (np.asarray(m, np.float32) / 255.0)[..., None]
+
+
+async def render_design_localized(
+    graph: dict, prev_finished: bytes, changed_ids: list[str],
+    *, width: int = 1200, height: int = 800,
+) -> RenderResult | None:
+    """Localized edit render: re-finish the new spec, but composite ONLY the
+    changed objects' region over the PREVIOUS finished image — so an edit changes
+    just that part of the hero and the rest stays pixel-identical (no whole-scene
+    drift). Requires two things to be sound: geometry unchanged (the caller
+    checks, so the new render shares the previous camera) AND a geometry-locked
+    finish (ControlNet-depth — see the provider check below), so the object sits
+    at its exact geometry position in both renders and the mask aligns. Returns
+    None — caller falls back to a full render — when the scene can't raster, the
+    finish isn't geometry-locked/available, or the changed object isn't in view."""
+    if not prev_finished or not changed_ids:
+        return None
+    try:
+        built = await asyncio.to_thread(_build_and_raster, graph, width, height)
+    except Exception as exc:  # noqa: BLE001 — never break the render path
+        logger.warning("localized raster failed: %s", exc)
+        return None
+    if not built:
+        return None
+    base_png, depth_png, normal_png, hotspots, kind, idbuf, solid_ids = built
+
+    res = await finish_render(base_png, depth_png, build_finish_prompt(graph, kind=kind))
+    if not res or not res.get("bytes"):
+        return None  # no finish provider → let the caller do a normal render
+    # Localized compositing needs a GEOMETRY-LOCKED finish. ControlNet-depth
+    # conditions on the kernel depth map, so every object renders at its exact
+    # geometry position — the clay-derived mask lands on it in both the previous
+    # and the new render, and the paste is seamless. The img2img providers
+    # (Gemini, gpt-image-1) re-imagine the frame each run: they rearrange and even
+    # invent furniture, so an object's finished pixels drift from its geometry
+    # position and the mask no longer aligns with the PREVIOUS render (pasting the
+    # new region onto the wrong spot). So localized editing only engages under
+    # ControlNet-depth; otherwise defer to a full render (today's behaviour). All
+    # the plumbing is live — it turns on the moment a replicate_api_token is set.
+    prov = str(res.get("provider") or "")
+    if "controlnet" not in prov:
+        logger.info("localized edit needs a geometry-locked finish; got %s — full render", prov)
+        return None
+    new_fin = Image.open(io.BytesIO(res["bytes"])).convert("RGB")
+    prev = Image.open(io.BytesIO(prev_finished)).convert("RGB")
+    if prev.size != new_fin.size:
+        prev = prev.resize(new_fin.size)
+
+    w = _feathered_object_mask(idbuf, solid_ids, changed_ids, new_fin.size)
+    if w is None:
+        return None  # changed object not visible → a full render is the honest result
+    comp = np.asarray(prev, np.float32) * (1.0 - w) + np.asarray(new_fin, np.float32) * w
+    out = _to_png(comp / 255.0)
+
+    return RenderResult(
+        image_bytes=out, hotspots=hotspots, base_bytes=base_png,
+        depth_bytes=depth_png, normal_bytes=normal_png,
+        provider=f"katha-kernel+{res['provider']}+localized", kind=kind, finished=True,
     )
 
 
