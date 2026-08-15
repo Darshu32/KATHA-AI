@@ -2296,9 +2296,10 @@ function CanvasGallery({
             // Real render — rounded inset on white card. The image carries
             // its own pixels; no grid-paper background underneath. URL
             // resolver normalises legacy data:/http: URLs and prefixes
-            // backend-relative paths with the API origin. ObjectOverlay
-            // sits on top with click-to-edit hotspots, but only on the
-            // latest (editable) version — history renders stay read-only.
+            // backend-relative paths with the API origin. Object select +
+            // edit lives on the geometry-true 3D / Plan views (below), not
+            // on the photoreal render — its finish pass moves furniture, so
+            // exact-geometry hotspots would land on the wrong objects.
             <div className="relative aspect-video bg-paper-deep border border-hairline rounded-md overflow-hidden">
               {heroView === "model" && hero.projectId ? (
                 <DesignViewport3D
@@ -2323,12 +2324,18 @@ function CanvasGallery({
                     alt={hero.prompt}
                     className="absolute inset-0 w-full h-full object-cover"
                   />
-                  {isHeroLatest && hero.objectsBbox && hero.objectsBbox.length > 0 ? (
-                    <ObjectOverlay
-                      bboxes={hero.objectsBbox}
-                      selectedObjectId={selectedObjectId}
-                      onSelect={onSelectObject}
-                    />
+                  {/* No click-to-edit hotspots on the photoreal render: the finish
+                      pass reinterprets the scene (it moves/invents furniture), so
+                      geometry-exact boxes land on the wrong objects. Object select
+                      + edit lives on the geometry-TRUE 3D and Plan views (which
+                      raycast / drag the real kernel geometry) and the Objects list
+                      — all pixel-accurate. The render stays a faithful-as-possible
+                      beauty shot; it becomes click-editable once a depth-locked
+                      finish (ControlNet-depth) is configured. */}
+                  {isHeroLatest ? (
+                    <div className="absolute bottom-2 left-2 z-10 flex items-center gap-1.5 rounded-md border border-hairline bg-paper/85 px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-ink-mute backdrop-blur-sm pointer-events-none">
+                      Photoreal preview · select &amp; edit in 3D / Plan
+                    </div>
                   ) : null}
                 </>
               )}
@@ -2533,70 +2540,6 @@ function GenerationSkeletonCard({
   );
 }
 
-/* ObjectOverlay — click-to-edit hotspots over the rendered image.
-   Each bbox is an absolutely-positioned button anchored in normalised
-   coordinates. Default: transparent; on hover or when selected, a
-   pencil-red outline + name label appear. Click triggers the same
-   selection state the right-panel objects list uses, so the edit
-   popover opens consistently regardless of where the architect clicks
-   from.
-   Honest about being approximate — see backend/object_bboxes.py for
-   the projection model. */
-function ObjectOverlay({
-  bboxes,
-  selectedObjectId,
-  onSelect,
-}: {
-  bboxes: NonNullable<import("@/lib/types").ImageGeneration["objectsBbox"]>;
-  selectedObjectId: string | null;
-  onSelect: (id: string | null) => void;
-}) {
-  return (
-    <div
-      className="absolute inset-0 pointer-events-none"
-      aria-label="Object hotspots"
-    >
-      {bboxes.map((b) => {
-        const selected = b.id === selectedObjectId;
-        return (
-          <button
-            key={b.id}
-            type="button"
-            onClick={(e) => {
-              e.stopPropagation();
-              onSelect(selected ? null : b.id);
-            }}
-            aria-pressed={selected}
-            aria-label={`Select ${b.name}`}
-            title={b.name}
-            className={`group/hotspot absolute pointer-events-auto rounded-sm transition-all ${
-              selected
-                ? "ring-2 ring-pencil ring-offset-1 ring-offset-paper/0"
-                : "ring-0 hover:ring-2 hover:ring-pencil/70 hover:ring-offset-1 hover:ring-offset-paper/0"
-            } cursor-crosshair`}
-            style={{
-              left: `${b.x * 100}%`,
-              top: `${b.y * 100}%`,
-              width: `${b.w * 100}%`,
-              height: `${b.h * 100}%`,
-              background: selected
-                ? "rgba(200, 54, 45, 0.10)"
-                : "transparent",
-            }}
-          >
-            <span
-              className={`absolute left-0 top-full mt-1 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-[0.1em] bg-ink-deep text-paper rounded-sm whitespace-nowrap transition-opacity ${
-                selected ? "opacity-100" : "opacity-0 group-hover/hotspot:opacity-100"
-              }`}
-            >
-              {b.name}
-            </span>
-          </button>
-        );
-      })}
-    </div>
-  );
-}
 
 // ── Right: spec summary + citations ────────────────────────────────────
 
