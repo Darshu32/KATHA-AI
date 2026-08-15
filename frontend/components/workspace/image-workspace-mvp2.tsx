@@ -4903,7 +4903,11 @@ function TerminalPanel({
 
       <div className="flex-1 overflow-y-auto draft-scroll px-6 py-4">
         {tab === "cost" ? (
-          <CostStream hasDesign={hasDesign} mepCost={mepCost} />
+          <CostStream
+            hasDesign={hasDesign}
+            estimate={generation?.estimate}
+            mepCost={mepCost}
+          />
         ) : tab === "problems" ? (
           <ProblemsList hasDesign={hasDesign} validation={validation} />
         ) : tab === "genlog" ? (
@@ -5140,9 +5144,11 @@ function GenerationLog({
 
 function CostStream({
   hasDesign,
+  estimate,
   mepCost,
 }: {
   hasDesign: boolean;
+  estimate?: unknown;
   mepCost?: import("@/lib/types").MepCostEstimate;
 }) {
   if (!hasDesign) {
@@ -5154,71 +5160,80 @@ function CostStream({
       </div>
     );
   }
+
+  // Mirror the sidebar Cost tab EXACTLY so the two panels never contradict:
+  // same source (this version's estimate), same "computed" gate, same empty
+  // state. This stream used to show hardcoded placeholder figures + line items
+  // regardless of the design, which is why it disagreed with the rail.
+  const est = estimate as EstimateShape | undefined;
+  const estFinalTotal = est?.pricing_adjustments?.final_total ?? 0;
+  const hasEstimate = !!est && est.status === "computed" && estFinalTotal > 0;
+
+  if (!hasEstimate && !mepCost) {
+    return (
+      <div className="font-mono text-[12px] text-ink-mute leading-relaxed">
+        This version didn&apos;t produce a cost estimate.
+        <br />
+        Re-prompt or regenerate to engage the cost engine.
+      </div>
+    );
+  }
+
+  const d = est?.display;
+  const sym = d?.currency_symbol || "₹";
+  const locale = d?.locale || "en-IN";
+  const fmt = (n?: number) =>
+    n == null ? "—" : `${sym}${Math.round(n).toLocaleString(locale)}`;
+  const base = d?.final_total ?? estFinalTotal;
+  const low = est?.total_low;
+  const high = est?.total_high;
+  const hasRange = low != null && high != null && high > 0;
+  const cats = est?.estimate || {};
+  const catRows = (
+    [
+      ["Materials", cats.materials?.total_cost],
+      ["Furniture", cats.furniture?.total_cost],
+      ["Labour", cats.labor?.total_cost],
+      ["Services", cats.services?.total_cost],
+      ["Misc", cats.misc?.total_cost],
+    ] as [string, number | undefined][]
+  ).filter((r): r is [string, number] => (r[1] ?? 0) > 0);
+
   return (
     <div className="space-y-4">
-      <div className="grid grid-cols-3 gap-6">
-        <CostFigure label="Low" value="₹ 1,42,500" />
-        <CostFigure label="Base" value="₹ 1,68,000" highlight />
-        <CostFigure label="High" value="₹ 1,95,000" />
-      </div>
+      {hasEstimate ? (
+        // Total + range, mirroring the sidebar. NOT a Low/Base/High triptych:
+        // the engine's final_total (incl. margin/overhead) can sit above its
+        // low→high estimate band, which reads as "High < Base" in a triptych.
+        <div className="flex flex-wrap items-end gap-x-8 gap-y-1">
+          <CostFigure label="Total" value={fmt(base)} highlight />
+          {hasRange ? (
+            <div className="pb-1.5 font-mono text-[11px] text-ink-mute tnum">
+              range {fmt(low)}
+              <span className="mx-1 text-ink-mute/60">→</span>
+              {fmt(high)}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {/* BRD §1B — MEP systems cost block. DB-backed; rolls up HVAC,
           electrical, plumbing, fire-fighting at ₹/m² bands for the
           generated room area. Hidden until the validator emits one
           (no usable room area → no block). */}
       {mepCost ? <MepCostBlock mepCost={mepCost} /> : null}
-      <div className="border-t border-hairline pt-3">
-        <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute mb-2">
-          Line items
+      {hasEstimate && catRows.length > 0 ? (
+        <div className="border-t border-hairline pt-3">
+          <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute mb-2">
+            By category
+          </div>
+          <div className="space-y-1 font-mono text-[12px] text-ink">
+            {catRows.map(([label, val]) => (
+              <CostLine key={label} k={label} v={fmt(val)} />
+            ))}
+          </div>
         </div>
-        <div className="space-y-1 font-mono text-[12px] text-ink">
-          <CostLine
-            k="Walnut top · 2.4 m²"
-            v="₹ 38,400"
-            src="MCX live · ₹16k/m³"
-            srcWhen="3 hrs ago"
-          />
-          <CostLine
-            k="Mild steel base · 14 kg"
-            v="₹ 1,260"
-            src="MCX live · ₹62-90/kg"
-            srcWhen="3 hrs ago"
-          />
-          <CostLine
-            k="Brass handles · 6 ea"
-            v="₹ 7,800"
-            src="Vendor · Jaquar JAQ-FAU-001"
-            srcWhen="catalog · 2 days ago"
-          />
-          <CostLine
-            k="Labour · woodworking 18 hr"
-            v="₹ 5,400"
-            src="Trade rate v12 · ₹300/hr"
-            srcWhen="ingested 2026-04-01"
-          />
-          <CostLine
-            k="Finish · lacquer 0.6 L"
-            v="₹ 540"
-            src="Vendor · Asian Paints PU"
-            srcWhen="catalog · 1 wk ago"
-          />
-          <CostLine
-            k="Overhead · 35% of direct"
-            v="₹ 18,872"
-            src="CPWD §3.4 · industry std"
-            srcWhen="ingested 2026-04-01"
-          />
-          <CostLine
-            k="Margin · designer 30%"
-            v="₹ 21,795"
-            src="Designer fee schedule"
-            srcWhen="configured"
-          />
-        </div>
-      </div>
-      <div className="font-mono text-[10px] uppercase tracking-[0.12em] text-ink-mute">
-        Updated 0 ms ago · MCX live
-      </div>
+      ) : null}
     </div>
   );
 }
