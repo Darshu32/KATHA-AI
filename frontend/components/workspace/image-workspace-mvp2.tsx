@@ -3258,6 +3258,7 @@ const EXPORT_FAMILIES: {
       { id: "xlsx", label: "Excel",       ext: ".xlsx" },
       { id: "pptx", label: "PowerPoint",  ext: ".pptx" },
       { id: "html", label: "HTML Viewer", ext: ".html" },
+      { id: "psd",  label: "Photoshop",   ext: ".psd" },
     ],
   },
   {
@@ -3295,6 +3296,7 @@ const EXPORT_FAMILIES: {
     formats: [
       { id: "step", label: "STEP", ext: ".step" },
       { id: "iges", label: "IGES", ext: ".iges" },
+      { id: "3dm",  label: "Rhino 3DM", ext: ".3dm" },
     ],
   },
   {
@@ -3309,6 +3311,10 @@ const EXPORT_FAMILIES: {
     formats: [{ id: "geojson", label: "GeoJSON", ext: ".geojson" }],
   },
 ];
+
+// Single source of truth for the "N formats" copy — derived from the list above
+// so the header tooltip and the modal footer can never drift out of sync.
+const EXPORT_FORMAT_COUNT = EXPORT_FAMILIES.reduce((n, g) => n + g.formats.length, 0);
 
 function ExportModal({
   open,
@@ -3459,7 +3465,7 @@ function ExportModal({
         </div>
         <div className="px-5 py-2.5 border-t border-hairline bg-paper-soft">
           <p className="font-mono text-[10px] uppercase tracking-tagged text-ink-mute">
-            ← /projects/{"{id}"}/export · {EXPORT_FAMILIES.reduce((n, g) => n + g.formats.length, 0)} formats supported
+            ← /projects/{"{id}"}/export · {EXPORT_FORMAT_COUNT} formats supported
           </p>
         </div>
       </div>
@@ -3505,7 +3511,7 @@ function ExportButton({
       className={`inline-flex items-center gap-1.5 px-2.5 py-1 border border-hairline rounded-md bg-paper hover:border-graphite hover:bg-paper-soft transition-colors text-[12px] font-medium text-ink-deep ${
         disabled ? "opacity-40 cursor-not-allowed" : ""
       }`}
-      title={disabled ? "Generate a design first" : "Export to 15 formats"}
+      title={disabled ? "Generate a design first" : `Export to ${EXPORT_FORMAT_COUNT} formats`}
     >
       <svg width="12" height="12" viewBox="0 0 12 12" fill="none" aria-hidden="true">
         <path d="M6 1.5v6.5m0 0L3 5m3 3l3-3M2 10h8" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" />
