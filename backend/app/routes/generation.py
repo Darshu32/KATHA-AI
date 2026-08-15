@@ -545,6 +545,60 @@ async def rerender_route(
     }
 
 
+@router.post("/present")
+async def present_route(
+    project_id: str,
+    setting: str | None = None,
+    light: str | None = None,
+    palette: str | None = None,
+    styling: str | None = None,
+    people: bool | None = None,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Presentation (hero) render — an atmospheric, styled architectural
+    photograph of the latest version, for client/manager-facing decks. Distinct
+    from /render (the faithful technical render): this deliberately adds site,
+    light, materials and lifestyle styling. Optional mood params (setting, light,
+    palette, styling, people) tune the look; each auto-derives a tasteful default
+    from the design. Photoreal today via the image provider; faithful-photoreal
+    once a Replicate token enables ControlNet-depth."""
+    project = await get_project(db, project_id)
+    _check_owner(project, user)
+    version = await get_latest_version(db, project_id)
+    if version is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No versions found")
+    graph = version.graph_data or {}
+
+    mood = {k: v for k, v in {
+        "setting": setting, "light": light, "palette": palette,
+        "styling": styling, "people": people,
+    }.items() if v is not None}
+
+    result = await render_design(graph, presentation=True, mood=mood or None)
+    if not result or not result.image_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail="Presentation render unavailable (no geometry, or image provider unconfigured)",
+        )
+    image_url, _img, _hotspots = await _persist_render(
+        db,
+        graph_version_id=version.id,
+        image_bytes=result.image_bytes,
+        mime_type=result.mime,
+        source=result.provider,
+        hotspots=None,
+        title=f"{result.kind} presentation",
+    )
+    return {
+        "status": "ok",
+        "version": version.version,
+        "image_url": image_url,
+        "finished": bool(getattr(result, "finished", False)),
+        "provider": result.provider,
+    }
+
+
 @router.post("/validate")
 async def validate_route(
     project_id: str,

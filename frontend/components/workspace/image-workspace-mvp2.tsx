@@ -199,6 +199,7 @@ export default function ImageWorkspaceMvp2() {
   // open/closed state. Errors surface as a transient notice strip.
   const [isSwitchingTheme, setIsSwitchingTheme] = useState(false);
   const [isRerendering, setIsRerendering] = useState(false);
+  const [isPresenting, setIsPresenting] = useState(false);
   const [themeSwitchError, setThemeSwitchError] = useState<string | null>(null);
 
   // ── BRD 5B: import dialog open/close ────────────────────────────────
@@ -402,6 +403,32 @@ export default function ImageWorkspaceMvp2() {
       return false;
     } finally {
       setIsRerendering(false);
+    }
+  };
+
+  /* submitPresent — PRESENTATION (hero) render: an atmospheric, styled
+   * architectural photo of the current design for client/manager decks.
+   * Distinct from the faithful technical render; swaps the hero image to the
+   * result. Photoreal today via the image provider; faithful-photoreal once a
+   * Replicate token enables ControlNet-depth. */
+  const submitPresent = async (): Promise<boolean> => {
+    if (!activeProjectId || !latestGeneration || isPresenting) return false;
+    setIsPresenting(true);
+    try {
+      const res = await designApi.present(token, activeProjectId);
+      if (res.image_url) {
+        replaceGenerations(
+          generations.map((g) =>
+            g.id === latestGeneration.id ? { ...g, url: res.image_url ?? g.url } : g,
+          ),
+        );
+      }
+      return true;
+    } catch (e) {
+      toastError(e, "Presentation render failed");
+      return false;
+    } finally {
+      setIsPresenting(false);
     }
   };
 
@@ -768,6 +795,8 @@ export default function ImageWorkspaceMvp2() {
                 pendingPrompt={prompt}
                 onRerender={submitRerender}
                 isRerendering={isRerendering}
+                onPresent={submitPresent}
+                isPresenting={isPresenting}
               />
             )}
           </div>
@@ -2208,6 +2237,8 @@ function CanvasGallery({
   pendingPrompt,
   onRerender,
   isRerendering,
+  onPresent,
+  isPresenting,
 }: {
   generations: import("@/lib/types").ImageGeneration[];
   dim: Dim;
@@ -2221,6 +2252,8 @@ function CanvasGallery({
   pendingPrompt: string;
   onRerender?: () => Promise<boolean>;
   isRerendering?: boolean;
+  onPresent?: () => Promise<boolean>;
+  isPresenting?: boolean;
 }) {
   // Any of the three async paths shows a skeleton — the user shouldn't
   // have to mentally map which spinner means what.
@@ -2374,6 +2407,19 @@ function CanvasGallery({
                   className="absolute top-2 left-2 z-10 rounded-md border border-hairline bg-paper/85 backdrop-blur-sm px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-ink-soft hover:text-ink disabled:opacity-60 transition-colors"
                 >
                   {isRerendering ? "Re-rendering…" : "⟳ Re-render"}
+                </button>
+              ) : null}
+              {/* Presentation (hero) render — atmospheric, styled photo for
+                  client/manager decks. Distinct from the faithful render. */}
+              {heroView === "image" && hero.projectId && onPresent ? (
+                <button
+                  type="button"
+                  disabled={isPresenting}
+                  onClick={() => void onPresent()}
+                  title="Hero render — atmospheric, styled architectural photo for decks"
+                  className="absolute top-2 left-2 z-10 rounded-md border border-pencil/30 bg-pencil-bg/70 backdrop-blur-sm px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-pencil hover:bg-pencil-bg disabled:opacity-60 transition-colors"
+                >
+                  {isPresenting ? "Rendering…" : "✨ Present"}
                 </button>
               ) : null}
             </div>

@@ -915,6 +915,26 @@ export const design = {
       objects_bbox: Array<{ id: string; name: string; type: string; x: number; y: number; w: number; h: number }>;
     }>(`/projects/${projectId}/render`, "POST", undefined, token),
 
+  /** Presentation (hero) render — an atmospheric, styled architectural photo of
+   *  the latest version for client/manager decks. Distinct from rerender (the
+   *  faithful technical render). Optional mood params tune the look. */
+  present: (
+    token: string | undefined,
+    projectId: string,
+    mood?: { setting?: string; light?: string; palette?: string; styling?: string; people?: boolean },
+  ) => {
+    const qs = new URLSearchParams();
+    if (mood) for (const [k, v] of Object.entries(mood)) if (v != null && v !== "") qs.set(k, String(v));
+    const suffix = qs.toString() ? `?${qs.toString()}` : "";
+    return request<{
+      status: string;
+      version: number;
+      image_url: string | null;
+      finished: boolean;
+      provider: string;
+    }>(`/projects/${projectId}/present${suffix}`, "POST", undefined, token);
+  },
+
   updateMaterial: (token: string, projectId: string, objectId: string, material: string, color: string) =>
     request<{ status: string }>(
       `/projects/${projectId}/objects/${objectId}/material`, "PATCH", { material, color }, token,

@@ -20,6 +20,7 @@ from PIL import Image, ImageFilter
 from app.config import get_settings
 from app.services.spatial.finish import build_finish_prompt, finish_render
 from app.services.spatial.kernel import Solid, _room_dims, build_scene
+from app.services.spatial.presentation import build_presentation_prompt
 from app.services.spatial.rasterizer import interior_camera, orbit_camera, render
 
 logger = logging.getLogger(__name__)
@@ -86,8 +87,15 @@ def _build_and_raster(graph: dict, width: int, height: int, ss: int = 2):
 
 
 async def render_design(graph: dict, *, width: int = 1200, height: int = 800,
-                        finish: bool = True) -> RenderResult | None:
-    """Spec → RenderResult, or None to signal the caller to use the legacy path."""
+                        finish: bool = True, presentation: bool = False,
+                        mood: dict | None = None) -> RenderResult | None:
+    """Spec → RenderResult, or None to signal the caller to use the legacy path.
+
+    ``presentation=True`` produces the hero/"storefront" image — an atmospheric,
+    styled architectural photograph (see ``presentation.build_presentation_prompt``)
+    rather than the faithful technical clay render. It ALLOWS the img2img finish so
+    it renders a photoreal frame today; a Replicate token upgrades it to
+    depth-locked ControlNet (faithful photoreal). ``mood`` tunes the look."""
     settings = get_settings()
     ss = max(1, int(getattr(settings, "spatial_render_supersample", 2) or 1))
     faithful_only = bool(getattr(settings, "spatial_render_faithful_only", True))
@@ -103,18 +111,29 @@ async def render_design(graph: dict, *, width: int = 1200, height: int = 800,
     image_bytes, provider, finished = base_png, "katha-kernel", False
     if finish:
         try:
-            # geometry_locked_only: only a depth-locked finish (ControlNet-depth)
-            # may replace the exact kernel render — it stays faithful to the model.
-            # Without a Replicate token this returns None and we serve the clay
-            # render, which matches the plan / 3D / drawings exactly. The img2img
-            # "beautify" (Gemini/gpt-image-1) is deliberately never used here (unless
-            # spatial_render_faithful_only is off): it re-imagines the scene and
-            # drifts away from the real geometry.
-            res = await finish_render(
-                base_png, depth_png,
-                build_finish_prompt(graph, kind=kind),
-                geometry_locked_only=faithful_only,
-            )
+            if presentation:
+                # PRESENTATION (hero) render — the styling/mood prompt, and the
+                # atmospheric img2img finish is ALLOWED (geometry_locked_only=False)
+                # so a photoreal frame renders now. ControlNet-depth still wins when
+                # a Replicate token is set, making it faithful-photoreal.
+                res = await finish_render(
+                    base_png, depth_png,
+                    build_presentation_prompt(graph, kind=kind, mood=mood),
+                    geometry_locked_only=False,
+                )
+            else:
+                # geometry_locked_only: only a depth-locked finish (ControlNet-depth)
+                # may replace the exact kernel render — it stays faithful to the model.
+                # Without a Replicate token this returns None and we serve the clay
+                # render, which matches the plan / 3D / drawings exactly. The img2img
+                # "beautify" (Gemini/gpt-image-1) is deliberately never used here
+                # (unless spatial_render_faithful_only is off): it re-imagines the
+                # scene and drifts from the real geometry.
+                res = await finish_render(
+                    base_png, depth_png,
+                    build_finish_prompt(graph, kind=kind),
+                    geometry_locked_only=faithful_only,
+                )
         except Exception as exc:  # noqa: BLE001
             logger.warning("finish pass failed: %s", exc)
             res = None
