@@ -248,17 +248,27 @@ async def _run_provider(name: str, base_png: bytes, prompt: str, size: str,
 
 
 async def finish_render(base_png: bytes, depth_png: bytes | None, prompt: str,
-                        *, size: str = "1536x1024", provider: str | None = None) -> dict | None:
+                        *, size: str = "1536x1024", provider: str | None = None,
+                        geometry_locked_only: bool = False) -> dict | None:
     """Return {'bytes', 'provider'} or None (caller falls back to the base render
     or the legacy Gemini path).
 
     Provider order: ControlNet-depth (hard geometry lock) when configured, then
     the preferred image provider, then the other as automatic fallback. The
     preference is ``provider`` (explicit, for A/B) or the ``spatial_finish_provider``
-    setting ("openai" | "gemini")."""
+    setting ("openai" | "gemini").
+
+    ``geometry_locked_only`` restricts the finish to the ControlNet-depth path —
+    the ONLY finish that stays faithful to the model. img2img providers (Gemini,
+    gpt-image-1) re-imagine the scene (they move and invent furniture), so a
+    render meant to match the plan/drawings must never use them. When True and no
+    depth-lock is configured, returns None so the caller serves the exact kernel
+    render instead."""
     out = await _controlnet_depth(base_png, depth_png, prompt)
     if out:
         return {"bytes": out, "provider": "controlnet-depth"}
+    if geometry_locked_only:
+        return None  # no hard lock available → caller keeps the faithful clay render
 
     pref = (provider or getattr(get_settings(), "spatial_finish_provider", "openai") or "openai").lower()
     order = ["gemini", "openai"] if pref == "gemini" else ["openai", "gemini"]

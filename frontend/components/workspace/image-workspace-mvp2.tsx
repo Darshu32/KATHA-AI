@@ -2296,10 +2296,10 @@ function CanvasGallery({
             // Real render — rounded inset on white card. The image carries
             // its own pixels; no grid-paper background underneath. URL
             // resolver normalises legacy data:/http: URLs and prefixes
-            // backend-relative paths with the API origin. Object select +
-            // edit lives on the geometry-true 3D / Plan views (below), not
-            // on the photoreal render — its finish pass moves furniture, so
-            // exact-geometry hotspots would land on the wrong objects.
+            // backend-relative paths with the API origin. This render is the
+            // EXACT kernel model (it matches the plan / 3D / drawings). Object
+            // select + edit still lives on the 3D / Plan views (below), which
+            // raycast and drag the real geometry — the cleaner edit surface.
             <div className="relative aspect-video bg-paper-deep border border-hairline rounded-md overflow-hidden">
               {heroView === "model" && hero.projectId ? (
                 <DesignViewport3D
@@ -2324,17 +2324,15 @@ function CanvasGallery({
                     alt={hero.prompt}
                     className="absolute inset-0 w-full h-full object-cover"
                   />
-                  {/* No click-to-edit hotspots on the photoreal render: the finish
-                      pass reinterprets the scene (it moves/invents furniture), so
-                      geometry-exact boxes land on the wrong objects. Object select
-                      + edit lives on the geometry-TRUE 3D and Plan views (which
-                      raycast / drag the real kernel geometry) and the Objects list
-                      — all pixel-accurate. The render stays a faithful-as-possible
-                      beauty shot; it becomes click-editable once a depth-locked
-                      finish (ControlNet-depth) is configured. */}
+                  {/* The render IS the exact kernel model — the clay render, or a
+                      depth-locked ControlNet finish when a Replicate token is set —
+                      so it matches the plan / 3D / drawings. Object select + edit
+                      lives on the 3D and Plan views (which raycast / drag the real
+                      geometry) and the Objects list, so it stays pixel-accurate; we
+                      don't draw a click-to-edit overlay on the render itself. */}
                   {isHeroLatest ? (
                     <div className="absolute bottom-2 left-2 z-10 flex items-center gap-1.5 rounded-md border border-hairline bg-paper/85 px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-ink-mute backdrop-blur-sm pointer-events-none">
-                      Photoreal preview · select &amp; edit in 3D / Plan
+                      Model render · select &amp; edit in 3D / Plan
                     </div>
                   ) : null}
                 </>

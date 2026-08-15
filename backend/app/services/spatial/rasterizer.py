@@ -86,19 +86,29 @@ def _clip_near(pts, near):
     return out
 
 
-def render(solids, cam, W=1200, H=800, bg=(0.9, 0.91, 0.93)):
-    """Rasterise solids from `cam`. Returns (rgb, depth, normal, id_buf, hotspots)."""
+def render(solids, cam, W=1200, H=800, bg=(0.9, 0.91, 0.93), ss=2):
+    """Rasterise solids from `cam`. Returns (rgb, depth, normal, id_buf, hotspots).
+
+    Renders ``ss``× oversampled and box-downsamples the result, so edges come out
+    smooth instead of stair-stepped — the single biggest quality win for the clay
+    render. Shading is a deterministic two-light studio rig (key + fill) over a
+    hemisphere ambient, for a softer, more "rendered" look than one bare lamp —
+    still fully deterministic, no img2img, no external service.
+    """
+    ss = max(1, int(ss))
+    Wr, Hr = W * ss, H * ss              # oversampled render size; W×H is the output
     V = look_at(cam["eye"], cam["target"])
-    P = perspective(cam["fov"], W / H, cam["near"], cam["far"])
+    P = perspective(cam["fov"], Wr / Hr, cam["near"], cam["far"])
     near = cam["near"]
     Rn = V[:3, :3]
-    light = _normalize(np.array([0.35, 0.9, 0.45]))
+    key_dir = _normalize(np.array([0.35, 0.9, 0.45]))     # key light — high, to one side
+    fill_dir = _normalize(np.array([-0.55, 0.4, -0.35]))  # soft fill — opposite, lifts shadow
 
-    rgb = np.tile(np.array(bg, np.float32), (H, W, 1))
-    zbuf = np.full((H, W), np.inf)
-    nrm = np.full((H, W, 3), 0.5, np.float32)
-    depthv = np.full((H, W), np.nan)
-    idbuf = np.full((H, W), -1, np.int32)
+    rgb = np.tile(np.array(bg, np.float32), (Hr, Wr, 1))
+    zbuf = np.full((Hr, Wr), np.inf)
+    nrm = np.full((Hr, Wr, 3), 0.5, np.float32)
+    depthv = np.full((Hr, Wr), np.nan)
+    idbuf = np.full((Hr, Wr), -1, np.int32)
 
     for oi, s in enumerate(solids):
         if s.verts is None or not len(s.verts):
@@ -120,15 +130,24 @@ def render(solids, cam, W=1200, H=800, bg=(0.9, 0.91, 0.93)):
                 fans = [(poly[0], poly[k], poly[k + 1]) for k in range(1, len(poly) - 1)]
 
             fn = _normalize(np.cross(s.verts[i1] - s.verts[i0], s.verts[i2] - s.verts[i0]))
-            shade = 0.32 + 0.68 * max(0.0, float(fn @ light))
+            key = max(0.0, float(fn @ key_dir))
+            fill = max(0.0, float(fn @ fill_dir))
+            hemi = 0.5 + 0.5 * float(fn[1])   # up-facing catches "sky", down-facing "ground"
+            shade = 0.30 + 0.20 * hemi + 0.60 * key + 0.16 * fill
             col = np.clip(np.array(s.color, np.float32) * shade, 0, 1)
             nv = (_normalize(Rn @ fn) * 0.5 + 0.5).astype(np.float32)
 
             for a3, b3, c3 in fans:
-                _raster_tri(P, a3, b3, c3, W, H, col, nv, oi, rgb, zbuf, nrm, depthv, idbuf)
+                _raster_tri(P, a3, b3, c3, Wr, Hr, col, nv, oi, rgb, zbuf, nrm, depthv, idbuf)
 
-    hotspots = _project_hotspots(solids, P @ V, W, H)
-    return rgb, _depth_to_gray(depthv), nrm, idbuf, hotspots
+    hotspots = _project_hotspots(solids, P @ V, Wr, Hr)   # normalised → resolution-independent
+    depth_gray = _depth_to_gray(depthv)
+    if ss > 1:                            # box-downsample every buffer to the output size
+        rgb = rgb.reshape(H, ss, W, ss, 3).mean(axis=(1, 3))
+        nrm = nrm.reshape(H, ss, W, ss, 3).mean(axis=(1, 3))
+        depth_gray = depth_gray.reshape(H, ss, W, ss).mean(axis=(1, 3))
+        idbuf = np.ascontiguousarray(idbuf.reshape(H, ss, W, ss)[:, 0, :, 0])
+    return rgb, depth_gray, nrm, idbuf, hotspots
 
 
 def _proj(P, vpt, W, H):

@@ -17,6 +17,7 @@ from dataclasses import dataclass
 import numpy as np
 from PIL import Image, ImageFilter
 
+from app.config import get_settings
 from app.services.spatial.finish import build_finish_prompt, finish_render
 from app.services.spatial.kernel import Solid, _room_dims, build_scene
 from app.services.spatial.rasterizer import interior_camera, orbit_camera, render
@@ -46,8 +47,9 @@ def _to_png(arr) -> bytes:
     return buf.getvalue()
 
 
-def _build_and_raster(graph: dict, width: int, height: int):
-    """CPU-bound: kernel + camera + rasterise. Runs in a worker thread."""
+def _build_and_raster(graph: dict, width: int, height: int, ss: int = 2):
+    """CPU-bound: kernel + camera + rasterise. Runs in a worker thread. ``ss`` is
+    the anti-aliasing oversample factor passed through to the rasteriser."""
     solids, bbox, kind = build_scene(graph)
     floor_count = sum(1 for s in solids if s.type == "floor")
     # Meaningful to show if there's furniture OR it's a multi-room plan (the
@@ -72,7 +74,7 @@ def _build_and_raster(graph: dict, width: int, height: int):
         cam = orbit_camera((lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]))
         render_solids = solids
 
-    rgb, depth, nrm, idbuf, hotspots = render(render_solids, cam, W=width, H=height)
+    rgb, depth, nrm, idbuf, hotspots = render(render_solids, cam, W=width, H=height, ss=ss)
     coverage = float(np.count_nonzero(idbuf >= 0)) / idbuf.size
     if coverage < 0.02:  # camera saw essentially nothing — let the caller fall back
         logger.warning("spatial render coverage too low (%.3f) kind=%s", coverage, kind)
@@ -86,8 +88,11 @@ def _build_and_raster(graph: dict, width: int, height: int):
 async def render_design(graph: dict, *, width: int = 1200, height: int = 800,
                         finish: bool = True) -> RenderResult | None:
     """Spec → RenderResult, or None to signal the caller to use the legacy path."""
+    settings = get_settings()
+    ss = max(1, int(getattr(settings, "spatial_render_supersample", 2) or 1))
+    faithful_only = bool(getattr(settings, "spatial_render_faithful_only", True))
     try:
-        built = await asyncio.to_thread(_build_and_raster, graph, width, height)
+        built = await asyncio.to_thread(_build_and_raster, graph, width, height, ss)
     except Exception as exc:  # noqa: BLE001 — geometry must never break generation
         logger.warning("spatial kernel/raster failed: %s", exc)
         return None
@@ -98,9 +103,17 @@ async def render_design(graph: dict, *, width: int = 1200, height: int = 800,
     image_bytes, provider, finished = base_png, "katha-kernel", False
     if finish:
         try:
+            # geometry_locked_only: only a depth-locked finish (ControlNet-depth)
+            # may replace the exact kernel render — it stays faithful to the model.
+            # Without a Replicate token this returns None and we serve the clay
+            # render, which matches the plan / 3D / drawings exactly. The img2img
+            # "beautify" (Gemini/gpt-image-1) is deliberately never used here (unless
+            # spatial_render_faithful_only is off): it re-imagines the scene and
+            # drifts away from the real geometry.
             res = await finish_render(
                 base_png, depth_png,
                 build_finish_prompt(graph, kind=kind),
+                geometry_locked_only=faithful_only,
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("finish pass failed: %s", exc)
@@ -166,9 +179,10 @@ async def render_design_localized(
         return None
     base_png, depth_png, normal_png, hotspots, kind, idbuf, solid_ids = built
 
-    res = await finish_render(base_png, depth_png, build_finish_prompt(graph, kind=kind))
+    res = await finish_render(base_png, depth_png, build_finish_prompt(graph, kind=kind),
+                              geometry_locked_only=True)
     if not res or not res.get("bytes"):
-        return None  # no finish provider → let the caller do a normal render
+        return None  # no geometry-locked finish → let the caller do a normal render
     # Localized compositing needs a GEOMETRY-LOCKED finish. ControlNet-depth
     # conditions on the kernel depth map, so every object renders at its exact
     # geometry position — the clay-derived mask lands on it in both the previous
@@ -246,8 +260,12 @@ async def render_mesh(verts, tris, *, width: int = 1200, height: int = 800,
     if finish:
         graph = {"design_type": kind, "style": {"primary": style} if style else {}}
         try:
+            # Faithful to the uploaded model: only a depth-locked finish may
+            # replace the clay render (see render_design). Without a token we show
+            # the exact imported geometry, not an img2img reinterpretation of it.
             res = await finish_render(base_png, depth_png,
-                                      build_finish_prompt(graph, kind=kind))
+                                      build_finish_prompt(graph, kind=kind),
+                                      geometry_locked_only=True)
         except Exception as exc:  # noqa: BLE001
             logger.warning("mesh finish failed: %s", exc)
             res = None

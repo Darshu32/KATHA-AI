@@ -87,6 +87,17 @@ class Settings(BaseSettings):
     # Leave False for flux-depth-dev (it extracts depth from the clay image); set
     # True only if you point controlnet_depth_model at a depth-NATIVE ControlNet.
     controlnet_send_depth: bool = False
+    # Faithful-render policy. When True (default), the display render is ALWAYS
+    # geometry-true: the exact kernel clay render, or — when a Replicate token is
+    # set — the depth-locked ControlNet finish. The img2img "beautify" providers
+    # (Gemini / gpt-image-1) are NEVER used for the shown render because they
+    # re-imagine the scene (move & invent furniture), so it stops matching the
+    # plan / 3D / drawings. Set False only to allow that legacy img2img beautify.
+    spatial_render_faithful_only: bool = True
+    # Anti-aliasing: render this many times oversampled, then box-downsample. 2 is
+    # a big quality win for little cost; 1 disables it (fastest); 3+ is sharper but
+    # scales compute ~quadratically. Presentation-quality knob for the clay render.
+    spatial_render_supersample: int = 2
 
     # ── Interop / export ─────────────────────────────────
     # Speckle push (Revit/Rhino/Grasshopper/ArchiCAD distribution wedge).
