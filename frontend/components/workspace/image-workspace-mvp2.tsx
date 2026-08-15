@@ -1884,7 +1884,8 @@ function CanvasHeader({
         isSwitching={isSwitchingTheme}
         hasActiveProject={hasActiveProject}
       />
-      <HapticReadyBadge hasActiveProject={hasActiveProject} />
+      {/* HapticReadyBadge removed from the header for now (revisiting haptic
+          later). The component below is kept so re-enabling is a one-liner. */}
       <ExportButton
         onClick={onOpenExport}
         disabled={!hasActiveProject}
