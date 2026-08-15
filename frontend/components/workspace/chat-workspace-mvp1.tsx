@@ -9,17 +9,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Copy, Link2, BookmarkPlus, Pencil, Check } from "lucide-react";
+import { Copy, Link2, BookmarkPlus, Pencil, Check, Play } from "lucide-react";
 import { useChatStore, useNotesStore } from "@/lib/store";
 import { chat as chatApi } from "@/lib/api-client";
 import { parseDeepModeToNotes } from "@/lib/notes-parser";
 import { useNotesPersist } from "@/lib/use-notes-persist";
 import { processChildren } from "@/lib/chat-callouts";
 import { toastError, useToastStore } from "@/lib/toast-store";
-import type { ChatMode, Message } from "@/lib/types";
+import type { ChatMedia, ChatMode, Message } from "@/lib/types";
 import { SectionTag } from "@/components/primitives";
 import BackendHealthBanner from "@/components/primitives/backend-health-banner";
 import NotesSidebar from "@/components/notes/notes-sidebar";
+import MermaidDiagram from "@/components/chat/mermaid-diagram";
 
 // Unicode circled numerals for ref markers. Goes up to ①–⑳. Beyond
 // that we fall back to "(N)" — architects rarely cite more than 5
@@ -949,6 +950,59 @@ function MessageActions({
  *      back to the legacy bottom-of-message Sources block so phones /
  *      narrow windows aren't broken.
  */
+// A mermaid block already embedded in the prose is rendered by the markdown
+// code-block handler, so the separate `diagram` field is skipped in that case
+// to avoid drawing the diagram twice.
+const _MERMAID_IN_PROSE =
+  /(?:```mermaid|(?:^|\n)\s*(?:flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|journey|mindmap|timeline|gitGraph)[\s\n])/;
+
+// Deep-mode YouTube tutorials, rendered INLINE in the chat (mirrors the Notes
+// pane) so the videos are visible in the conversation, not only in the sidebar
+// — which is off-screen on a narrow window.
+function ChatYouTube({ videos }: { videos: ChatMedia[] }) {
+  const vids = videos.filter((v) => v.url);
+  if (vids.length === 0) return null;
+  return (
+    <div className="mt-4">
+      <div className="mb-2 flex items-center gap-1.5">
+        <Play size={11} className="text-brick" />
+        <span className="font-mono text-[10px] tracking-tagged uppercase text-ink-mute">
+          Related tutorials
+        </span>
+      </div>
+      <div className="space-y-2">
+        {vids.map((v, i) => (
+          <a
+            key={`${i}-${v.url}`}
+            href={v.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="group flex gap-3 rounded-md border border-hairline bg-paper-soft p-2 transition-colors hover:border-graphite hover:bg-paper"
+          >
+            {v.thumbnail ? (
+              <span className="relative block h-16 w-28 shrink-0 overflow-hidden rounded bg-paper">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img src={v.thumbnail} alt={v.title ?? ""} loading="lazy" className="h-full w-full object-cover" />
+                <span className="absolute inset-0 flex items-center justify-center bg-black/20 opacity-0 transition-opacity group-hover:opacity-100">
+                  <Play size={16} className="text-white" fill="white" />
+                </span>
+              </span>
+            ) : null}
+            <span className="min-w-0 flex-1">
+              <span className="line-clamp-2 block text-[13px] leading-snug text-ink-deep transition-colors group-hover:text-pencil">
+                {v.title ?? "Watch on YouTube"}
+              </span>
+              {v.channel ? (
+                <span className="mt-0.5 block text-[11px] text-ink-mute">{v.channel}</span>
+              ) : null}
+            </span>
+          </a>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function AssistantMessage({
   message,
   conversationId,
@@ -1044,6 +1098,19 @@ function AssistantMessage({
             {message.content || (message.isStreaming ? " " : "")}
           </ReactMarkdown>
           {message.isStreaming ? <TypingDots /> : null}
+          {/* Deep-mode diagram + tutorials, INLINE in the chat (not only the
+              Notes pane) so they're visible in the conversation itself. The
+              diagram is skipped when the model already put a mermaid block in
+              the prose above (the markdown code-block handler renders that). */}
+          {!message.isStreaming && message.diagram &&
+          !_MERMAID_IN_PROSE.test(message.content ?? "") ? (
+            <div className="mt-4">
+              <MermaidDiagram chart={message.diagram} />
+            </div>
+          ) : null}
+          {!message.isStreaming && message.youtubeLinks && message.youtubeLinks.length > 0 ? (
+            <ChatYouTube videos={message.youtubeLinks} />
+          ) : null}
           {message.suggestions && message.suggestions.length > 0 ? (
             <div className="mt-5 flex flex-wrap gap-2">
               {message.suggestions.map((s, i) => (
