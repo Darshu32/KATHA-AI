@@ -48,9 +48,39 @@ def _to_png(arr) -> bytes:
     return buf.getvalue()
 
 
-def _build_and_raster(graph: dict, width: int, height: int, ss: int = 2):
+def _hero_interior_camera(solids, bbox):
+    """Eye-level interior HERO camera — stands ~1.5 m off a front corner and looks
+    ACROSS the space at eye height (not the top-down dollhouse), so a presentation
+    render reads like real interior photography. Returns ``(cam, cull_ids)``: the
+    structural walls sitting between the eye and the scene centre are culled by
+    geometry (works for multi-room, which carries no wall side-tags) so the view
+    sees INTO the space instead of the back of a wall — an eye-level cutaway."""
+    lo, hi = np.asarray(bbox[:3], float), np.asarray(bbox[3:], float)
+    center = (lo + hi) / 2.0
+    size = hi - lo
+    diag = float(np.hypot(size[0], size[2])) or 3.0
+    eye_h = lo[1] + float(min(1.6, max(1.2, size[1] * 0.6)))     # ~1.5 m eye level
+    az = np.radians(38.0)
+    dirn = np.array([np.cos(az), 0.0, np.sin(az)])
+    eye = np.array([center[0] + dirn[0] * diag * 1.12, eye_h,
+                    center[2] + dirn[2] * diag * 1.12])
+    target = np.array([center[0], lo[1] + float(min(1.3, size[1] * 0.5)), center[2]])
+    cam = dict(eye=eye, target=target, fov=58.0, near=0.05, far=diag * 12)
+    view = eye - center
+    vv = float(np.dot(view, view)) or 1.0
+    cull: set = set()
+    for s in solids:
+        if s.type == "wall" and s.verts is not None and len(s.verts):
+            c = s.verts.mean(0)
+            if float(np.dot(c - center, view)) > 0.10 * vv:        # wall is in front of the eye
+                cull.add(s.id)
+    return cam, cull
+
+
+def _build_and_raster(graph: dict, width: int, height: int, ss: int = 2, hero: bool = False):
     """CPU-bound: kernel + camera + rasterise. Runs in a worker thread. ``ss`` is
-    the anti-aliasing oversample factor passed through to the rasteriser."""
+    the anti-aliasing oversample factor. ``hero=True`` selects eye-level cameras
+    (for presentation renders) instead of the technical dollhouse/aerial views."""
     solids, bbox, kind = build_scene(graph)
     floor_count = sum(1 for s in solids if s.type == "floor")
     # Meaningful to show if there's furniture OR it's a multi-room plan (the
@@ -58,7 +88,20 @@ def _build_and_raster(graph: dict, width: int, height: int, ss: int = 2):
     if not any(s.type not in _STRUCTURAL for s in solids) and floor_count < 2:
         return None
 
-    if kind == "interior" and floor_count >= 2:
+    if hero and kind == "interior":
+        # Presentation: eye-level interior instead of the top-down dollhouse.
+        cam, cull_ids = _hero_interior_camera(solids, bbox)
+        render_solids = [s for s in solids if s.id not in cull_ids]
+    elif hero:
+        # Presentation exterior: a LOW, eye-level three-quarter view in the
+        # landscape (the reference look), not the aerial technical framing.
+        non_ground = [s for s in solids if s.type != "ground" and s.verts is not None and len(s.verts)]
+        lo = np.min([s.verts.min(0) for s in non_ground], 0)
+        hi = np.max([s.verts.max(0) for s in non_ground], 0)
+        cam = orbit_camera((lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]),
+                           azimuth_deg=35.0, elev_deg=12.0, dist_factor=2.5, fov=48.0)
+        render_solids = solids
+    elif kind == "interior" and floor_count >= 2:
         # Multi-room: frame the WHOLE plan as an elevated dollhouse looking down
         # into the open-top rooms. The single-room ``interior_camera`` frames
         # only ``spaces[0]``, which crops a multi-room apartment badly.
@@ -100,7 +143,7 @@ async def render_design(graph: dict, *, width: int = 1200, height: int = 800,
     ss = max(1, int(getattr(settings, "spatial_render_supersample", 2) or 1))
     faithful_only = bool(getattr(settings, "spatial_render_faithful_only", True))
     try:
-        built = await asyncio.to_thread(_build_and_raster, graph, width, height, ss)
+        built = await asyncio.to_thread(_build_and_raster, graph, width, height, ss, presentation)
     except Exception as exc:  # noqa: BLE001 — geometry must never break generation
         logger.warning("spatial kernel/raster failed: %s", exc)
         return None
