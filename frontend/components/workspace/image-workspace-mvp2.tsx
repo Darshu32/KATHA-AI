@@ -411,11 +411,13 @@ export default function ImageWorkspaceMvp2() {
    * Distinct from the faithful technical render; swaps the hero image to the
    * result. Photoreal today via the image provider; faithful-photoreal once a
    * Replicate token enables ControlNet-depth. */
-  const submitPresent = async (): Promise<boolean> => {
+  const submitPresent = async (
+    mood?: { setting?: string; light?: string; palette?: string },
+  ): Promise<boolean> => {
     if (!activeProjectId || !latestGeneration || isPresenting) return false;
     setIsPresenting(true);
     try {
-      const res = await designApi.present(token, activeProjectId);
+      const res = await designApi.present(token, activeProjectId, mood);
       if (res.image_url) {
         replaceGenerations(
           generations.map((g) =>
@@ -2215,6 +2217,49 @@ function CanvasEmptyHero({
   );
 }
 
+/* Presentation-render mood options — mirror presentation.py's knobs. "" = Auto
+   (the backend derives a tasteful default from the design). */
+const PRESENT_SETTINGS: [string, string][] = [
+  ["", "Auto"], ["mediterranean", "Mediterranean"], ["coastal", "Coastal"],
+  ["desert", "Desert"], ["quarry", "Quarry"], ["forest", "Forest"],
+  ["garden", "Garden"], ["urban", "Urban"],
+];
+const PRESENT_LIGHTS: [string, string][] = [
+  ["", "Auto"], ["golden_hour", "Golden hour"], ["morning", "Morning"],
+  ["midday", "Midday"], ["blue_hour", "Blue hour"], ["overcast", "Overcast"],
+];
+const PRESENT_PALETTES: [string, string][] = [
+  ["", "Auto"], ["natural_warm", "Warm natural"], ["coastal_light", "Coastal light"],
+  ["mineral", "Mineral"], ["monochrome_stone", "Stone"],
+];
+
+function MoodSelect({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string;
+  value: string;
+  options: [string, string][];
+  onChange: (v: string) => void;
+}) {
+  return (
+    <label className="flex items-center justify-between gap-2 text-[11px]">
+      <span className="font-mono uppercase tracking-[0.1em] text-ink-mute">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className="flex-1 max-w-[8.5rem] rounded border border-hairline bg-paper px-1.5 py-1 text-[11px] text-ink-deep focus:outline-none focus:ring-1 focus:ring-pencil/40"
+      >
+        {options.map(([v, l]) => (
+          <option key={v} value={v}>{l}</option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
 /* CanvasGallery — focused-hero + history filmstrip.
  *
  * The architect iterates by comparing attempts, so the canvas reads like
@@ -2252,7 +2297,7 @@ function CanvasGallery({
   pendingPrompt: string;
   onRerender?: () => Promise<boolean>;
   isRerendering?: boolean;
-  onPresent?: () => Promise<boolean>;
+  onPresent?: (mood?: { setting?: string; light?: string; palette?: string }) => Promise<boolean>;
   isPresenting?: boolean;
 }) {
   // Any of the three async paths shows a skeleton — the user shouldn't
@@ -2266,6 +2311,10 @@ function CanvasGallery({
 
   // Hero surface: finished 2D render · live orbitable 3D model · editable 2D plan.
   const [heroView, setHeroView] = useState<"image" | "model" | "plan">("image");
+  // Presentation mood — Setting · Light · Palette knobs for the ✨ Present render
+  // ("" = let the backend auto-derive a tasteful default from the design).
+  const [presentMood, setPresentMood] = useState({ setting: "", light: "", palette: "" });
+  const [moodOpen, setMoodOpen] = useState(false);
 
   // Resolve the hero: the focused render, falling back to the latest.
   const focusedIndex = Math.max(
@@ -2409,18 +2458,51 @@ function CanvasGallery({
                   {isRerendering ? "Re-rendering…" : "⟳ Re-render"}
                 </button>
               ) : null}
-              {/* Presentation (hero) render — atmospheric, styled photo for
-                  client/manager decks. Distinct from the faithful render. */}
+              {/* Presentation (hero) render + mood picker — atmospheric, styled
+                  photo for client/manager decks. Distinct from the faithful render. */}
               {heroView === "image" && hero.projectId && onPresent ? (
-                <button
-                  type="button"
-                  disabled={isPresenting}
-                  onClick={() => void onPresent()}
-                  title="Hero render — atmospheric, styled architectural photo for decks"
-                  className="absolute top-2 left-2 z-10 rounded-md border border-pencil/30 bg-pencil-bg/70 backdrop-blur-sm px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-pencil hover:bg-pencil-bg disabled:opacity-60 transition-colors"
-                >
-                  {isPresenting ? "Rendering…" : "✨ Present"}
-                </button>
+                <div className="absolute top-2 left-2 z-10 flex items-center gap-1">
+                  <button
+                    type="button"
+                    disabled={isPresenting}
+                    onClick={() => void onPresent(presentMood)}
+                    title="Hero render — atmospheric, styled architectural photo for decks"
+                    className="rounded-md border border-pencil/30 bg-pencil-bg/70 backdrop-blur-sm px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-pencil hover:bg-pencil-bg disabled:opacity-60 transition-colors"
+                  >
+                    {isPresenting ? "Rendering…" : "✨ Present"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setMoodOpen((o) => !o)}
+                    aria-expanded={moodOpen}
+                    aria-label="Presentation mood"
+                    title="Mood — setting · light · palette"
+                    className="rounded-md border border-pencil/30 bg-pencil-bg/70 backdrop-blur-sm px-1.5 py-1 font-mono text-[9px] text-pencil hover:bg-pencil-bg transition-colors"
+                  >
+                    {moodOpen ? "▴" : "▾"}
+                  </button>
+                  {moodOpen ? (
+                    <div className="absolute top-full left-0 mt-1 w-60 rounded-md border border-hairline bg-paper shadow-card p-2.5 space-y-2">
+                      <div className="font-mono text-[9px] uppercase tracking-[0.12em] text-ink-mute">
+                        Presentation mood
+                      </div>
+                      <MoodSelect label="Setting" value={presentMood.setting} options={PRESENT_SETTINGS}
+                        onChange={(v) => setPresentMood((m) => ({ ...m, setting: v }))} />
+                      <MoodSelect label="Light" value={presentMood.light} options={PRESENT_LIGHTS}
+                        onChange={(v) => setPresentMood((m) => ({ ...m, light: v }))} />
+                      <MoodSelect label="Palette" value={presentMood.palette} options={PRESENT_PALETTES}
+                        onChange={(v) => setPresentMood((m) => ({ ...m, palette: v }))} />
+                      <button
+                        type="button"
+                        disabled={isPresenting}
+                        onClick={() => { setMoodOpen(false); void onPresent(presentMood); }}
+                        className="w-full mt-1 rounded border border-pencil/40 bg-pencil-bg px-2 py-1 font-mono text-[10px] uppercase tracking-[0.12em] text-pencil hover:bg-pencil-bg/80 disabled:opacity-60 transition-colors"
+                      >
+                        {isPresenting ? "Rendering…" : "✨ Render this mood"}
+                      </button>
+                    </div>
+                  ) : null}
+                </div>
               ) : null}
             </div>
           ) : (
