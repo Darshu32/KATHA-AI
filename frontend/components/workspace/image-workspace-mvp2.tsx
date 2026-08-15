@@ -2641,7 +2641,7 @@ function RightSummary({
       <div
         role="tablist"
         aria-label="Design review surfaces"
-        className="sticky top-0 z-20 bg-paper-soft border-b border-hairline shadow-[0_1px_0_rgba(0,0,0,0.02),0_4px_8px_-6px_rgba(0,0,0,0.08)] px-2 flex items-center overflow-x-auto draft-scroll"
+        className="sticky top-0 z-20 bg-paper-soft border-b border-hairline shadow-[0_1px_0_rgba(0,0,0,0.02),0_4px_8px_-6px_rgba(0,0,0,0.08)] px-1.5 flex items-center overflow-x-auto draft-scroll"
       >
         {tabs.map((t) => {
           const active = t.id === tab;
@@ -2655,7 +2655,7 @@ function RightSummary({
               aria-controls={`tabpanel-${t.id}`}
               tabIndex={active ? 0 : -1}
               onClick={() => setTab(t.id)}
-              className={`font-mono text-[10.5px] uppercase tracking-[0.10em] px-2 py-2.5 transition-colors border-b-2 whitespace-nowrap focus:outline-none focus-visible:ring-2 focus-visible:ring-pencil/40 focus-visible:rounded-sm ${
+              className={`font-mono text-[10.5px] uppercase tracking-[0.06em] px-1.5 py-2.5 transition-colors border-b-2 whitespace-nowrap focus:outline-none focus-visible:ring-2 focus-visible:ring-pencil/40 focus-visible:rounded-sm ${
                 active
                   ? "text-ink-deep border-pencil"
                   : "text-ink-soft hover:text-ink-deep border-transparent"
