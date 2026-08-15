@@ -380,6 +380,7 @@ export default function ChatWorkspaceMvp1() {
                 messages={activeConversation.messages}
                 conversationId={activeConversation.id}
                 onEditUserMessage={setInput}
+                onSuggestion={(p) => submit(p)}
               />
             ) : (
               <EmptyHero onPick={(p) => submit(p)} />
@@ -740,10 +741,12 @@ function Transcript({
   messages,
   conversationId,
   onEditUserMessage,
+  onSuggestion,
 }: {
   messages: Message[];
   conversationId: string;
   onEditUserMessage: (content: string) => void;
+  onSuggestion: (text: string) => void;
 }) {
   return (
     <div className="mx-auto w-full max-w-[52rem] px-6 md:px-8 py-9 space-y-8">
@@ -753,6 +756,7 @@ function Transcript({
           message={m}
           conversationId={conversationId}
           onEditUserMessage={onEditUserMessage}
+          onSuggestion={onSuggestion}
         />
       ))}
     </div>
@@ -763,10 +767,12 @@ function MessageRow({
   message,
   conversationId,
   onEditUserMessage,
+  onSuggestion,
 }: {
   message: Message;
   conversationId: string;
   onEditUserMessage: (content: string) => void;
+  onSuggestion: (text: string) => void;
 }) {
   const isUser = message.role === "user";
   if (isUser) {
@@ -789,7 +795,7 @@ function MessageRow({
     );
   }
   return (
-    <AssistantMessage message={message} conversationId={conversationId} />
+    <AssistantMessage message={message} conversationId={conversationId} onSuggestion={onSuggestion} />
   );
 }
 
@@ -946,9 +952,11 @@ function MessageActions({
 function AssistantMessage({
   message,
   conversationId,
+  onSuggestion,
 }: {
   message: Message;
   conversationId: string;
+  onSuggestion: (text: string) => void;
 }) {
   const refs = message.referenceLinks ?? [];
 
@@ -1039,12 +1047,14 @@ function AssistantMessage({
           {message.suggestions && message.suggestions.length > 0 ? (
             <div className="mt-5 flex flex-wrap gap-2">
               {message.suggestions.map((s, i) => (
-                <span
+                <button
                   key={`${i}-${s}`}
-                  className="text-[13px] text-ink-soft border border-hairline px-2.5 py-1 rounded-md bg-paper-soft"
+                  type="button"
+                  onClick={() => onSuggestion(s)}
+                  className="text-[13px] text-ink-soft border border-hairline px-2.5 py-1 rounded-md bg-paper-soft hover:border-graphite hover:text-ink-deep hover:bg-paper transition-colors cursor-pointer"
                 >
                   {s}
-                </span>
+                </button>
               ))}
             </div>
           ) : null}
