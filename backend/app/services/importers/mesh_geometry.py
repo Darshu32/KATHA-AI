@@ -82,11 +82,21 @@ def load_mesh(filename: str, payload: bytes, *, up_flip: bool = False) -> dict:
     if up_flip:
         verts, flipped = _to_y_up(verts)
     verts = _recentre_on_floor(verts)
+    # Snap arbitrary model units (mm / cm / m …) to a sensible object scale so an
+    # editable part reads as "0.85 m", not "85 m" (see _normalise_scale). Keep the
+    # integrity stats consistent with the rescaled geometry.
+    verts, unit_scale = _normalise_scale(verts)
+    if unit_scale != 1.0:
+        if volume is not None:
+            volume *= unit_scale ** 3
+        if area is not None:
+            area *= unit_scale ** 2
     lo, hi = verts.min(0), verts.max(0)
     dims = (float(hi[0] - lo[0]), float(hi[1] - lo[1]), float(hi[2] - lo[2]))  # L(x), H(y), D(z)
     return {
         "verts": verts, "tris": tris, "dims": dims,
         "units_known": ext in {".glb", ".gltf"},   # glTF is metres; OBJ/STL/PLY unitless
+        "unit_scale": unit_scale,                   # power-of-10 applied to reach object scale
         "n_verts": int(len(verts)), "n_tris": int(len(tris)),
         "up_axis_flipped": flipped,
         "watertight": watertight, "volume": volume, "area": area,
@@ -116,6 +126,34 @@ def _recentre_on_floor(verts: np.ndarray) -> np.ndarray:
     return v
 
 
+def _normalise_scale(verts: np.ndarray) -> tuple[np.ndarray, float]:
+    """Snap an arbitrarily-scaled model to a sensible object size by whole powers
+    of 10 (a units guess: mm / cm / m). Geometry alone can't reveal the true unit,
+    so if the largest dimension is outside the plausible object band we rescale by
+    the nearest power of 10 that lands it inside — an "85 m" engine (authored in a
+    large unit) becomes ~0.85 m. Uniform scale about the origin, so the floor
+    (y=0) and centred footprint are preserved. Returns (verts, scale_applied);
+    a model already in-band is returned unchanged (scale 1.0)."""
+    from app.config import get_settings
+    s = get_settings()
+    lo_m, hi_m = float(s.import_scale_min_m), float(s.import_scale_max_m)
+    lo, hi = verts.min(0), verts.max(0)
+    maxd = float(np.max(hi - lo))
+    if maxd <= 0 or not np.isfinite(maxd):
+        return verts, 1.0
+    scale = 1.0
+    for _ in range(24):  # bounded — snap into [lo_m, hi_m] by powers of 10
+        if maxd * scale > hi_m:
+            scale /= 10.0
+        elif maxd * scale < lo_m:
+            scale *= 10.0
+        else:
+            break
+    if scale != 1.0:
+        verts = (verts * scale).astype(np.float32)
+    return verts, scale
+
+
 # ── Tier 2: decompose a mesh into editable PARTS ──────────────────────────────
 def _part_type(dims: tuple[float, float, float]) -> str:
     """Coarse type from a part's proportions (Tier-2 v1 heuristic)."""
@@ -130,14 +168,50 @@ def _part_type(dims: tuple[float, float, float]) -> str:
     return "part"
 
 
-def decompose_mesh(verts, tris, max_parts: int = 64) -> list[dict]:
-    """Split a mesh into connected-component PARTS — the editable units.
+def _sub_mesh(v: np.ndarray, comp_tris) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    """A connected component's self-contained sub-mesh (local verts + reindexed
+    tris) plus its bounding box (lo, hi)."""
+    ct = np.asarray(comp_tris, np.int64)
+    used = np.unique(ct)
+    remap = {int(old): new for new, old in enumerate(used)}
+    lv = v[used].astype(np.float32)
+    lt = np.array([[remap[int(x)] for x in tri] for tri in ct], np.int32)
+    return lv, lt, lv.min(0), lv.max(0)
 
-    Union-find over triangles' shared vertices (no graph-engine dependency, so
-    it works where ``trimesh.split`` can't). Each part is a self-contained
-    sub-mesh (local verts + tris) with a bounding box → position (bottom-centre)
-    + dimensions + a coarse type. A welded single-mesh model yields one part
-    (honest Tier-2 limit — true wall/room reconstruction is Tier 2b)."""
+
+def _part_from(pid: str, lv, lt, lo, hi, type_override: str | None = None) -> dict:
+    dims = (float(hi[0] - lo[0]), float(hi[1] - lo[1]), float(hi[2] - lo[2]))  # L,H,D
+    return {
+        "id": pid,
+        "type": type_override or _part_type(dims),
+        "position": {"x": float((lo[0] + hi[0]) / 2), "y": float(lo[1]),
+                     "z": float((lo[2] + hi[2]) / 2)},           # bottom-centre
+        "dimensions": {"length": dims[0], "width": dims[2], "height": dims[1]},
+        "verts": lv,
+        "tris": lt,
+    }
+
+
+def decompose_mesh(verts, tris, max_parts: int | None = None,
+                   min_part_frac: float | None = None) -> list[dict]:
+    """Split a mesh into editable PARTS = its connected components.
+
+    Union-find over triangles' shared vertices (no graph-engine dependency, so it
+    works where ``trimesh.split`` can't). Each component becomes a self-contained
+    sub-mesh with a bounding box → position (bottom-centre) + dimensions + a coarse
+    type. To stop a dense CAD model shattering into dozens of parts, only
+    components at least ``min_part_frac`` of the largest (by bbox diagonal), up to
+    ``max_parts``, are kept as individual editable parts; every smaller component
+    merges into ONE "assembly" remainder part — so the render keeps all triangles
+    but the editable list stays legible. Thresholds come from settings. A welded
+    single-mesh model yields one part (true wall/room reconstruction is Tier 2b)."""
+    from app.config import get_settings
+    s = get_settings()
+    if max_parts is None:
+        max_parts = int(s.import_max_parts)
+    if min_part_frac is None:
+        min_part_frac = float(s.import_min_part_frac)
+
     v = np.asarray(verts, np.float32)
     t = np.asarray(tris, np.int64)
     if not len(t):
@@ -167,25 +241,37 @@ def decompose_mesh(verts, tris, max_parts: int = 64) -> list[dict]:
     for tri in t:
         groups[find(int(tri[0]))].append(tri)
 
-    comps = sorted(groups.values(), key=len, reverse=True)[:max_parts]
-    parts: list[dict] = []
-    for i, comp_tris in enumerate(comps, 1):
-        ct = np.asarray(comp_tris, np.int64)
-        used = np.unique(ct)
-        remap = {int(old): new for new, old in enumerate(used)}
-        local_v = v[used].astype(np.float32)
-        local_t = np.array([[remap[int(x)] for x in tri] for tri in ct], np.int32)
-        lo, hi = local_v.min(0), local_v.max(0)
-        dims = (float(hi[0] - lo[0]), float(hi[1] - lo[1]), float(hi[2] - lo[2]))  # L,H,D
-        parts.append({
-            "id": f"part_{i}",
-            "type": _part_type(dims),
-            "position": {"x": float((lo[0] + hi[0]) / 2), "y": float(lo[1]),
-                         "z": float((lo[2] + hi[2]) / 2)},           # bottom-centre
-            "dimensions": {"length": dims[0], "width": dims[2], "height": dims[1]},
-            "verts": local_v,
-            "tris": local_t,
-        })
+    # Build every component's sub-mesh + bbox, ranked by spatial size (diagonal).
+    built = []
+    for comp_tris in groups.values():
+        lv, lt, lo, hi = _sub_mesh(v, comp_tris)
+        built.append((float(np.linalg.norm(hi - lo)), lv, lt, lo, hi))
+    built.sort(key=lambda b: b[0], reverse=True)
+    biggest = built[0][0] if built else 0.0
+
+    keep, rest = [], []
+    for b in built:
+        big_enough = biggest <= 0 or b[0] >= min_part_frac * biggest
+        if big_enough and len(keep) < max(1, max_parts - 1):
+            keep.append(b)
+        else:
+            rest.append(b)
+
+    parts = [_part_from(f"part_{i}", lv, lt, lo, hi)
+             for i, (_d, lv, lt, lo, hi) in enumerate(keep, 1)]
+
+    # Merge the small / overflow components into one remainder part: no geometry is
+    # dropped from the render, while the editable-part count stays bounded.
+    if rest:
+        vs, ts, off = [], [], 0
+        for _d, lv, lt, _lo, _hi in rest:
+            vs.append(lv)
+            ts.append(lt + off)
+            off += len(lv)
+        mv = np.concatenate(vs).astype(np.float32)
+        mt = np.concatenate(ts).astype(np.int32)
+        parts.append(_part_from(f"part_{len(keep) + 1}", mv, mt, mv.min(0), mv.max(0),
+                                type_override="assembly"))
     return parts
 
 

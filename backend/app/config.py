@@ -205,6 +205,21 @@ class Settings(BaseSettings):
     opening_min_door_wall_m: float = 0.9    # shortest partition that can hold a door
     opening_min_window_wall_m: float = 1.6  # shortest exterior wall that gets a window
 
+    # ── Mesh import (upload → geometry) ──────────────────
+    # Uploaded models arrive in arbitrary units (mm / cm / m / inches). Geometry
+    # alone can't reveal the true size, so if the model's largest dimension falls
+    # outside this plausible object-scale band we snap it by whole powers of 10
+    # (a unit guess) so an editable part reads as "0.85 m", not "85 m". Models
+    # already in-band are trusted as-is. Env-overridable for building-scale work.
+    import_scale_min_m: float = 0.08
+    import_scale_max_m: float = 4.0
+    # A dense CAD mesh can shatter into dozens of connected components. Keep the
+    # largest as individual editable parts (up to the cap, and only those at least
+    # this fraction of the biggest); everything smaller merges into ONE "remainder"
+    # part so nothing is dropped from the render but the part list stays legible.
+    import_max_parts: int = 24
+    import_min_part_frac: float = 0.04
+
     model_config = {
         "env_file": ".env",
         "env_file_encoding": "utf-8",
