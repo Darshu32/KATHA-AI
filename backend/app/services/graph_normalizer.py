@@ -295,18 +295,38 @@ def _normalize_object_dimensions(graph: dict[str, Any], report: dict[str, Any]) 
                 }
             )
 
-        # Clamp centre so the bounding box stays inside the room. Edge
-        # elements (walls/windows/doors) legitimately sit ON the boundary —
-        # they were snapped to a wall already, so don't pull them back in.
+        # Keep the footprint inside the room and oriented sensibly. Edge elements
+        # (walls/windows/doors) legitimately sit ON the boundary — they were
+        # snapped to a wall already, so don't pull them back in.
         pos = obj.get("position")
-        if isinstance(pos, dict) and role not in _EDGE_ROLES:
-            half_w, half_l = width / 2, length / 2
-            new_x = _clamp(_num(pos.get("x")), half_w, room_l - half_w)
-            new_z = _clamp(_num(pos.get("z")), half_l, room_w - half_l)
-            if (round(new_x, 3), round(new_z, 3)) != (
-                round(_num(pos.get("x")), 3),
-                round(_num(pos.get("z")), 3),
-            ):
+        if isinstance(pos, dict) and role not in _EDGE_ROLES and length > 0 and width > 0:
+            cx, cz = _num(pos.get("x")), _num(pos.get("z"))
+            # A deep-narrow piece (wardrobe, sofa, bookshelf, dresser…) hugging a
+            # wall should face it with its DEPTH, not jut its long side into the
+            # room. When its long axis runs PERPENDICULAR to the nearest wall and
+            # it sits within reach of that wall, rotate 90° (swap length<->width)
+            # so it lies flush. length lives on x, width on z.
+            dist_x, dist_z = min(cx, room_l - cx), min(cz, room_w - cz)
+            near_axis = "x" if dist_x <= dist_z else "z"
+            long_axis = "x" if length >= width else "z"
+            aspect = max(length, width) / max(min(length, width), 1e-6)
+            near_dist = dist_x if near_axis == "x" else dist_z
+            if aspect >= 1.4 and long_axis == near_axis and near_dist <= 0.5 * max(length, width):
+                length, width = width, length
+                dims["length"], dims["width"] = round(length, 4), round(width, 4)
+                report["corrections"].append(
+                    {
+                        "type": "rotation",
+                        "object_id": obj.get("id"),
+                        "detail": "Rotated wall-hugging piece so its depth faces the wall.",
+                    }
+                )
+            # Clamp the centre so the (possibly rotated) bounding box stays inside.
+            # x uses half the LENGTH (its x-extent); z uses half the WIDTH (z-extent).
+            half_l, half_w = length / 2, width / 2
+            new_x = _clamp(cx, half_l, room_l - half_l)
+            new_z = _clamp(cz, half_w, room_w - half_w)
+            if (round(new_x, 3), round(new_z, 3)) != (round(cx, 3), round(cz, 3)):
                 report["corrections"].append(
                     {
                         "type": "position",
