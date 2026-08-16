@@ -101,24 +101,53 @@ export function ImportDialog({
     }
   };
 
-  /* Build the brief text we paste into the prompt: each file's one-line
-     summary, then any extracted text/dimensions joined with separators
-     so the AI gets enough context to act on it. */
+  /* Build the brief text we paste into the prompt — the ACTUAL extracted
+     content, not the meta-summary. Field names mirror what the importers
+     return (text_excerpt / brief_signals / headers+sample_rows / bbox / spaces)
+     so a real brief, schedule or model feeds the next Generate with substance. */
   const buildBriefText = (): string => {
     return results
       .map((r) => {
-        const lines: string[] = [];
-        lines.push(`[${r.filename}] ${r.summary}`);
-        const ex = r.extracted as Record<string, unknown>;
-        if (typeof ex.text === "string" && ex.text.trim()) {
-          lines.push(ex.text.trim().slice(0, 800));
+        const ex = (r.extracted ?? {}) as Record<string, unknown>;
+        const lines: string[] = [`— from ${r.filename} —`];
+
+        // Prose briefs (txt / md / pdf / docx / dxf notes)
+        const text = (ex.text_excerpt ?? ex.text) as unknown;
+        if (typeof text === "string" && text.trim()) lines.push(text.trim().slice(0, 1200));
+
+        // Detected anchors (budget / dimensions / rooms / style / materials)
+        const sig = ex.brief_signals as Record<string, unknown> | undefined;
+        if (sig) {
+          const asRaw = (v: unknown) =>
+            Array.isArray(v) ? v.map((x) => (x as { raw?: string })?.raw ?? x).join(", ") : "";
+          const asList = (v: unknown) => (Array.isArray(v) ? (v as string[]).join(", ") : "");
+          const anchors = [
+            ["Rooms", asList(sig.rooms_mentioned)],
+            ["Style", asList(sig.styles_mentioned)],
+            ["Materials", asList(sig.materials_mentioned)],
+            ["Budget", asRaw(sig.budgets)],
+            ["Dimensions", asRaw(sig.dimensions)],
+            ["Timeline", asRaw(sig.timelines)],
+          ].filter(([, v]) => v);
+          if (anchors.length) lines.push(anchors.map(([k, v]) => `${k}: ${v}`).join(" · "));
         }
-        if (Array.isArray(ex.dimensions) && ex.dimensions.length > 0) {
-          lines.push(`Dimensions: ${JSON.stringify(ex.dimensions).slice(0, 400)}`);
+
+        // Tabular (csv / xlsx / step headers)
+        const headers = ex.headers as unknown;
+        if (Array.isArray(headers) && headers.length) {
+          const rc = ex.row_count as number | undefined;
+          lines.push(`Schedule [${headers.join(", ")}]${rc ? ` — ${rc} rows` : ""}`);
+          const samples = ex.sample_rows as unknown;
+          if (Array.isArray(samples) && samples.length)
+            lines.push(samples.slice(0, 8).map((s) => JSON.stringify(s)).join("\n").slice(0, 600));
         }
-        if (Array.isArray(ex.rows) && ex.rows.length > 0) {
-          lines.push(`Rows: ${ex.rows.length}`);
-        }
+
+        // Geometry (obj / ifc / step / dxf) — overall size + room count
+        if (ex.bbox) lines.push(`Overall size: ${JSON.stringify(ex.bbox).slice(0, 220)}`);
+        if (Array.isArray(ex.spaces) && ex.spaces.length) lines.push(`${ex.spaces.length} space(s) in the model`);
+
+        // Nothing substantive extracted → at least carry the one-line summary.
+        if (lines.length === 1) lines.push(r.summary);
         return lines.join("\n");
       })
       .join("\n\n");

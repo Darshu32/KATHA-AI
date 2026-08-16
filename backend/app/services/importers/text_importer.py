@@ -33,15 +33,18 @@ _ROOM_KEYWORDS = (
     "classroom", "dining room", "study",
 )
 _STYLE_KEYWORDS = (
-    "japandi", "scandinavian", "minimalist", "industrial", "art deco",
+    "japandi", "scandinavian", "minimalist", "minimal", "industrial", "art deco",
     "mid-century", "mid century", "biophilic", "rustic", "contemporary",
-    "modern", "traditional", "wabi-sabi", "boho", "luxe",
+    "modern", "traditional", "wabi-sabi", "boho", "bohemian", "luxe",
+    "mediterranean", "coastal", "tropical", "brutalist",
 )
 _MATERIAL_KEYWORDS = (
     "walnut", "oak", "teak", "ash", "rubberwood", "mdf", "ply", "plywood",
     "brass", "stainless steel", "mild steel", "aluminium", "aluminum",
     "linen", "leather", "wool", "cotton", "boucle", "bouclé", "velvet",
-    "marble", "granite", "terrazzo", "concrete",
+    "marble", "granite", "terrazzo", "concrete", "stone", "timber", "wood",
+    "glass", "brick", "plaster", "travertine", "limestone", "sandstone",
+    "terracotta", "bamboo", "rattan", "cane", "jute",
 )
 
 
@@ -81,19 +84,41 @@ def _detect_brief_signals(text: str) -> dict[str, Any]:
     }
 
 
+_AREA_RE = re.compile(
+    r"(\d{2,5}(?:\.\d+)?)\s*(sq\.?\s?m|sqm|square\s?met\w*|sq\.?\s?ft|sqft|square\s?f\w*)",
+    re.IGNORECASE,
+)
+
+
 def parse(filename: str, payload: bytes) -> dict[str, Any]:
     text = payload.decode("utf-8", errors="ignore")
     signals = _detect_brief_signals(text)
+    # Single-area mentions ("450 sqm") count as dimension hints too.
+    for m in _AREA_RE.finditer(text):
+        signals["dimensions"].append({"raw": m.group(0).strip(), "values": [float(m.group(1))], "unit": "area"})
+        if len(signals["dimensions"]) >= 12:
+            break
     word_count = len(re.findall(r"\b\w+\b", text))
+    found: list[str] = []
+    if signals["rooms_mentioned"]:
+        found.append(f"{len(signals['rooms_mentioned'])} room cue(s)")
+    if signals["styles_mentioned"]:
+        found.append("style " + "/".join(signals["styles_mentioned"][:3]))
+    if signals["materials_mentioned"]:
+        found.append("materials " + "/".join(signals["materials_mentioned"][:3]))
+    if signals["budgets"]:
+        found.append(f"{len(signals['budgets'])} budget mention(s)")
+    if signals["dimensions"]:
+        found.append(f"{len(signals['dimensions'])} dimension hint(s)")
+    if signals["timelines"]:
+        found.append(f"{len(signals['timelines'])} timeline(s)")
     return {
         "format": "text",
         "filename": filename,
         "size_bytes": len(payload),
         "summary": (
-            f"Plain text brief: {word_count} words; "
-            f"{len(signals['budgets'])} budget mention(s); "
-            f"{len(signals['dimensions'])} dimension hint(s); "
-            f"{len(signals['rooms_mentioned'])} room cue(s)."
+            f"Brief captured — {word_count} words"
+            + (f"; found {', '.join(found)}." if found else "; ready to use as your brief.")
         ),
         "extracted": {
             "word_count": word_count,
