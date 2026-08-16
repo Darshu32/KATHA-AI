@@ -861,6 +861,7 @@ async def export_route(
     bundle = build_spec_bundle(
         graph,
         project_name=project.name or "KATHA Project",
+        design_title=getattr(version, "prompt", None),
         brd_bands=brd_bands,
     )
     try:

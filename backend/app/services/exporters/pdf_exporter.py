@@ -59,6 +59,17 @@ def _cell(value, style: ParagraphStyle) -> Paragraph:
     return Paragraph(text, style)
 
 
+def _human_date(iso: str | None) -> str:
+    """Raw ISO timestamp → a clean 'DD Mon YYYY' for the dossier header."""
+    if not iso:
+        return "—"
+    try:
+        from datetime import datetime
+        return datetime.fromisoformat(str(iso)).strftime("%d %b %Y")
+    except Exception:
+        return str(iso)[:10]
+
+
 def _table(data: list[list], col_widths: list[float] | None = None) -> Table:
     # Wrap every cell in a Paragraph so long values WRAP inside the column
     # instead of overflowing the page — reportlab does not wrap bare strings.
@@ -104,12 +115,22 @@ def export(spec: dict, graph: dict) -> dict:
     story = []
     meta = spec["meta"]
     story.append(Paragraph("KATHA Design Dossier", s["title"]))
-    story.append(Paragraph(
-        f"{meta['project_name']}  ·  {meta.get('room_type', '—')}  ·  Theme: {meta.get('theme', '—')}  "
-        f"·  {meta['dimensions_m'].get('length','?')} x {meta['dimensions_m'].get('width','?')} x {meta['dimensions_m'].get('height','?')} m  "
-        f"·  Generated {meta['generated_at']}",
-        s["subtitle"],
-    ))
+    # Subtitle from only the meaningful parts — skip an empty room type and the
+    # None×None×None dimensions an exterior/massing design carries (no room), and
+    # show a clean date instead of a raw ISO timestamp.
+    _lead = str(meta.get("design_title") or meta.get("project_name") or "Design")
+    _parts: list[str] = [_lead[:1].upper() + _lead[1:]]
+    _rt = meta.get("room_type")
+    if _rt and str(_rt) not in ("—", "None", ""):
+        _parts.append(str(_rt).replace("_", " ").title())
+    if meta.get("theme"):
+        _parts.append(f"Theme: {meta['theme']}")
+    _dims = meta.get("dimensions_m") or {}
+    _L, _W, _H = _dims.get("length"), _dims.get("width"), _dims.get("height")
+    if all(isinstance(v, (int, float)) for v in (_L, _W, _H)):
+        _parts.append(f"{_L} × {_W} × {_H} m")
+    _parts.append(f"Generated {_human_date(meta.get('generated_at'))}")
+    story.append(Paragraph(_xml_escape("  ·  ".join(_parts)), s["subtitle"]))
 
     story += _section_materials(spec, s)
     story.append(PageBreak())

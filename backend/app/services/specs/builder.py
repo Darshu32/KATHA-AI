@@ -17,6 +17,7 @@ def build_spec_bundle(
     graph: dict,
     *,
     project_name: str = "KATHA Project",
+    design_title: str | None = None,
     brd_bands: dict | None = None,
 ) -> dict:
     """Assemble the spec bundle the exporters consume.
@@ -34,6 +35,9 @@ def build_spec_bundle(
     bundle: dict = {
         "meta": {
             "project_name": project_name,
+            # What the design IS (the originating prompt) — so a dossier reads as
+            # the design, not a stale/reused project name. Falls back to the name.
+            "design_title": (design_title or "").strip() or project_name,
             "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
             "room_type": room.get("type", "—"),
             "theme": style,
