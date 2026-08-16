@@ -2415,7 +2415,7 @@ function CanvasGallery({
                       don't draw a click-to-edit overlay on the render itself. */}
                   {isHeroLatest ? (
                     <div className="absolute bottom-2 left-2 z-10 flex items-center gap-1.5 rounded-md border border-hairline bg-paper/85 px-2.5 py-1 font-mono text-[9px] uppercase tracking-[0.12em] text-ink-mute backdrop-blur-sm pointer-events-none">
-                      Model render · select &amp; edit in 3D / Plan
+                      Model render
                     </div>
                   ) : null}
                 </>
@@ -2425,8 +2425,9 @@ function CanvasGallery({
                 <div className="absolute top-2 right-2 z-10 flex rounded-md border border-hairline bg-paper/85 backdrop-blur-sm overflow-hidden">
                   {([
                     ["image", "Render"],
-                    ["model", "3D"],
-                    ["plan", "Plan"],
+                    // DEMO: 3D + Plan hidden for now — restore these two lines afterwards.
+                    // ["model", "3D"],
+                    // ["plan", "Plan"],
                   ] as const).map(([v, label]) => (
                     <button
                       key={v}
