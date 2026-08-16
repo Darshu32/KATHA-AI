@@ -29,6 +29,8 @@ from __future__ import annotations
 import io
 import zipfile
 from datetime import datetime, timezone
+
+from app.services.exporters._common import dossier_title, human_date
 from typing import Any
 from xml.sax.saxutils import escape
 
@@ -331,11 +333,14 @@ def _picture_xml(*, sp_id: int, rel_id: str, name: str,
 
 def _build_cover(spec: dict) -> str:
     meta = spec.get("meta") or {}
-    today = datetime.now(timezone.utc).date().isoformat()
+    meta_line = f"Generated {human_date(meta.get('generated_at'))}"
+    rt = meta.get("room_type")
+    if rt and str(rt) not in ("—", "None", ""):
+        meta_line += f"  •  {str(rt).replace('_', ' ').title()}"
     return _slide_xml([
         _text_box(
             sp_id=10, x_emu=720000, y_emu=2200000, cx_emu=10752000, cy_emu=900000,
-            paragraphs=[(meta.get("project_name", "KATHA Project"), {"size": 44, "bold": True, "color": "3D3A36"})],
+            paragraphs=[(dossier_title(meta), {"size": 44, "bold": True, "color": "3D3A36"})],
         ),
         _text_box(
             sp_id=11, x_emu=720000, y_emu=3200000, cx_emu=10752000, cy_emu=600000,
@@ -343,10 +348,7 @@ def _build_cover(spec: dict) -> str:
         ),
         _text_box(
             sp_id=12, x_emu=720000, y_emu=5800000, cx_emu=10752000, cy_emu=400000,
-            paragraphs=[
-                (f"Generated {today}  •  {meta.get('room_type', '—')}",
-                 {"size": 14, "color": "5C3B1E"}),
-            ],
+            paragraphs=[(meta_line, {"size": 14, "color": "5C3B1E"})],
         ),
     ])
 

@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from html import escape
 
 from app.services.exporters import gltf_exporter
+from app.services.exporters._common import dossier_subtitle, dossier_title
 
 
 def _safe_name(name: str) -> str:
@@ -207,8 +208,8 @@ footer {{ padding:18px 48px; border-top:1px solid var(--rule); font-size:12px; c
 </head>
 <body>
 <header>
-  <h1>{_e(project_raw)}</h1>
-  <p>{_e(meta.get('theme', '—'))} · {_e(meta.get('room_type', '—'))} · generated {today}</p>
+  <h1>{_e(dossier_title(meta))}</h1>
+  <p>{_e(dossier_subtitle(meta))}</p>
 </header>
 <nav id="tabs">
   <button data-tab="overview" class="active">Overview</button>

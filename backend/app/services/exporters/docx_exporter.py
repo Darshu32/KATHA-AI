@@ -12,6 +12,8 @@ from docx import Document
 from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.shared import Cm, Pt, RGBColor
 
+from app.services.exporters._common import dossier_subtitle
+
 from app.services.exporters._synthesis import (
     derive_assembly_instructions,
     derive_maintenance_guide,
@@ -84,11 +86,7 @@ def export(spec: dict, graph: dict) -> dict:
     run.font.size = Pt(24)
 
     subtitle = doc.add_paragraph()
-    subtitle.add_run(
-        f"{meta['project_name']} · {meta.get('room_type', '—')} · Theme: {meta.get('theme', '—')} · "
-        f"{meta['dimensions_m'].get('length','?')} x {meta['dimensions_m'].get('width','?')} x "
-        f"{meta['dimensions_m'].get('height','?')} m · Generated {meta['generated_at']}"
-    ).italic = True
+    subtitle.add_run(dossier_subtitle(meta)).italic = True
 
     # Materials.
     _h1(doc, "Materials")
