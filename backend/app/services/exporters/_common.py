@@ -26,9 +26,11 @@ def dossier_title(meta: dict) -> str:
     return lead[:1].upper() + lead[1:]
 
 
-def dossier_subtitle(meta: dict) -> str:
-    """One clean subtitle line shared by every doc exporter."""
-    parts = [dossier_title(meta)]
+def dossier_meta_line(meta: dict) -> str:
+    """The subtitle WITHOUT the title — room type · theme · dims · date. Use
+    where the design title is already shown as the heading (e.g. the HTML h1),
+    so it isn't repeated."""
+    parts: list[str] = []
     rt = meta.get("room_type")
     if rt and str(rt) not in ("—", "None", ""):
         parts.append(str(rt).replace("_", " ").title())
@@ -40,3 +42,9 @@ def dossier_subtitle(meta: dict) -> str:
         parts.append(f"{length} × {width} × {height} m")
     parts.append(f"Generated {human_date(meta.get('generated_at'))}")
     return "  ·  ".join(parts)
+
+
+def dossier_subtitle(meta: dict) -> str:
+    """One clean subtitle line: the design title + the meta line. Used where the
+    heading is a fixed brand (e.g. 'KATHA Design Dossier')."""
+    return f"{dossier_title(meta)}  ·  {dossier_meta_line(meta)}"
