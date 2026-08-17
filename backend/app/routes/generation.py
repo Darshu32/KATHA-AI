@@ -17,6 +17,8 @@ from app.models.schemas import (
     ThemeSwitchRequest,
 )
 from app.services.design_graph_service import (
+    VersionDeleteError,
+    delete_version,
     get_latest_render_for_version,
     get_latest_version,
     get_project,
@@ -334,6 +336,39 @@ async def get_version_route(
         "change_summary": version.change_summary,
         "graph_data": version.graph_data,
         "created_at": version.created_at.isoformat(),
+    }
+
+
+@router.delete("/versions/{version_num}")
+async def delete_version_route(
+    project_id: str,
+    version_num: int,
+    user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+):
+    """Delete a single version (with its estimates + render assets) and
+    re-point the project at the newest survivor. A project must keep at least
+    one version, so deleting the last one is refused (409)."""
+    project = await get_project(db, project_id)
+    _check_owner(project, user)
+
+    try:
+        result = await delete_version(db, project_id, version_num)
+    except VersionDeleteError as exc:
+        msg = str(exc)
+        code = (
+            status.HTTP_404_NOT_FOUND
+            if "not found" in msg
+            else status.HTTP_409_CONFLICT
+        )
+        raise HTTPException(status_code=code, detail=msg)
+
+    return {
+        "status": "deleted",
+        "project_id": project_id,
+        "deleted_version": version_num,
+        "latest_version": result["latest_version"],
+        "remaining": result["remaining"],
     }
 
 

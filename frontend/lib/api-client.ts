@@ -935,6 +935,33 @@ export const design = {
     }>(`/projects/${projectId}/present${suffix}`, "POST", undefined, token);
   },
 
+  /** The versions that still exist server-side for this project. Used to
+   *  reconcile the locally-persisted gallery so cards for versions that were
+   *  deleted on the server drop off on the next load instead of lingering. */
+  listVersions: (token: string | undefined, projectId: string) =>
+    request<{
+      project_id: string;
+      versions: Array<{
+        id: string;
+        version: number;
+        change_type: string;
+        change_summary: string;
+        created_at: string;
+      }>;
+    }>(`/projects/${projectId}/versions`, "GET", undefined, token),
+
+  /** Delete one version server-side (its estimates + renders go with it) and
+   *  return the new latest version plus the versions that remain. The server
+   *  refuses to delete a project's only version (409). */
+  deleteVersion: (token: string | undefined, projectId: string, versionNum: number) =>
+    request<{
+      status: string;
+      project_id: string;
+      deleted_version: number;
+      latest_version: number;
+      remaining: number[];
+    }>(`/projects/${projectId}/versions/${versionNum}`, "DELETE", undefined, token),
+
   updateMaterial: (token: string, projectId: string, objectId: string, material: string, color: string) =>
     request<{ status: string }>(
       `/projects/${projectId}/objects/${objectId}/material`, "PATCH", { material, color }, token,

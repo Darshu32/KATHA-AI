@@ -274,6 +274,42 @@ export default function ImageWorkspaceMvp2() {
     void loadAll();
   }, [loadAll]);
 
+  // Reconcile the local gallery against the server's real version list.
+  // `generations` is persisted in localStorage, so a version deleted
+  // server-side (e.g. an old iteration pruned during cleanup) would otherwise
+  // linger as a dead card after a reload. On each project load, drop any card
+  // whose version no longer exists on the server. Guarded three ways so it can
+  // never wipe a live gallery: runs once per project (ref), bails on an
+  // empty/failed fetch, and keeps any card lacking a real positive version.
+  const reconciledProjectRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeProjectId) return;
+    if (reconciledProjectRef.current === activeProjectId) return;
+    reconciledProjectRef.current = activeProjectId;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const res = await designApi.listVersions(token, activeProjectId);
+        const live = new Set((res.versions ?? []).map((v) => v.version));
+        if (cancelled || live.size === 0) return;
+        const current = useImageGenStore.getState().generations;
+        const kept = current.filter(
+          (g) =>
+            g.projectId !== activeProjectId ||
+            !g.version ||
+            g.version <= 0 ||
+            live.has(g.version),
+        );
+        if (kept.length !== current.length) replaceGenerations(kept);
+      } catch {
+        // Network/API failure — leave the gallery untouched.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProjectId, token, replaceGenerations]);
+
   // If the persisted projectType isn't valid against the freshly-fetched
   // taxonomy (e.g. backend dropped a slug), fall back to the first def.
   useEffect(() => {
@@ -308,12 +344,23 @@ export default function ImageWorkspaceMvp2() {
     setFocusedGenId(generations[0]?.id ?? null);
   }, [generations]);
 
+  // The version the user is *looking at* — the focused History card, falling
+  // back to the latest. The read-only review surfaces (right rail: Summary /
+  // Views / Specs / Cost / Checks / Recs, and the terminal) all reflect THIS
+  // version, so clicking v15 shows v15's plan + diagrams even when v16 is the
+  // latest. Editing still targets the backend's get_latest_version, so it's
+  // enabled only while the focused version *is* the latest.
+  const focusedGeneration =
+    generations.find((g) => g.id === focusedGenId) ?? latestGeneration;
+  const isViewingLatest =
+    !!focusedGeneration && focusedGeneration.id === latestGeneration?.id;
+
   const editableObjects = useMemo(() => {
-    const data = latestGeneration?.graphData as
+    const data = focusedGeneration?.graphData as
       | { objects?: Array<{ id: string; type: string; name?: string; material?: string; dimensions?: { length: number; width: number; height: number } | null }> }
       | undefined;
     return data?.objects ?? [];
-  }, [latestGeneration]);
+  }, [focusedGeneration]);
 
   /* submitThemeSwitch — Pass 3 of the edit loop.
    *
@@ -431,6 +478,31 @@ export default function ImageWorkspaceMvp2() {
       return false;
     } finally {
       setIsPresenting(false);
+    }
+  };
+
+  /* handleDeleteVersion — remove one version from the project.
+   *
+   * Deletes it server-side (its estimates + render assets go with it), then
+   * drops its card from the local gallery and re-points the active version at
+   * whatever the server reports as the new latest. The backend refuses to
+   * delete a project's only remaining version (409), surfaced as a toast. */
+  const handleDeleteVersion = async (
+    gen: import("@/lib/types").ImageGeneration,
+  ): Promise<boolean> => {
+    if (!activeProjectId || gen.version == null || gen.version <= 0) return false;
+    try {
+      const res = await designApi.deleteVersion(token, activeProjectId, gen.version);
+      const remaining = generations.filter((g) => g.id !== gen.id);
+      replaceGenerations(remaining);
+      setActiveProject(
+        activeProjectId,
+        res.latest_version || remaining[0]?.version || null,
+      );
+      return true;
+    } catch (e) {
+      toastError(e, "Couldn't delete version");
+      return false;
     }
   };
 
@@ -708,7 +780,11 @@ export default function ImageWorkspaceMvp2() {
         open={exportOpen}
         onClose={() => setExportOpen(false)}
         projectId={activeProjectId}
-        latestVersion={latestGeneration?.version ?? null}
+        // Export the version the user is viewing, not always the latest — so
+        // exporting while focused on v15 yields v15's dossier. The backend
+        // export route honours version_num. (The GA-Sheet vector export has no
+        // version param and still uses the latest.)
+        latestVersion={focusedGeneration?.version ?? null}
         token={token ?? ""}
       />
 
@@ -799,6 +875,7 @@ export default function ImageWorkspaceMvp2() {
                 isRerendering={isRerendering}
                 onPresent={submitPresent}
                 isPresenting={isPresenting}
+                onDeleteVersion={handleDeleteVersion}
               />
             )}
           </div>
@@ -834,13 +911,13 @@ export default function ImageWorkspaceMvp2() {
           onSubmitEdit={submitEdit}
           isEditing={isEditing}
           editError={editError}
-          canEdit={!!activeProjectId}
-          codeCompliance={latestGeneration?.codeCompliance}
-          validation={latestGeneration?.validation}
-          mepCost={latestGeneration?.mepCostEstimate}
-          estimate={latestGeneration?.estimate}
+          canEdit={isViewingLatest && !!activeProjectId}
+          codeCompliance={focusedGeneration?.codeCompliance}
+          validation={focusedGeneration?.validation}
+          mepCost={focusedGeneration?.mepCostEstimate}
+          estimate={focusedGeneration?.estimate}
           activeProjectId={activeProjectId}
-          latestVersion={latestGeneration?.version ?? null}
+          latestVersion={focusedGeneration?.version ?? null}
           token={token ?? ""}
           scope={scope}
         />
@@ -851,10 +928,10 @@ export default function ImageWorkspaceMvp2() {
           tab={terminalTab}
           setTab={setTerminalTab}
           hasDesign={generations.length > 0}
-          validation={latestGeneration?.validation}
-          mepCost={latestGeneration?.mepCostEstimate}
-          codeCompliance={latestGeneration?.codeCompliance}
-          generation={latestGeneration}
+          validation={focusedGeneration?.validation}
+          mepCost={focusedGeneration?.mepCostEstimate}
+          codeCompliance={focusedGeneration?.codeCompliance}
+          generation={focusedGeneration}
           onClose={() => toggleTerminal()}
         />
       ) : (
@@ -2284,6 +2361,7 @@ function CanvasGallery({
   isRerendering,
   onPresent,
   isPresenting,
+  onDeleteVersion,
 }: {
   generations: import("@/lib/types").ImageGeneration[];
   dim: Dim;
@@ -2299,6 +2377,7 @@ function CanvasGallery({
   isRerendering?: boolean;
   onPresent?: (mood?: { setting?: string; light?: string; palette?: string }) => Promise<boolean>;
   isPresenting?: boolean;
+  onDeleteVersion?: (gen: import("@/lib/types").ImageGeneration) => Promise<boolean>;
 }) {
   // Any of the three async paths shows a skeleton — the user shouldn't
   // have to mentally map which spinner means what.
@@ -2315,6 +2394,21 @@ function CanvasGallery({
   // ("" = let the backend auto-derive a tasteful default from the design).
   const [presentMood, setPresentMood] = useState({ setting: "", light: "", palette: "" });
   const [moodOpen, setMoodOpen] = useState(false);
+  // Delete-a-version: which thumb is armed for a confirm, and which is mid-delete.
+  // Two-step (arm → confirm) so a destructive click is never a single slip.
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+
+  const runDelete = async (g: import("@/lib/types").ImageGeneration) => {
+    if (!onDeleteVersion) return;
+    setConfirmDeleteId(null);
+    setDeletingId(g.id);
+    try {
+      await onDeleteVersion(g);
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   // Resolve the hero: the focused render, falling back to the latest.
   const focusedIndex = Math.max(
@@ -2547,34 +2641,47 @@ function CanvasGallery({
             {generations.map((g, i) => {
               const isFocused = g.id === hero?.id;
               const isLatest = i === 0;
+              const canDelete =
+                !!onDeleteVersion &&
+                generations.length > 1 &&
+                g.version != null &&
+                g.version > 0;
+              const armed = confirmDeleteId === g.id;
+              const busy = deletingId === g.id;
               return (
-                <button
+                <div
                   key={g.id}
-                  type="button"
-                  aria-pressed={isFocused}
-                  aria-label={`Focus render ${generations.length - i}${g.version != null ? `, version ${g.version}` : ""}`}
-                  onClick={() => onFocus(g.id)}
                   className={`group relative shrink-0 w-[132px] aspect-video rounded-md overflow-hidden border transition-all ${
                     isFocused
                       ? "border-pencil ring-1 ring-pencil"
                       : "border-hairline hover:border-graphite"
-                  }`}
+                  } ${busy ? "opacity-60" : ""}`}
                 >
-                  {g.url ? (
-                    // eslint-disable-next-line @next/next/no-img-element
-                    <img
-                      src={resolveAssetUrl(g.url)}
-                      alt={g.prompt}
-                      className="absolute inset-0 w-full h-full object-cover"
-                    />
-                  ) : (
-                    <div className="absolute inset-0 bg-paper-deep grid-paper flex items-center justify-center">
-                      <span className="font-mono text-[10px] text-ink-mute">no render</span>
-                    </div>
-                  )}
-                  {/* Bottom label strip — version + latest marker. Kept
-                      legible over any image with a soft ink gradient. */}
-                  <div className="absolute inset-x-0 bottom-0 flex items-center justify-between px-1.5 py-1 bg-gradient-to-t from-ink-deep/70 to-transparent">
+                  {/* Focus target — fills the thumb, focuses this render in the hero. */}
+                  <button
+                    type="button"
+                    aria-pressed={isFocused}
+                    aria-label={`Focus render ${generations.length - i}${g.version != null ? `, version ${g.version}` : ""}`}
+                    onClick={() => onFocus(g.id)}
+                    className="absolute inset-0 w-full h-full"
+                  >
+                    {g.url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={resolveAssetUrl(g.url)}
+                        alt={g.prompt}
+                        className="absolute inset-0 w-full h-full object-cover"
+                      />
+                    ) : (
+                      <div className="absolute inset-0 bg-paper-deep grid-paper flex items-center justify-center">
+                        <span className="font-mono text-[10px] text-ink-mute">no render</span>
+                      </div>
+                    )}
+                  </button>
+
+                  {/* Bottom label strip — version + latest marker. Clicks pass
+                      through to the focus button beneath. */}
+                  <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between px-1.5 py-1 bg-gradient-to-t from-ink-deep/70 to-transparent">
                     <span className="font-mono text-[9px] uppercase tracking-[0.1em] tnum text-paper">
                       {g.version != null ? `v${String(g.version).padStart(2, "0")}` : "—"}
                     </span>
@@ -2584,7 +2691,66 @@ function CanvasGallery({
                       </span>
                     ) : null}
                   </div>
-                </button>
+
+                  {/* Delete control — top-right. Two-step: a trash button arms an
+                      inline ✓ / ✕ confirm, so a destructive click is never a
+                      single slip. Hidden until hover (or while armed). Uses the
+                      pencil accent the design system reserves for destructive
+                      actions. The project always keeps ≥1 version, so the last
+                      one shows no control. */}
+                  {canDelete ? (
+                    busy ? (
+                      <div className="absolute top-1 right-1 z-20 h-5 w-5 rounded-full bg-ink-deep/70 flex items-center justify-center">
+                        <span className="h-3 w-3 rounded-full border border-paper/40 border-t-paper animate-spin" />
+                      </div>
+                    ) : armed ? (
+                      <div className="absolute top-1 right-1 z-20 flex items-center gap-1">
+                        <button
+                          type="button"
+                          aria-label={`Confirm delete version ${g.version}`}
+                          title="Delete this version"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void runDelete(g);
+                          }}
+                          className="h-5 w-5 rounded-full bg-pencil text-paper flex items-center justify-center shadow-sm hover:bg-brick"
+                        >
+                          <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                            <path d="M2.5 6.5l2.5 2.5 4.5-5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Cancel delete"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            setConfirmDeleteId(null);
+                          }}
+                          className="h-5 w-5 rounded-full bg-paper text-ink-deep border border-hairline flex items-center justify-center shadow-sm hover:bg-paper-soft"
+                        >
+                          <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                            <path d="M3 3l6 6M9 3l-6 6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </button>
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        aria-label={`Delete version ${g.version}`}
+                        title="Delete this version"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setConfirmDeleteId(g.id);
+                        }}
+                        className="absolute top-1 right-1 z-20 h-5 w-5 rounded-full bg-ink-deep/60 text-paper flex items-center justify-center opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity hover:bg-pencil"
+                      >
+                        <svg width="11" height="11" viewBox="0 0 12 12" fill="none" aria-hidden="true">
+                          <path d="M2 3.2h8M4.6 3.2V2.1a.6.6 0 01.6-.6h1.6a.6.6 0 01.6.6v1.1M4.1 3.2l.35 6.1a.8.8 0 00.8.75h1.5a.8.8 0 00.8-.75L8.9 3.2" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" />
+                        </svg>
+                      </button>
+                    )
+                  ) : null}
+                </div>
               );
             })}
           </div>

@@ -2,10 +2,16 @@
 
 import logging
 
-from sqlalchemy import select, func, update
+from sqlalchemy import select, func, update, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.models.orm import DesignGraphVersion, GeneratedAsset, Project
+from app.models.orm import (
+    DesignGraphVersion,
+    EstimateLineItem,
+    EstimateSnapshot,
+    GeneratedAsset,
+    Project,
+)
 from app.services.graph_normalizer import normalize_graph
 from app.services.storage import read_bytes
 
@@ -260,6 +266,83 @@ async def list_versions(
         .order_by(DesignGraphVersion.version.desc())
     )
     return list(result.scalars().all())
+
+
+class VersionDeleteError(Exception):
+    """Raised when a version can't be deleted (missing, or the last one)."""
+
+
+async def delete_version(
+    db: AsyncSession,
+    project_id: str,
+    version: int,
+) -> dict:
+    """Delete a single design version and everything that hangs off it, then
+    re-point the project's ``latest_version`` at the newest survivor.
+
+    The FKs into ``design_graph_versions`` carry no ON DELETE CASCADE, so the
+    dependent rows are cleared first, in order: any child version's
+    ``parent_version_id`` link is nulled, then the version's estimate line
+    items → snapshots, then its render assets, then the version row itself.
+    Refuses to delete a project's only remaining version — a project must
+    always keep at least one. All within the caller's transaction, so a raised
+    error rolls the whole thing back.
+
+    Returns ``{"latest_version": int, "remaining": [int, ...]}``.
+    """
+    target = await get_version(db, project_id, version)
+    if target is None:
+        raise VersionDeleteError(f"version {version} not found")
+
+    existing = await list_versions(db, project_id)  # newest-first
+    if len(existing) <= 1:
+        raise VersionDeleteError("cannot delete the project's only version")
+
+    vid = target.id
+
+    # 1. Drop self-referential parent links pointing at the target.
+    await db.execute(
+        update(DesignGraphVersion)
+        .where(DesignGraphVersion.parent_version_id == vid)
+        .values(parent_version_id=None)
+    )
+    # 2. Estimate line items -> snapshots for this version.
+    snap_ids = (
+        await db.execute(
+            select(EstimateSnapshot.id).where(
+                EstimateSnapshot.graph_version_id == vid
+            )
+        )
+    ).scalars().all()
+    if snap_ids:
+        await db.execute(
+            delete(EstimateLineItem).where(EstimateLineItem.snapshot_id.in_(snap_ids))
+        )
+        await db.execute(
+            delete(EstimateSnapshot).where(EstimateSnapshot.id.in_(snap_ids))
+        )
+    # 3. Render assets for this version.
+    await db.execute(
+        delete(GeneratedAsset).where(GeneratedAsset.graph_version_id == vid)
+    )
+    # 4. The version row itself.
+    await db.execute(
+        delete(DesignGraphVersion).where(DesignGraphVersion.id == vid)
+    )
+
+    # 5. Re-point latest_version at the newest survivor.
+    remaining = sorted(v.version for v in existing if v.version != version)
+    new_latest = remaining[-1] if remaining else 0
+    project = await get_project(db, project_id)
+    if project is not None:
+        project.latest_version = new_latest
+
+    await db.flush()
+    logger.info(
+        "Deleted version %d for project %s (latest now %d)",
+        version, project_id, new_latest,
+    )
+    return {"latest_version": new_latest, "remaining": remaining}
 
 
 async def get_project(
