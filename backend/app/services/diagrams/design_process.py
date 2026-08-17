@@ -10,6 +10,7 @@ the LLM authoring overlay composes on top.
 from __future__ import annotations
 
 from app.knowledge import themes
+from app.services.diagrams.plan_geom import plan_envelope
 from app.services.diagrams.svg_base import (
     ACCENT_WARM,
     INK,
@@ -29,13 +30,18 @@ from app.services.diagrams.svg_base import (
 
 def _build_steps(graph: dict) -> list[tuple[str, str, str]]:
     steps: list[tuple[str, str, str]] = []
-    room = graph.get("room") or (graph.get("spaces") or [{}])[0]
-    dims = room.get("dimensions") or {}
-    steps.append((
-        "Brief captured",
-        f"{str(room.get('type', 'room')).replace('_', ' ').title()} — {dims.get('length','?')}×{dims.get('width','?')}×{dims.get('height','?')} m",
-        "input",
-    ))
+    # Brief = the whole plan, not just room 1: show the building envelope and,
+    # for a multi-room design, the room count rather than one room's type.
+    spaces = graph.get("spaces") or ([graph["room"]] if graph.get("room") else [])
+    env = plan_envelope(graph)
+    envelope = f"{env['l']:.1f}×{env['w']:.1f}×{env['h']:.1f} m"
+    if len(spaces) > 1:
+        brief_detail = f"{len(spaces)} rooms — {envelope}"
+    else:
+        room0 = spaces[0] if spaces else {}
+        rtype = str(room0.get("room_type") or room0.get("type") or "room").replace("_", " ").title()
+        brief_detail = f"{rtype} — {envelope}"
+    steps.append(("Brief captured", brief_detail, "input"))
 
     style = (graph.get("style") or {}).get("primary") or ""
     pack = themes.get(style)

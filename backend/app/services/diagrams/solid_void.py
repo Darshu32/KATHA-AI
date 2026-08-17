@@ -11,11 +11,14 @@ side by side —
 
 A clean solid/void ratio + a 1 m scale bar sit beneath. The layout keeps to
 the left region (x < 650) so the LLM authoring overlay's right rail and top
-summary band compose on top without collision.
+summary band compose on top without collision. Frames the WHOLE plan via the
+shared plan_geom helper, so a multi-room design shows every room (with its
+dividing walls) and every object at its true position.
 """
 
 from __future__ import annotations
 
+from app.services.diagrams.plan_geom import plan_bounds
 from app.services.diagrams.svg_base import (
     INK,
     INK_MUTED,
@@ -34,32 +37,10 @@ WHITE = "#ffffff"
 WALL_M = 0.12  # synthesised enclosure thickness (m) drawn as poché
 
 
-def _m(value) -> float:
-    try:
-        v = float(value)
-    except (TypeError, ValueError):
-        return 0.0
-    return v / 1000.0 if v > 20 else v
-
-
-def _footprints(objects: list[dict]) -> list[tuple[float, float, float, float]]:
-    boxes: list[tuple[float, float, float, float]] = []
-    for obj in objects:
-        d = obj.get("dimensions") or {}
-        pos = obj.get("position") or {}
-        l = _m(d.get("length")) or 0.3
-        w = _m(d.get("width")) or 0.3
-        x = float(pos.get("x", 0)) - l / 2
-        z = float(pos.get("z", 0)) - w / 2
-        if l > 0 and w > 0:
-            boxes.append((x, z, l, w))
-    return boxes
-
-
 def _panel_transform(
     room_l: float, room_w: float, x0: float, y0: float, pw: float, ph: float, margin: float
 ) -> tuple[float, float, float]:
-    """Scale + offset mapping room metres → px, centred inside a sub-panel."""
+    """Scale + offset mapping plan metres → px, centred inside a sub-panel."""
     avail_w = pw - 2 * margin
     avail_h = ph - 2 * margin
     scale = min(avail_w / room_l, avail_h / room_w)
@@ -72,8 +53,9 @@ def _panel_transform(
 
 def _figure_ground_panel(
     boxes: list[tuple[float, float, float, float]],
-    room_l: float,
-    room_w: float,
+    rooms: list[tuple[float, float, float, float]],
+    foot_l: float,
+    foot_w: float,
     x0: float,
     y0: float,
     pw: float,
@@ -83,9 +65,9 @@ def _figure_ground_panel(
     label: str,
 ) -> tuple[str, float]:
     """Draw one figure-ground panel. Returns (svg, scale)."""
-    scale, tx, ty = _panel_transform(room_l, room_w, x0, y0, pw, ph, margin=30)
-    plan_w = room_l * scale
-    plan_h = room_w * scale
+    scale, tx, ty = _panel_transform(foot_l, foot_w, x0, y0, pw, ph, margin=30)
+    plan_w = foot_l * scale
+    plan_h = foot_w * scale
     wt = max(WALL_M * scale, 3.0)  # poché thickness in px, floored so it reads
 
     # Figure-ground fills. Normal: mass=ink, open=paper. Inverted: open=ink.
@@ -102,6 +84,15 @@ def _figure_ground_panel(
     parts.append(
         rect(tx + wt, ty + wt, plan_w - 2 * wt, plan_h - 2 * wt, fill=floor_fill, stroke="none")
     )
+    # Room-dividing walls — each room outlined in the wall tone so the
+    # multi-room plan reads as its rooms (not one open shell).
+    for rx, rz, rl, rw in rooms:
+        if rl <= 0 or rw <= 0:
+            continue
+        parts.append(rect(
+            tx + rx * scale, ty + rz * scale, rl * scale, rw * scale,
+            fill="none", stroke=wall_fill, stroke_width=max(wt * 0.5, 1.2),
+        ))
     # Object footprints — thin contrasting outline keeps neighbours legible.
     for x, z, l, w in boxes:
         sx = tx + max(0.0, x) * scale
@@ -115,17 +106,25 @@ def _figure_ground_panel(
 
 
 def generate(graph: dict, *, canvas_w: int = 900, canvas_h: int = 620) -> dict:
-    room = graph.get("room") or (graph.get("spaces") or [{}])[0]
-    dims = room.get("dimensions") or {}
-    room_l = float(dims.get("length") or 6.0)
-    room_w = float(dims.get("width") or 5.0)
-    boxes = _footprints(graph.get("objects", []))
+    pb = plan_bounds(graph)
+    foot_l, foot_w = pb["l"], pb["w"]
+    min_x, min_z = pb["min_x"], pb["min_z"]
+    # Object + room footprints shifted into panel space (min corner → 0).
+    boxes = [
+        (o["x"] - min_x, o["z"] - min_z, o["l"], o["w"])
+        for o in pb["objects"]
+        if o["l"] > 0 and o["w"] > 0
+    ]
+    rooms = [
+        (s["x"] - min_x, s["z"] - min_z, s["l"], s["w"])
+        for s in pb["spaces"]
+    ]
 
     body: list[str] = [background(canvas_w, canvas_h, fill=PAPER)]
     body.append(
         title_block(
             40, 36, "Solid vs Void",
-            f"Figure-ground — {room_l:.1f} x {room_w:.1f} m   ·   mass vs open space",
+            f"Figure-ground — {foot_l:.1f} x {foot_w:.1f} m   ·   mass vs open space",
             width=canvas_w - 80,
         )
     )
@@ -137,16 +136,16 @@ def generate(graph: dict, *, canvas_w: int = 900, canvas_h: int = 620) -> dict:
     total_w = 610  # 40 .. 650
     panel_w = (total_w - gap) / 2
     solid_svg, scale = _figure_ground_panel(
-        boxes, room_l, room_w, 40, panel_y, panel_w, panel_h, invert=False, label="SOLID · mass"
+        boxes, rooms, foot_l, foot_w, 40, panel_y, panel_w, panel_h, invert=False, label="SOLID · mass"
     )
     void_svg, _ = _figure_ground_panel(
-        boxes, room_l, room_w, 40 + panel_w + gap, panel_y, panel_w, panel_h, invert=True, label="VOID · open"
+        boxes, rooms, foot_l, foot_w, 40 + panel_w + gap, panel_y, panel_w, panel_h, invert=True, label="VOID · open"
     )
     body.append(solid_svg)
     body.append(void_svg)
 
     # ── Ratios ──────────────────────────────────────────────────────────────
-    room_area = room_l * room_w
+    room_area = foot_l * foot_w
     total_solid_m2 = sum(l * w for _, _, l, w in boxes)
     solid_pct = 100 * total_solid_m2 / room_area if room_area else 0.0
     void_pct = max(0.0, 100.0 - solid_pct)
@@ -204,7 +203,7 @@ def generate(graph: dict, *, canvas_w: int = 900, canvas_h: int = 620) -> dict:
             "solid_pct": round(solid_pct, 1),
             "void_pct": round(void_pct, 1),
             "solid_m2": round(total_solid_m2, 2),
-            "room_m2": round(room_area, 2),
+            "plan_m2": round(room_area, 2),
             "breathing_m": round(breathing, 2),
         },
     }

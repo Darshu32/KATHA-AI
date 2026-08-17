@@ -30,8 +30,14 @@ FUNCTIONAL_BUCKETS: dict[str, list[str]] = {
     "primary use": ["sofa", "bed", "dining_table", "desk", "conference_table", "island", "kitchen_island"],
     "secondary use": ["chair", "dining_chair", "lounge_chair", "office_chair", "coffee_table", "side_table", "console_table"],
     "storage": ["bookshelf", "wardrobe", "cabinet", "tv_unit", "media_console", "cabinetry"],
+    "fixtures": ["wc", "toilet", "basin", "sink", "washbasin", "shower", "bathtub", "bidet", "urinal"],
     "accent": ["rug", "plant", "wall_art", "floor_lamp", "lamp", "sculpture", "pendant"],
 }
+
+# Architectural openings + shell — counted in the drawings, but not a furniture
+# "role", so they're excluded from the functional breakdown (otherwise doors +
+# windows swamp it as a phantom "accent" majority).
+_EXCLUDED_TYPES = {"window", "door", "wall", "opening", "skylight", "column", "beam"}
 
 ROW_W = 610  # left region, clears the overlay rail
 
@@ -49,12 +55,14 @@ def _vol(obj: dict) -> float:
     return _m(d.get("length")) * _m(d.get("width")) * max(_m(d.get("height")), 0.05)
 
 
-def _functional_bucket(obj_type: str) -> str:
+def _functional_bucket(obj_type: str) -> str | None:
     t = (obj_type or "").lower()
+    if t in _EXCLUDED_TYPES:
+        return None  # architectural opening / shell — not a furniture role
     for bucket, types in FUNCTIONAL_BUCKETS.items():
         if t in types:
             return bucket
-    return "accent"
+    return "other"
 
 
 def generate(graph: dict, *, canvas_w: int = 900, canvas_h: int = 560) -> dict:
@@ -72,7 +80,8 @@ def generate(graph: dict, *, canvas_w: int = 900, canvas_h: int = 560) -> dict:
 
 
 def _visual_row(graph: dict, x: float, y: float, w: float, h: float) -> str:
-    objs = sorted(graph.get("objects", []), key=_vol, reverse=True)[:6]
+    furniture = [o for o in graph.get("objects", []) if (o.get("type") or "").lower() not in _EXCLUDED_TYPES]
+    objs = sorted(furniture, key=_vol, reverse=True)[:6]
     parts = [text(x, y - 4, "VISUAL HIERARCHY", size=9, weight="600", fill=INK_SOFT)]
     if not objs:
         parts.append(text(x, y + h / 2, "(no objects)", size=11, fill=INK_MUTED))
@@ -94,11 +103,28 @@ def _visual_row(graph: dict, x: float, y: float, w: float, h: float) -> str:
 
 
 def _material_shares(graph: dict) -> list[tuple[str, float]]:
+    # Resolve each object's material to a declared-palette display name; objects
+    # with no explicit material inherit the design's PRIMARY material (the first
+    # declared / theme primary) rather than piling into a phantom "Unassigned".
+    mats = graph.get("materials") or []
+    lut: dict[str, str] = {}
+    for m in mats:
+        name = m.get("name") or ""
+        if m.get("id"):
+            lut[str(m["id"]).lower()] = name or str(m["id"])
+        if name:
+            lut[name.lower()] = name
+    primary = (mats[0].get("name") if mats else None) or "Unassigned"
+
     shares: dict[str, float] = {}
     for obj in graph.get("objects", []):
-        mat = (obj.get("material") or "unassigned").split("_")[0].title() or "Unassigned"
+        ref = obj.get("material")
+        if ref:
+            name = lut.get(str(ref).lower()) or str(ref).replace("_", " ").title()
+        else:
+            name = primary
         d = obj.get("dimensions") or {}
-        shares[mat] = shares.get(mat, 0.0) + (_m(d.get("length")) * _m(d.get("width")) or 0.3)
+        shares[name] = shares.get(name, 0.0) + (_m(d.get("length")) * _m(d.get("width")) or 0.3)
     return sorted(shares.items(), key=lambda s: -s[1])
 
 
@@ -106,8 +132,10 @@ def _functional_shares(graph: dict) -> list[tuple[str, float]]:
     counts: dict[str, float] = {}
     for obj in graph.get("objects", []):
         b = _functional_bucket(obj.get("type"))
+        if b is None:
+            continue  # architectural opening / shell
         counts[b] = counts.get(b, 0) + 1
-    order = ["primary use", "secondary use", "storage", "accent"]
+    order = ["primary use", "secondary use", "storage", "fixtures", "accent", "other"]
     return [(b, counts.get(b, 0)) for b in order if counts.get(b, 0) > 0]
 
 

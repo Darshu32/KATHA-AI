@@ -32,8 +32,8 @@ from app.services.architectural_views_service import (
     generate_section_package,
     _objects,
     _obj_box,
-    _room,
 )
+from app.services.diagrams.plan_geom import plan_envelope
 
 # Views that depict individual design objects (the detail sheet draws generic
 # construction junctions, not the user's objects, so it is coverage-exempt).
@@ -99,7 +99,15 @@ def verify_view(view_type: str, graph: dict) -> dict:
     missing = sorted(expected - placed_ids)   # in design but not drawn
     extra = sorted(placed_ids - expected)     # drawn but not in design
 
-    dim_checks = _dimension_checks(view_type, package.get("summary") or {}, _room(graph))
+    # Reference the whole building envelope (all rooms) — the views draw the
+    # full floor plan, so a multi-room design's width is the plan depth, not
+    # room 1's. Uses the spaces-only envelope (what the drawings frame), so
+    # furniture that pokes a few cm past a wall doesn't skew the check. (Using
+    # the primary room here is what wrongly flagged the correct isometric.)
+    env = plan_envelope(graph)
+    dim_checks = _dimension_checks(
+        view_type, package.get("summary") or {}, (env["l"], env["w"], env["h"])
+    )
 
     return {
         "view": view_type,

@@ -10,6 +10,7 @@ so the LLM authoring overlay composes on top.
 from __future__ import annotations
 
 from app.knowledge import themes
+from app.services.diagrams.plan_geom import plan_bounds
 from app.services.diagrams.svg_base import (
     INK,
     INK_MUTED,
@@ -59,10 +60,10 @@ def _zone_colour(zone: str) -> str:
 
 
 def generate(graph: dict, *, canvas_w: int = 900, canvas_h: int = 600) -> dict:
-    room = graph.get("room") or (graph.get("spaces") or [{}])[0]
-    dims = room.get("dimensions") or {}
-    room_l = float(dims.get("length") or 6.0)
-    room_w = float(dims.get("width") or 5.0)
+    # Frame the whole plan (shared source of truth), not just room 1.
+    pb = plan_bounds(graph)
+    room_l, room_w = pb["l"], pb["w"]
+    min_x, min_z = pb["min_x"], pb["min_z"]
 
     theme_name = (graph.get("style") or {}).get("primary", "")
     pack = themes.get(theme_name) or {}
@@ -85,14 +86,17 @@ def generate(graph: dict, *, canvas_w: int = 900, canvas_h: int = 600) -> dict:
     # Bucket objects by zone, keep footprint px rects.
     zone_boxes: dict[str, list[tuple[float, float, float, float]]] = {}
     for obj in graph.get("objects", []):
-        zone = _zone_for(obj.get("type"))
+        otype = (obj.get("type") or "").lower()
+        if otype in {"window", "door", "wall"}:
+            continue  # parti reads functional furniture zones, not openings/shell
+        zone = _zone_for(otype)
         d = obj.get("dimensions") or {}
         pos = obj.get("position") or {}
         ow = min((_m(d.get("length")) or 0.4) * scale, plan_w)
         oh = min((_m(d.get("width")) or 0.3) * scale, plan_h)
-        # Clamp footprints into the room frame so nothing spills off-canvas.
-        bx = min(max(float(pos.get("x", 0)) * scale + tx - ow / 2, tx), tx + plan_w - ow)
-        bz = min(max(float(pos.get("z", 0)) * scale + ty - oh / 2, ty), ty + plan_h - oh)
+        # Shift world → plan frame (min corner → 0), clamp as a safety net.
+        bx = min(max((float(pos.get("x", 0)) - min_x) * scale + tx - ow / 2, tx), tx + plan_w - ow)
+        bz = min(max((float(pos.get("z", 0)) - min_z) * scale + ty - oh / 2, ty), ty + plan_h - oh)
         zone_boxes.setdefault(zone, []).append((bx, bz, ow, oh))
 
     # Zone regions first (behind), then member footprints on top.

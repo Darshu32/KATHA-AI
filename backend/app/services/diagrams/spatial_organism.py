@@ -10,6 +10,7 @@ the LLM authoring overlay composes on top.
 from __future__ import annotations
 
 from app.knowledge import clearances
+from app.services.diagrams.plan_geom import plan_bounds
 from app.services.diagrams.svg_base import (
     ACCENT_COOL,
     ACCENT_WARM,
@@ -59,16 +60,16 @@ def _human(cx: float, cy: float, r: float = 6, colour: str = INK) -> str:
 
 
 def generate(graph: dict, *, canvas_w: int = 900, canvas_h: int = 620) -> dict:
-    room = graph.get("room") or (graph.get("spaces") or [{}])[0]
-    dims = room.get("dimensions") or {}
-    room_l = float(dims.get("length") or 6.0)
-    room_w = float(dims.get("width") or 5.0)
+    # Frame the whole plan (shared source of truth), not just room 1.
+    pb = plan_bounds(graph)
+    foot_l, foot_w = pb["l"], pb["w"]
+    min_x, min_z = pb["min_x"], pb["min_z"]
 
     # Plan in the left region.
     x0, y0, pw, ph = 40, 124, 610, 400
     margin = 44
-    scale = min((pw - 2 * margin) / room_l, (ph - 2 * margin) / room_w)
-    rw, rh = room_l * scale, room_w * scale
+    scale = min((pw - 2 * margin) / foot_l, (ph - 2 * margin) / foot_w)
+    rw, rh = foot_l * scale, foot_w * scale
     rx = x0 + (pw - rw) / 2
     ry = y0 + (ph - rh) / 2
 
@@ -84,13 +85,15 @@ def generate(graph: dict, *, canvas_w: int = 900, canvas_h: int = 620) -> dict:
     anchors: list[tuple[float, float, str]] = []
     for obj in graph.get("objects", []):
         otype = (obj.get("type") or "").lower()
+        if otype in {"window", "door", "wall"}:
+            continue  # occupation diagram reads furniture, not openings/shell
         d = obj.get("dimensions") or {}
         pos = obj.get("position") or {}
         ow = min((_m(d.get("length")) or 0.4) * scale, rw)
         oh = min((_m(d.get("width")) or 0.3) * scale, rh)
-        # Clamp footprint into the room, then derive centre from the clamp.
-        fx = min(max(float(pos.get("x", 0)) * scale + rx - ow / 2, rx), rx + rw - ow)
-        fz = min(max(float(pos.get("z", 0)) * scale + ry - oh / 2, ry), ry + rh - oh)
+        # Shift world → plan-frame (min corner → 0), then clamp as a safety net.
+        fx = min(max((float(pos.get("x", 0)) - min_x) * scale + rx - ow / 2, rx), rx + rw - ow)
+        fz = min(max((float(pos.get("z", 0)) - min_z) * scale + ry - oh / 2, ry), ry + rh - oh)
         cx, cz = fx + ow / 2, fz + oh / 2
 
         halo_m = _CLEARANCE_FOR_TYPE.get(otype)

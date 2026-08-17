@@ -506,13 +506,23 @@ def generate_isometric_package(graph: dict) -> dict:
     # designed is dropped; assign each to the room holding its centre.
     depictable = depictable_objects(graph)
     by_room, orphans = assign_objects(graph, objects=depictable, rooms=rooms)
-    if orphans:
+    # With rooms present, an orphan means a piece's centre missed every room —
+    # worth flagging. With no rooms (exterior massing / product) every object is
+    # expectedly an orphan and framed against the object bbox, so stay quiet.
+    if orphans and room_specs:
         logger.warning(
             "isometric_orphan_objects",
             extra={"count": len(orphans), "ids": [o.get("id") for o in orphans][:8]},
         )
 
-    bb = bbox_of_rects([r for _, _, r in room_specs]) or Rect(0.0, 6.0, 0.0, 4.5, 0.0, 2.9)
+    # With rooms, frame their union; with none (exterior massing / product,
+    # where every object is an orphan), frame the objects themselves so they
+    # can't spill against a default box.
+    bb = (
+        bbox_of_rects([r for _, _, r in room_specs])
+        or bbox_of_rects([object_rect(o) for o in depictable])
+        or Rect(0.0, 6.0, 0.0, 4.5, 0.0, 2.9)
+    )
 
     # Iso projection (metres → screen units, before pixel scale).
     def iso(x: float, y: float, z: float) -> tuple[float, float]:
@@ -521,9 +531,12 @@ def generate_isometric_package(graph: dict) -> dict:
     # Scale to fit every room. Both in-room objects and orphans are clamped to an
     # envelope (their room, or the building bbox) at draw time, so everything
     # drawn lands inside the rooms' union and no extra allowance is needed here.
+    # Fit every room; with no rooms, fit the object bbox instead of an empty
+    # set (which would collapse the scale and throw the massing off-canvas).
+    frame_rects = [r for _, _, r in room_specs] or [bb]
     corners = [
         iso(X, Y, Z)
-        for r in [r for _, _, r in room_specs]
+        for r in frame_rects
         for X in (r.x0, r.x1) for Y in (r.y0, r.y1) for Z in (r.z0, r.z1)
     ]
     xs = [c[0] for c in corners] or [0.0]
@@ -611,8 +624,12 @@ def _iso_draw_object(seg: list[str], sp, o: dict, room: Rect | None = None) -> N
     for face, shade in ((front, 0.85), (left, 0.7), (top, 1.0)):
         pts = " ".join(f"{p[0]:.1f},{p[1]:.1f}" for p in face)
         seg.append(f'<polygon points="{pts}" fill="{fill}" fill-opacity="{shade*0.7:.2f}" stroke="{_POCHE}" stroke-width="1.3"/>')
-    lbl = sp((x0 + x1) / 2, h, (z0 + z1) / 2)
-    seg.append(f'<text x="{lbl[0]:.1f}" y="{lbl[1]-4:.1f}" text-anchor="middle" fill="#2c221a" font-size="9">{_label(str(o.get("name") or o.get("type") or "item"))[:14]}</text>')
+    # Label furniture only. Windows + doors are read by their glazed/timber
+    # colour and on-wall shape — labelling all 14 of them just crams the view.
+    # Skip tiny pieces too, so the labels that remain stay legible.
+    if role not in ("window", "door") and (x1 - x0) >= 0.45 and (z1 - z0) >= 0.45:
+        lbl = sp((x0 + x1) / 2, h, (z0 + z1) / 2)
+        seg.append(f'<text x="{lbl[0]:.1f}" y="{lbl[1]-4:.1f}" text-anchor="middle" fill="#2c221a" font-size="9">{_label(str(o.get("name") or o.get("type") or "item"))[:14]}</text>')
 
 
 # ── Detail sheet ─────────────────────────────────────────────────────────────
