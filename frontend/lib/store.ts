@@ -458,7 +458,9 @@ export const useImageGenStore = create<ImageGenState>()(
       ratio: "16:9",
       quality: "standard",
       styleEnhance: true,
-      camera: "front",
+      // "auto" ⇒ the render picks the best framing per design type (dollhouse /
+      // interior / orbit). Front/Eye-level/Interior/Aerial explicitly override it.
+      camera: "auto",
       lighting: "daylight",
       generations: [],
       isGenerating: false,

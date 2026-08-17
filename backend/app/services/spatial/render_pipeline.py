@@ -77,10 +77,13 @@ def _hero_interior_camera(solids, bbox):
     return cam, cull
 
 
-def _build_and_raster(graph: dict, width: int, height: int, ss: int = 2, hero: bool = False):
+def _build_and_raster(graph: dict, width: int, height: int, ss: int = 2,
+                      hero: bool = False, camera: str | None = None):
     """CPU-bound: kernel + camera + rasterise. Runs in a worker thread. ``ss`` is
     the anti-aliasing oversample factor. ``hero=True`` selects eye-level cameras
-    (for presentation renders) instead of the technical dollhouse/aerial views."""
+    (for presentation renders) instead of the technical dollhouse/aerial views.
+    ``camera`` is the user's Camera selector (front/eye-level/interior/aerial);
+    "auto"/unset keeps the smart per-design-type framing."""
     solids, bbox, kind = build_scene(graph)
     floor_count = sum(1 for s in solids if s.type == "floor")
     # Meaningful to show if there's furniture OR it's a multi-room plan (the
@@ -88,35 +91,52 @@ def _build_and_raster(graph: dict, width: int, height: int, ss: int = 2, hero: b
     if not any(s.type not in _STRUCTURAL for s in solids) and floor_count < 2:
         return None
 
-    if hero and kind == "interior":
-        # Presentation: eye-level interior instead of the top-down dollhouse.
-        cam, cull_ids = _hero_interior_camera(solids, bbox)
-        render_solids = [s for s in solids if s.id not in cull_ids]
-    elif hero:
-        # Presentation exterior: a LOW, eye-level three-quarter view in the
-        # landscape (the reference look), not the aerial technical framing.
-        non_ground = [s for s in solids if s.type != "ground" and s.verts is not None and len(s.verts)]
-        lo = np.min([s.verts.min(0) for s in non_ground], 0)
-        hi = np.max([s.verts.max(0) for s in non_ground], 0)
-        cam = orbit_camera((lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]),
-                           azimuth_deg=35.0, elev_deg=12.0, dist_factor=2.5, fov=48.0)
-        render_solids = solids
-    elif kind == "interior" and floor_count >= 2:
-        # Multi-room: frame the WHOLE plan as an elevated dollhouse looking down
-        # into the open-top rooms. The single-room ``interior_camera`` frames
-        # only ``spaces[0]``, which crops a multi-room apartment badly.
-        cam = orbit_camera(bbox, azimuth_deg=32.0, elev_deg=54.0, dist_factor=2.0, fov=40.0)
-        render_solids = solids
-    elif kind == "interior":
+    # ── Camera selector override — wins over the auto framing. "auto"/unset
+    #    leaves cam None, so the smart per-design-type default below applies. ──
+    cam = None
+    render_solids = solids
+    cam_sel = (camera or "").strip().lower().replace("_", "-")
+    if cam_sel == "aerial":
+        cam = orbit_camera(bbox, azimuth_deg=32.0, elev_deg=64.0, dist_factor=2.1, fov=42.0)
+    elif cam_sel == "front":
+        cam = orbit_camera(bbox, azimuth_deg=12.0, elev_deg=9.0, dist_factor=2.6, fov=46.0)
+    elif cam_sel == "eye-level":
+        hero = True  # eye-level → the hero cameras in the chain below
+    elif cam_sel == "interior" and kind == "interior":
         rl, rw, rh = _room_dims(graph)
         cam, cull = interior_camera(rl, rw, rh)
         render_solids = [s for s in solids if s.side not in cull]
-    else:
-        non_ground = [s for s in solids if s.type != "ground" and s.verts is not None and len(s.verts)]
-        lo = np.min([s.verts.min(0) for s in non_ground], 0)
-        hi = np.max([s.verts.max(0) for s in non_ground], 0)
-        cam = orbit_camera((lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]))
-        render_solids = solids
+
+    if cam is None:
+        if hero and kind == "interior":
+            # Presentation: eye-level interior instead of the top-down dollhouse.
+            cam, cull_ids = _hero_interior_camera(solids, bbox)
+            render_solids = [s for s in solids if s.id not in cull_ids]
+        elif hero:
+            # Presentation exterior: a LOW, eye-level three-quarter view in the
+            # landscape (the reference look), not the aerial technical framing.
+            non_ground = [s for s in solids if s.type != "ground" and s.verts is not None and len(s.verts)]
+            lo = np.min([s.verts.min(0) for s in non_ground], 0)
+            hi = np.max([s.verts.max(0) for s in non_ground], 0)
+            cam = orbit_camera((lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]),
+                               azimuth_deg=35.0, elev_deg=12.0, dist_factor=2.5, fov=48.0)
+            render_solids = solids
+        elif kind == "interior" and floor_count >= 2:
+            # Multi-room: frame the WHOLE plan as an elevated dollhouse looking
+            # down into the open-top rooms. The single-room ``interior_camera``
+            # frames only ``spaces[0]``, which crops a multi-room apartment badly.
+            cam = orbit_camera(bbox, azimuth_deg=32.0, elev_deg=54.0, dist_factor=2.0, fov=40.0)
+            render_solids = solids
+        elif kind == "interior":
+            rl, rw, rh = _room_dims(graph)
+            cam, cull = interior_camera(rl, rw, rh)
+            render_solids = [s for s in solids if s.side not in cull]
+        else:
+            non_ground = [s for s in solids if s.type != "ground" and s.verts is not None and len(s.verts)]
+            lo = np.min([s.verts.min(0) for s in non_ground], 0)
+            hi = np.max([s.verts.max(0) for s in non_ground], 0)
+            cam = orbit_camera((lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]))
+            render_solids = solids
 
     rgb, depth, nrm, idbuf, hotspots = render(render_solids, cam, W=width, H=height, ss=ss)
     coverage = float(np.count_nonzero(idbuf >= 0)) / idbuf.size
@@ -131,7 +151,8 @@ def _build_and_raster(graph: dict, width: int, height: int, ss: int = 2, hero: b
 
 async def render_design(graph: dict, *, width: int = 1200, height: int = 800,
                         finish: bool = True, presentation: bool = False,
-                        mood: dict | None = None) -> RenderResult | None:
+                        mood: dict | None = None,
+                        camera: str | None = None) -> RenderResult | None:
     """Spec → RenderResult, or None to signal the caller to use the legacy path.
 
     ``presentation=True`` produces the hero/"storefront" image — an atmospheric,
@@ -143,7 +164,7 @@ async def render_design(graph: dict, *, width: int = 1200, height: int = 800,
     ss = max(1, int(getattr(settings, "spatial_render_supersample", 2) or 1))
     faithful_only = bool(getattr(settings, "spatial_render_faithful_only", True))
     try:
-        built = await asyncio.to_thread(_build_and_raster, graph, width, height, ss, presentation)
+        built = await asyncio.to_thread(_build_and_raster, graph, width, height, ss, presentation, camera)
     except Exception as exc:  # noqa: BLE001 — geometry must never break generation
         logger.warning("spatial kernel/raster failed: %s", exc)
         return None

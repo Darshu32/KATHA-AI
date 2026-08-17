@@ -92,6 +92,21 @@ async def _persist_render(
     return final_url, image_bytes, hotspots
 
 
+_RATIO_DIMS: dict[str, tuple[int, int]] = {
+    "16:9": (1280, 720),
+    "4:3": (1200, 900),
+    "1:1": (1000, 1000),
+    "3:4": (900, 1200),
+    "9:16": (720, 1280),
+}
+
+
+def _dims_for_ratio(ratio: str | None) -> tuple[int, int]:
+    """Render canvas size for the workspace Aspect Ratio selector; defaults to
+    3:2 (the prior fixed size) when unset/unknown."""
+    return _RATIO_DIMS.get((ratio or "").strip(), (1200, 800))
+
+
 async def _attach_render(
     db: AsyncSession,
     *,
@@ -144,8 +159,10 @@ async def _attach_render(
     # kernel/finish failure) falls through to the legacy flat-plan path below.
     if graph_data is not None:
         spatial = None
+        # Honour the workspace Aspect Ratio + Camera selectors on the render.
+        w, h = _dims_for_ratio(ratio)
         try:
-            spatial = await render_design(graph_data)
+            spatial = await render_design(graph_data, width=w, height=h, camera=camera)
         except Exception as exc:  # noqa: BLE001 — never break generation
             logger.warning("Spatial render failed for version %s: %s",
                            graph_version_id, exc)
@@ -751,6 +768,7 @@ async def run_initial_generation(
     ratio: str | None = None,
     quality: str | None = None,
     drawing_type: str | None = None,
+    scope: str | None = None,
     project_type: str | None = None,
     region: str = "india",
     site: dict | None = None,
@@ -777,6 +795,7 @@ async def run_initial_generation(
         ratio=ratio,
         quality=quality,
         drawing_type=drawing_type,
+        scope=scope,
     )
     graph_data = design_graph.model_dump()
 

@@ -789,6 +789,10 @@ export const design = {
       ratio?: string;
       quality?: string;
       drawing_type?: string;
+      // Workspace SCOPE selector (architecture | interior | furniture | product)
+      // — steers the design type so "Architecture" yields exterior massing and
+      // "Furniture/Product" a single piece, instead of inferring only from prompt.
+      scope?: string;
       // Site + climate brief. When present on an exterior/architecture design,
       // the backend reasons from constraints (design_reasoning) — e.g. adds a
       // brise-soleil on a sun-exposed facade — and returns design_rationale.

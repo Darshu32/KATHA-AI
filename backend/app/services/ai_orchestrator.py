@@ -286,6 +286,32 @@ DESIGN_GRAPH_JSON_SCHEMA = {
 }
 
 
+def _scope_directive(scope: str | None) -> str:
+    """Turn the workspace Scope selector into a firm design-type directive so the
+    LLM emits the right shape (massing / product / rooms) — which the graph
+    router keys off. Empty when no scope is given (fall back to prompt inference)."""
+    s = (scope or "").strip().lower()
+    if s in ("architecture", "exterior"):
+        return (
+            "\n\nSCOPE = EXTERIOR ARCHITECTURE. You MUST emit building `massing` "
+            "volumes (the exterior building form as blocks) and MUST NOT emit "
+            "interior rooms. Populate `massing`; leave `rooms` and `product` empty."
+        )
+    if s in ("furniture", "product"):
+        return (
+            "\n\nSCOPE = FURNITURE / PRODUCT. You MUST emit a single `product` as a "
+            "set of `parts` and MUST NOT emit rooms or building massing. Populate "
+            "`product.parts`; leave `rooms` and `massing` empty."
+        )
+    if s == "interior":
+        return (
+            "\n\nSCOPE = INTERIOR. You MUST emit interior `rooms` (one or more spaces "
+            "with furniture) and MUST NOT emit building massing or a product piece. "
+            "Populate `rooms`; leave `massing` and `product` empty."
+        )
+    return ""
+
+
 async def generate_design_graph(
     prompt: str,
     room_type: str = "living_room",
@@ -297,6 +323,7 @@ async def generate_design_graph(
     ratio: str | None = None,
     quality: str | None = None,
     drawing_type: str | None = None,
+    scope: str | None = None,
 ) -> DesignGraph:
     # Derive the room type from the prompt — the design intent lives in
     # what the architect asked for, not a client-supplied default. Falls
@@ -368,13 +395,20 @@ async def generate_design_graph(
     ) if knowledge_brief else ""
 
     room_type_line = f"Room type: {room_type}\n" if room_type else ""
+
+    # SCOPE steer — routing (_ai_response_to_design_graph) keys off whether the
+    # LLM emits `massing`, `product`, or `rooms`, so a firm directive makes the
+    # user's Scope selector decide the design type rather than prompt wording alone.
+    scope_directive = _scope_directive(scope)
+
     user_message = (
         f"Design prompt: {prompt}\n"
         f"{room_type_line}"
         f"Style/theme: {style}"
         f"{theme_block}"
         f"{knowledge_block}"
-        f"{extras_block}\n\n"
+        f"{extras_block}"
+        f"{scope_directive}\n\n"
         "Generate the full structured design graph JSON. "
         "Apply the theme rules to materials, color palette, furniture and "
         "the render_prompt_2d and render_prompt_3d wording. "

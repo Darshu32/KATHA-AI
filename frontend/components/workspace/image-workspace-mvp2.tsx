@@ -73,6 +73,7 @@ const DIMS: { id: Dim; label: string; tagline: string }[] = [
 
 const RATIOS: ImageRatio[] = ["16:9", "4:3", "1:1", "3:4", "9:16"];
 const CAMERAS: { id: CameraMode; label: string }[] = [
+  { id: "auto", label: "Auto" },
   { id: "front", label: "Front" },
   { id: "eye-level", label: "Eye-level" },
   { id: "interior", label: "Interior" },
@@ -654,6 +655,9 @@ export default function ImageWorkspaceMvp2() {
         lighting,
         view_mode: viewMode,
         drawing_type: "3d-render",
+        // SCOPE selector → design type: Architecture ⇒ exterior massing,
+        // Furniture/Product ⇒ a single piece, Interior ⇒ rooms.
+        scope,
         // Site + climate brief → the backend reasons from constraints for
         // exterior designs (e.g. adds a brise-soleil on a sun-exposed facade)
         // and returns design_rationale. Built from the left-rail Space & Site

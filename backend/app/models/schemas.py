@@ -221,6 +221,9 @@ class PromptRequest(BaseModel):
     ratio: str | None = None
     quality: str | None = None
     drawing_type: str | None = None
+    # Workspace SCOPE selector: architecture | interior | furniture | product.
+    # Steers the design type (exterior massing vs rooms vs a single piece).
+    scope: str | None = None
 
 
 class LocalEditRequest(BaseModel):

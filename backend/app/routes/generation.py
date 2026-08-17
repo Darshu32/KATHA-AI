@@ -235,6 +235,7 @@ async def generate_design(
         ratio=payload.ratio,
         quality=payload.quality,
         drawing_type=payload.drawing_type,
+        scope=payload.scope,
         project_type=project.project_type,
         region=project.region,
         site=payload.site.model_dump() if payload.site else None,
