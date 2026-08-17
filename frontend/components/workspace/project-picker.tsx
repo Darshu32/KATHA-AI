@@ -69,6 +69,8 @@ export function ProjectPicker({
   // confirmation window prevents accidental loss of a project the
   // architect has spent days on. Reset on close + on commit.
   const [confirmArchiveId, setConfirmArchiveId] = useState<string | null>(null);
+  // Free-text filter over project names — a switcher this long needs search.
+  const [query, setQuery] = useState("");
 
   const loadProjects = useCallback(async () => {
     setState("loading");
@@ -103,6 +105,7 @@ export function ProjectPicker({
     setRenamingId(null);
     setRenameValue("");
     setConfirmArchiveId(null);
+    setQuery("");
     setError(null);
     onClose();
   };
@@ -202,6 +205,20 @@ export function ProjectPicker({
     }
   };
 
+  // Filter by name, then group by recency (Today / Previous 7 days / …) —
+  // `projects` is already sorted newest-first, so each bucket stays ordered.
+  const q = query.trim().toLowerCase();
+  const filtered = q
+    ? projects.filter((p) => p.name.toLowerCase().includes(q))
+    : projects;
+  const buckets: Record<string, ProjectOut[]> = {};
+  for (const p of filtered) {
+    (buckets[recencyBucket(p.updated_at)] ??= []).push(p);
+  }
+  const groups = RECENCY_ORDER.filter((label) => buckets[label]?.length).map(
+    (label) => ({ label, rows: buckets[label] }),
+  );
+
   if (!open) return null;
 
   return (
@@ -258,143 +275,190 @@ export function ProjectPicker({
           </button>
         </div>
 
-        <div className="max-h-[60vh] overflow-y-auto draft-scroll">
+        {/* Search — a switcher with this many projects needs a filter. */}
+        {state === "ready" && projects.length > 6 ? (
+          <div className="px-5 py-2.5 border-b border-hairline">
+            <input
+              type="text"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search projects…"
+              aria-label="Search projects"
+              className="w-full bg-paper-soft border border-hairline rounded-sm px-3 py-1.5 text-[13px] text-ink-deep placeholder:text-ink-mute outline-none focus:border-graphite focus:bg-paper transition-colors"
+            />
+          </div>
+        ) : null}
+
+        <div className="max-h-[54vh] overflow-y-auto draft-scroll">
           {state === "loading" ? (
-            <div className="px-5 py-5 font-mono text-[12px] text-ink-mute">
+            <div className="px-5 py-6 font-mono text-[12px] text-ink-mute">
               Loading projects…
             </div>
           ) : state === "error" ? (
-            <div className="px-5 py-5 text-[12px] font-mono text-brick">
+            <div className="px-5 py-6 text-[12px] font-mono text-brick">
               {error}
             </div>
           ) : projects.length === 0 ? (
-            <div className="px-5 py-5 text-[13px] text-ink-soft">
+            <div className="px-5 py-6 text-[13px] text-ink-soft">
               No projects yet. Click <span className="font-medium">New project</span> above to start one.
             </div>
+          ) : groups.length === 0 ? (
+            <div className="px-5 py-6 text-[13px] text-ink-soft">
+              No projects match “<span className="font-medium">{query.trim()}</span>”.
+            </div>
           ) : (
-            <ul className="divide-y divide-hairline">
-              {projects.map((p) => {
-                const active = p.id === activeProjectId;
-                const renaming = renamingId === p.id;
-                return (
-                  <li
-                    key={p.id}
-                    className={`px-5 py-3 flex items-baseline gap-3 group ${
-                      active ? "bg-pencil-bg/40" : "hover:bg-paper-soft"
-                    }`}
-                  >
-                    {renaming ? (
-                      <input
-                        autoFocus
-                        type="text"
-                        value={renameValue}
-                        onChange={(e) => setRenameValue(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") void submitRename(p);
-                          if (e.key === "Escape") setRenamingId(null);
-                        }}
-                        onBlur={() => void submitRename(p)}
-                        className="flex-1 outline-none bg-paper border border-graphite rounded-sm px-2 py-1 text-[13px] text-ink-deep"
-                      />
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => void openProject(p)}
-                        disabled={!!openingId}
-                        className="flex-1 text-left flex items-baseline gap-2 min-w-0 disabled:opacity-50 disabled:cursor-wait"
+            groups.map((group) => (
+              <section key={group.label}>
+                {/* Recency header — Today / Previous 7 days / … — sticky so the
+                    architect keeps their place while scrolling a long history. */}
+                <div className="sticky top-0 z-10 bg-paper/95 backdrop-blur-sm px-5 py-1.5 border-b border-hairline flex items-baseline gap-2">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.14em] text-ink-mute">
+                    {group.label}
+                  </span>
+                  <span className="font-mono text-[10px] text-ink-mute/60 tnum">
+                    {group.rows.length}
+                  </span>
+                </div>
+                <ul className="divide-y divide-hairline">
+                  {group.rows.map((p) => {
+                    const active = p.id === activeProjectId;
+                    const renaming = renamingId === p.id;
+                    const typeLabel = titleCase(
+                      p.project_sub_type || p.project_scale || p.project_type || "",
+                    );
+                    return (
+                      <li
+                        key={p.id}
+                        className={`px-5 py-2.5 flex items-center gap-3 group ${
+                          active ? "bg-pencil-bg/40" : "hover:bg-paper-soft"
+                        }`}
                       >
-                        {active ? (
-                          <span className="text-pencil text-[10px]" aria-hidden>
-                            ●
-                          </span>
-                        ) : null}
-                        <span className="text-[13px] text-ink-deep font-medium truncate">
-                          {p.name}
+                        {renaming ? (
+                          <input
+                            autoFocus
+                            type="text"
+                            value={renameValue}
+                            onChange={(e) => setRenameValue(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === "Enter") void submitRename(p);
+                              if (e.key === "Escape") setRenamingId(null);
+                            }}
+                            onBlur={() => void submitRename(p)}
+                            className="flex-1 outline-none bg-paper border border-graphite rounded-sm px-2 py-1 text-[13px] text-ink-deep"
+                          />
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => void openProject(p)}
+                            disabled={!!openingId}
+                            className="flex-1 text-left flex items-center gap-2 min-w-0 disabled:opacity-50 disabled:cursor-wait"
+                          >
+                            {active ? (
+                              <span className="text-pencil text-[9px] shrink-0" aria-hidden>
+                                ●
+                              </span>
+                            ) : null}
+                            <span className="text-[13px] text-ink-deep font-medium truncate">
+                              {p.name}
+                            </span>
+                            {/* Quiet category chip — title-cased, most-specific
+                                available (sub-type › scale › type). Soft so it
+                                informs without shouting on every row. */}
+                            {typeLabel ? (
+                              <span className="text-[10px] text-ink-mute border border-hairline px-1.5 py-[1px] rounded-sm shrink-0 leading-normal">
+                                {typeLabel}
+                              </span>
+                            ) : null}
+                            {openingId === p.id ? (
+                              <span className="ml-1 font-mono text-[10px] text-ink-mute shrink-0">
+                                opening…
+                              </span>
+                            ) : null}
+                          </button>
+                        )}
+                        <span
+                          className="font-mono text-[10.5px] text-ink-mute tnum shrink-0 w-[62px] text-right"
+                          title={fullDate(p.updated_at)}
+                        >
+                          {formatWhen(p.updated_at)}
                         </span>
-                        {/* Project-type badge — gives the architect
-                            at-a-glance category context (Residential
-                            / Commercial / etc) without opening the
-                            project. */}
-                        {p.project_type ? (
-                          <span className="font-mono text-[9.5px] uppercase tracking-tagged text-ink-mute border border-hairline px-1.5 py-0.5 rounded shrink-0">
-                            {p.project_type}
-                          </span>
-                        ) : null}
-                        {openingId === p.id ? (
-                          <span className="ml-1 font-mono text-[10px] text-ink-mute shrink-0">
-                            opening…
-                          </span>
-                        ) : null}
-                      </button>
-                    )}
-                    <span className="font-mono text-[10px] uppercase tracking-[0.1em] text-ink-mute tnum shrink-0">
-                      {formatRelative(p.updated_at)}
-                    </span>
-                    <div
-                      className={`flex items-center gap-2 shrink-0 transition-opacity ${
-                        confirmArchiveId === p.id
-                          ? "opacity-100"
-                          : "opacity-0 group-hover:opacity-100"
-                      }`}
-                    >
-                      {confirmArchiveId === p.id ? (
-                        <>
-                          <span className="font-mono text-[10px] uppercase tracking-tagged text-brick">
-                            Archive?
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => requestArchive(p)}
-                            className="text-[11px] font-mono text-brick hover:underline"
-                            aria-label={`Confirm archive ${p.name}`}
-                          >
-                            Yes
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setConfirmArchiveId(null)}
-                            className="text-[11px] font-mono text-ink-mute hover:text-ink"
-                            aria-label="Cancel archive"
-                          >
-                            Cancel
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          {!renaming ? (
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setRenamingId(p.id);
-                                setRenameValue(p.name);
-                              }}
-                              className="text-ink-mute hover:text-ink text-[11px] font-mono"
-                              aria-label={`Rename ${p.name}`}
-                            >
-                              Rename
-                            </button>
-                          ) : null}
-                          <button
-                            type="button"
-                            onClick={() => requestArchive(p)}
-                            className="text-ink-mute hover:text-brick text-[11px] font-mono"
-                            aria-label={`Archive ${p.name}`}
-                          >
-                            Archive
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  </li>
-                );
-              })}
-            </ul>
+                        <div
+                          className={`flex items-center gap-2 shrink-0 transition-opacity ${
+                            confirmArchiveId === p.id
+                              ? "opacity-100"
+                              : "opacity-0 group-hover:opacity-100"
+                          }`}
+                        >
+                          {confirmArchiveId === p.id ? (
+                            <>
+                              <span className="font-mono text-[10px] uppercase tracking-tagged text-brick">
+                                Archive?
+                              </span>
+                              <button
+                                type="button"
+                                onClick={() => requestArchive(p)}
+                                className="text-[11px] font-mono text-brick hover:underline"
+                                aria-label={`Confirm archive ${p.name}`}
+                              >
+                                Yes
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setConfirmArchiveId(null)}
+                                className="text-[11px] font-mono text-ink-mute hover:text-ink"
+                                aria-label="Cancel archive"
+                              >
+                                Cancel
+                              </button>
+                            </>
+                          ) : (
+                            <>
+                              {!renaming ? (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setRenamingId(p.id);
+                                    setRenameValue(p.name);
+                                  }}
+                                  className="text-ink-mute hover:text-ink text-[11px] font-mono"
+                                  aria-label={`Rename ${p.name}`}
+                                >
+                                  Rename
+                                </button>
+                              ) : null}
+                              <button
+                                type="button"
+                                onClick={() => requestArchive(p)}
+                                className="text-ink-mute hover:text-brick text-[11px] font-mono"
+                                aria-label={`Archive ${p.name}`}
+                              >
+                                Archive
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            ))
           )}
         </div>
 
-        {state === "ready" && error ? (
-          <div className="px-5 py-2 border-t border-hairline text-[12px] font-mono text-brick">
-            {error}
+        {state === "ready" ? (
+          <div className="px-5 py-2 border-t border-hairline flex items-baseline justify-between gap-3 font-mono text-[10.5px] text-ink-mute">
+            {error ? (
+              <span className="text-brick truncate">{error}</span>
+            ) : (
+              <span className="tnum">
+                {projects.length} project{projects.length === 1 ? "" : "s"}
+                {q && filtered.length !== projects.length
+                  ? ` · ${filtered.length} shown`
+                  : ""}
+              </span>
+            )}
+            <span className="text-ink-mute/60 shrink-0">Hover a row to rename or archive</span>
           </div>
         ) : null}
       </div>
@@ -402,12 +466,26 @@ export function ProjectPicker({
   );
 }
 
-/** Coarse human-friendly relative time. Falls back to date for >1 week. */
-function formatRelative(iso: string): string {
-  const now = Date.now();
+const RECENCY_ORDER = ["Today", "Previous 7 days", "Previous 30 days", "Earlier"];
+
+/** Which recency section a timestamp belongs to (by elapsed time). */
+function recencyBucket(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (!t) return "Earlier";
+  const diff = Date.now() - t;
+  const day = 86_400_000;
+  if (diff < day) return "Today";
+  if (diff < 7 * day) return "Previous 7 days";
+  if (diff < 30 * day) return "Previous 30 days";
+  return "Earlier";
+}
+
+/** Compact, unambiguous "last edited": relative within a week, then a clear
+ *  "7 Aug" / "7 Aug 2026" — never a locale-ambiguous 07/08/2026. */
+function formatWhen(iso: string): string {
   const t = new Date(iso).getTime();
   if (!t) return "—";
-  const diff = Math.max(0, now - t);
+  const diff = Math.max(0, Date.now() - t);
   const minute = 60_000;
   const hour = 60 * minute;
   const day = 24 * hour;
@@ -415,5 +493,31 @@ function formatRelative(iso: string): string {
   if (diff < hour) return `${Math.floor(diff / minute)}m ago`;
   if (diff < day) return `${Math.floor(diff / hour)}h ago`;
   if (diff < 7 * day) return `${Math.floor(diff / day)}d ago`;
-  return new Date(iso).toLocaleDateString();
+  const d = new Date(iso);
+  const opts: Intl.DateTimeFormatOptions =
+    d.getFullYear() === new Date().getFullYear()
+      ? { day: "numeric", month: "short" }
+      : { day: "numeric", month: "short", year: "numeric" };
+  return d.toLocaleDateString("en-GB", opts);
+}
+
+/** Full timestamp for the row's hover tooltip. */
+function fullDate(iso: string): string {
+  const t = new Date(iso).getTime();
+  if (!t) return "";
+  return new Date(iso).toLocaleString("en-GB", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+/** "residential" → "Residential"; "walk_in" → "Walk In". */
+function titleCase(s: string): string {
+  return s
+    .replace(/[_-]+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
 }
