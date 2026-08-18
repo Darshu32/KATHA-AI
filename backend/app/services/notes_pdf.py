@@ -7,6 +7,7 @@ properly paginated PDF with reportlab Platypus — real text flow, no overlap.
 from __future__ import annotations
 
 import base64
+import html
 import io
 import re
 from xml.sax.saxutils import escape as _esc
@@ -62,8 +63,11 @@ def _styles() -> dict:
 
 
 def _inline(text: str) -> str:
-    """Escape XML, then convert markdown inline spans to reportlab mini-HTML."""
-    s = _esc(text)
+    """Decode HTML entities, escape XML, then convert markdown inline spans to
+    reportlab mini-HTML. The unescape fixes titles that arrive pre-escaped —
+    e.g. a YouTube title "Architect&#39;s Guide" would otherwise print the raw
+    &#39; because _esc turns its & into &amp;."""
+    s = _esc(html.unescape(text))
     s = _LINK.sub(r'<a href="\2" color="#1a5fb4"><u>\1</u></a>', s)
     s = _BOLD.sub(r"<b>\1</b>", s)
     s = _CODE.sub(r'<font face="Courier">\1</font>', s)
@@ -87,10 +91,14 @@ def _image_flowable(key: str, images: dict | None, max_w: float):
         iw, ih = ImageReader(io.BytesIO(raw)).getSize()
         if not iw or not ih:
             return None
-        draw_w = min(max_w, iw * 0.5)          # undo the 2x export scale, cap to column
+        # Fill ~82% of the text column so diagrams read at a comfortable size
+        # (the old "undo 2x scale" left compact mermaid trees tiny). Aspect is
+        # preserved; the raster's own resolution — bumped client-side — drives
+        # sharpness, so this is a display-size decision, not a quality one.
+        draw_w = max_w * 0.82
         draw_h = draw_w * ih / iw
-        if draw_h > 460:                        # keep one diagram from filling a page
-            draw_h = 460
+        if draw_h > 520:                        # keep a very tall diagram on one page
+            draw_h = 520
             draw_w = draw_h * iw / ih
         img = RLImage(io.BytesIO(raw), width=draw_w, height=draw_h)
         img.hAlign = "CENTER"

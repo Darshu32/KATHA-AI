@@ -203,7 +203,11 @@ export function notebookToMarkdown(
       : `*No notes yet.*\n`;
   }
   const parts: string[] = [];
-  if (notebookTitle) {
+  // Skip a notebook-title heading that would just duplicate the first section's
+  // own H1 — a single-note export names the notebook after the note, which
+  // otherwise prints the title twice (once here, once from sectionToMarkdown).
+  const firstTitle = sections[0]?.title?.trim().toLowerCase();
+  if (notebookTitle && notebookTitle.trim().toLowerCase() !== firstTitle) {
     parts.push(`# ${notebookTitle}`, "");
   }
   parts.push(sections.map((s) => sectionToMarkdown(s, opts)).join("\n---\n\n"));

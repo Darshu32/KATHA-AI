@@ -135,7 +135,9 @@ export default function NotesSidebar({ isOpen, onClose }: Props) {
         sections
           .filter((s) => s.diagram)
           .map(async (s) => {
-            const png = await mermaidToPng(s.diagram!);
+            // Rasterise at 3x so the diagram stays crisp at the larger size it
+            // now prints at in the PDF.
+            const png = await mermaidToPng(s.diagram!, 3);
             if (png) {
               images[diagramMarkerKey(s.id)] = png;
               diagramImageKeys.add(s.id);
