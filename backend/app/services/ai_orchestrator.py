@@ -287,29 +287,40 @@ DESIGN_GRAPH_JSON_SCHEMA = {
 
 
 def _scope_directive(scope: str | None) -> str:
-    """Turn the workspace Scope selector into a firm design-type directive so the
-    LLM emits the right shape (massing / product / rooms) — which the graph
-    router keys off. Empty when no scope is given (fall back to prompt inference)."""
+    """Turn the workspace Scope selector into a design-type directive so the LLM
+    emits the right shape (massing / product / rooms) — which the graph router
+    keys off.
+
+    The scope STEERS an ambiguous brief but must YIELD to an explicit one: a
+    brief that plainly describes an exterior building must not be forced into an
+    interior just because the Scope chip still reads "Interior" (and vice-versa).
+    So each directive is a default-unless-the-brief-says-otherwise, not an
+    absolute override. Empty when no scope is given (fall back to prompt inference)."""
     s = (scope or "").strip().lower()
     if s in ("architecture", "exterior"):
-        return (
-            "\n\nSCOPE = EXTERIOR ARCHITECTURE. You MUST emit building `massing` "
-            "volumes (the exterior building form as blocks) and MUST NOT emit "
-            "interior rooms. Populate `massing`; leave `rooms` and `product` empty."
+        want, emit, populate, leave = (
+            "an exterior building", "building `massing` volumes (the exterior form as blocks)",
+            "`massing`", "`rooms` and `product`",
         )
-    if s in ("furniture", "product"):
-        return (
-            "\n\nSCOPE = FURNITURE / PRODUCT. You MUST emit a single `product` as a "
-            "set of `parts` and MUST NOT emit rooms or building massing. Populate "
-            "`product.parts`; leave `rooms` and `massing` empty."
+    elif s in ("furniture", "product"):
+        want, emit, populate, leave = (
+            "a single furniture / product piece", "a single `product` as a set of `parts`",
+            "`product.parts`", "`rooms` and `massing`",
         )
-    if s == "interior":
-        return (
-            "\n\nSCOPE = INTERIOR. You MUST emit interior `rooms` (one or more spaces "
-            "with furniture) and MUST NOT emit building massing or a product piece. "
-            "Populate `rooms`; leave `massing` and `product` empty."
+    elif s == "interior":
+        want, emit, populate, leave = (
+            "an interior", "interior `rooms` (one or more furnished spaces)",
+            "`rooms`", "`massing` and `product`",
         )
-    return ""
+    else:
+        return ""
+    return (
+        f"\n\nSCOPE = {s.upper()}. Treat this as the default reading of the brief: "
+        f"design {want} — emit {emit}; populate {populate} and leave {leave} empty. "
+        f"BUT if the brief itself plainly describes a different kind of design "
+        f"(e.g. it explicitly asks for an exterior/building, an interior, or a single "
+        f"product piece), follow the brief — the words of the brief win over this scope."
+    )
 
 
 async def generate_design_graph(
