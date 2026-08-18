@@ -60,6 +60,19 @@ def _zone_colour(zone: str) -> str:
 
 
 def generate(graph: dict, *, canvas_w: int = 900, canvas_h: int = 600) -> dict:
+    # Functional zoning (seating / surface / storage / rest) describes a room's
+    # program, not a single product piece — for a chair everything collapses to
+    # one "Other" blob, which is meaningless. Show an honest note instead.
+    if str(graph.get("design_type") or "").lower() in ("product", "furniture"):
+        body = [
+            background(canvas_w, canvas_h, fill=PAPER),
+            title_block(40, 36, "Concept Transparency", "Functional zones", width=canvas_w - 80),
+            text(canvas_w / 2, canvas_h / 2 - 8, "Not applicable to a single product piece.", size=13, fill=INK_SOFT, anchor="middle"),
+            text(canvas_w / 2, canvas_h / 2 + 16, "Functional zoning describes a room's program — see Hierarchy for this piece's parts.", size=10, fill=INK_MUTED, anchor="middle"),
+        ]
+        svg = svg_open(canvas_w, canvas_h, title="Concept Transparency") + "".join(body) + svg_close()
+        return {"id": "concept_transparency", "name": "Concept Transparency", "format": "svg", "svg": svg, "meta": {"not_applicable": "single_piece"}}
+
     # Frame the whole plan (shared source of truth), not just room 1.
     pb = plan_bounds(graph)
     room_l, room_w = pb["l"], pb["w"]

@@ -645,6 +645,12 @@ def generate_detail_package(graph: dict) -> dict:
     design's own material palette. Always renders (single- or multi-room);
     never claims to show more than the one room it chose.
     """
+    # A furniture/product design has no room — building junctions (skirting,
+    # cornice, window jamb, door threshold) are meaningless for a chair or lamp,
+    # so route to a component-joinery sheet instead.
+    if str(graph.get("design_type") or "").lower() == "product":
+        return _product_detail_package(graph)
+
     subject_name = _largest_room_name(graph) or _label(_room_type(graph))
     materials = [
         str(m.get("name")).strip()
@@ -689,6 +695,101 @@ def generate_detail_package(graph: dict) -> dict:
             "subject": "wall/floor junction",
         },
     }
+
+
+def _product_part_labels(graph: dict) -> list[str]:
+    """Distinct product part names, largest first (e.g. Seat · Backrest · Leg,
+    or Drum Shade · Base · Stem) — dedups the repeated legs into one entry."""
+    seen: dict[str, float] = {}
+    for o in _objects(graph):
+        label = _label(str(o.get("name") or o.get("type") or "part"))
+        d = o.get("dimensions") or {}
+        try:
+            vol = float(d.get("length") or 0) * float(d.get("width") or 0) * float(d.get("height") or 0)
+        except (TypeError, ValueError):
+            vol = 0.0
+        seen[label] = max(seen.get(label, 0.0), vol)
+    return [k for k, _ in sorted(seen.items(), key=lambda kv: -kv[1])]
+
+
+def _product_detail_package(graph: dict) -> dict:
+    """Component-junction details for a furniture/product piece: how its main
+    parts join, and where two materials meet — instead of the building junctions
+    (skirting, cornice, window jamb, door threshold) that only apply to a room."""
+    materials = [
+        str(m.get("name")).strip()
+        for m in (graph.get("materials") or [])
+        if isinstance(m, dict) and m.get("name")
+    ]
+    parts = _product_part_labels(graph)
+    primary = materials[0] if materials else "hardwood"
+    secondary = materials[1] if len(materials) > 1 else primary
+    p0 = parts[0] if parts else "Body"
+    p1 = parts[1] if len(parts) > 1 else "Support"
+    p2 = parts[2] if len(parts) > 2 else p1
+
+    details = [
+        (f"D1 · {p0} / {p1} joint", f"Primary structure · {primary}", "joint"),
+        (f"D2 · {p0} / {p2} joint", "Load path · concealed fixings", "layer"),
+        ("D3 · Material transition",
+         f"{primary} → {secondary}" if secondary != primary else f"{primary} · surface finish", "transition"),
+        ("D4 · Edge / finish", "Eased edge · fixing detail", "edge"),
+    ]
+
+    seg = _svg_open(
+        "Detail Sheet — Product",
+        f"Component junctions · materials: {', '.join(materials[:3]) or '—'}",
+    )
+    cell_w = (CW - PAD * 2 - 30) / 2
+    cell_h = (CH - PAD - 80 - 30) / 2
+    x0, y0 = PAD, 80
+    for i, (title, note, kind) in enumerate(details):
+        cx = x0 + (i % 2) * (cell_w + 30)
+        cy = y0 + (i // 2) * (cell_h + 30)
+        seg.append(f'<rect x="{cx:.1f}" y="{cy:.1f}" width="{cell_w:.1f}" height="{cell_h:.1f}" rx="10" fill="#fbf4e8" stroke="{_INK_SOFT}" stroke-width="1.4"/>')
+        seg.append(f'<text x="{cx+14:.1f}" y="{cy+24:.1f}" fill="{_INK}" font-size="13" font-weight="700">{escape(title)}</text>')
+        seg.append(f'<text x="{cx+14:.1f}" y="{cy+44:.1f}" fill="{_INK_SOFT}" font-size="11">{escape(note)}</text>')
+        seg.extend(_product_detail_schematic(cx, cy, cell_w, cell_h, kind))
+    seg.append("</svg>")
+
+    return {
+        "drawing_type": "detail_sheet",
+        "preview_svg": "".join(seg),
+        "summary": {
+            "detail_count": len(details),
+            "materials_cited": materials[:3],
+            "subject": "component joinery",
+        },
+    }
+
+
+def _product_detail_schematic(cx: float, cy: float, cw: float, ch: float, kind: str) -> list[str]:
+    """A small, schematic joinery / material detail inside a product detail cell."""
+    bx, by = cx + 24, cy + 64
+    bw, bh = cw - 48, ch - 88
+    out: list[str] = []
+    if kind == "joint":
+        # Two members meeting at an L corner (a frame joint) + a dowel/fixing.
+        out.append(f'<rect x="{bx:.1f}" y="{by:.1f}" width="{bw*0.22:.1f}" height="{bh:.1f}" fill="url(#poche)" stroke="{_INK}" stroke-width="1.5"/>')          # vertical member
+        out.append(f'<rect x="{bx:.1f}" y="{by+bh*0.62:.1f}" width="{bw:.1f}" height="{bh*0.24:.1f}" fill="url(#poche)" stroke="{_INK}" stroke-width="1.5"/>')  # horizontal member
+        out.append(f'<circle cx="{bx+bw*0.11:.1f}" cy="{by+bh*0.74:.1f}" r="4" fill="{_INK}"/>')                                                                # fixing
+    elif kind == "layer":
+        # Stacked layers — support frame + a seat / cushion / top on it.
+        out.append(f'<rect x="{bx:.1f}" y="{by+bh*0.58:.1f}" width="{bw:.1f}" height="{bh*0.42:.1f}" fill="url(#poche)" stroke="{_INK}" stroke-width="1.5"/>')  # frame
+        out.append(f'<rect x="{bx+bw*0.06:.1f}" y="{by+bh*0.30:.1f}" width="{bw*0.88:.1f}" height="{bh*0.26:.1f}" rx="6" fill="{_FILL}" stroke="{_POCHE}" stroke-width="1.2"/>')  # cushion / top
+    elif kind == "transition":
+        # Two materials meeting at a seam.
+        out.append(f'<rect x="{bx:.1f}" y="{by+bh*0.25:.1f}" width="{bw*0.48:.1f}" height="{bh*0.5:.1f}" fill="url(#poche)" stroke="{_INK}" stroke-width="1.5"/>')  # material A
+        out.append(f'<rect x="{bx+bw*0.52:.1f}" y="{by+bh*0.25:.1f}" width="{bw*0.48:.1f}" height="{bh*0.5:.1f}" fill="{_FILL}" stroke="{_POCHE}" stroke-width="1.2"/>')  # material B
+        out.append(f'<line x1="{bx+bw*0.5:.1f}" y1="{by+bh*0.16:.1f}" x2="{bx+bw*0.5:.1f}" y2="{by+bh*0.84:.1f}" stroke="{_POCHE}" stroke-width="1.4" stroke-dasharray="4 3"/>')  # seam
+    else:  # edge
+        # Eased / chamfered edge profile of a solid member.
+        out.append(
+            f'<polygon points="{bx:.1f},{by+bh*0.2:.1f} {bx+bw*0.78:.1f},{by+bh*0.2:.1f} '
+            f'{bx+bw:.1f},{by+bh*0.46:.1f} {bx+bw:.1f},{by+bh:.1f} {bx:.1f},{by+bh:.1f}" '
+            f'fill="url(#poche)" stroke="{_INK}" stroke-width="1.5"/>'
+        )
+    return out
 
 
 def _largest_room_name(graph: dict) -> str | None:

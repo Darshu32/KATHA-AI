@@ -114,8 +114,11 @@ def generate(graph: dict, *, canvas_w: int = 960, canvas_h: int = 560) -> dict:
 
     room_volume = pb["room_volume"]
     void_pct = max(0.0, 100.0 * (room_volume - total_volume) / room_volume) if room_volume else 0
+    # "Room" only reads right when there are rooms; a product/exterior massing
+    # has an envelope, not a room.
+    vol_label = "Room" if foots else "Envelope"
     body.append(
-        text(40, canvas_h - 34, f"Room {room_volume:.1f} m³   ·   mass {total_volume:.2f} m³   ·   void {void_pct:.0f}%", size=10, fill=INK_SOFT)
+        text(40, canvas_h - 34, f"{vol_label} {room_volume:.1f} m³   ·   mass {total_volume:.2f} m³   ·   void {void_pct:.0f}%", size=10, fill=INK_SOFT)
     )
 
     svg = svg_open(canvas_w, canvas_h, title="Volumetric") + "".join(body) + svg_close()

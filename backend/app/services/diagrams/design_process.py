@@ -35,7 +35,12 @@ def _build_steps(graph: dict) -> list[tuple[str, str, str]]:
     spaces = graph.get("spaces") or ([graph["room"]] if graph.get("room") else [])
     env = plan_envelope(graph)
     envelope = f"{env['l']:.1f}×{env['w']:.1f}×{env['h']:.1f} m"
-    if len(spaces) > 1:
+    dtype = str(graph.get("design_type") or "").lower()
+    if dtype in ("product", "furniture"):
+        brief_detail = f"Product piece — {envelope}"
+    elif dtype in ("architecture", "exterior"):
+        brief_detail = f"Exterior massing — {envelope}"
+    elif len(spaces) > 1:
         brief_detail = f"{len(spaces)} rooms — {envelope}"
     else:
         room0 = spaces[0] if spaces else {}

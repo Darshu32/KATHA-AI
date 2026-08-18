@@ -256,11 +256,14 @@ async def get_detail_sheet(
     db: AsyncSession = Depends(get_db),
 ):
     target_version, _theme, graph = await _generate_view(db, project_id, version, user)
-    if scope.lower() in PIECE_SCOPES:
+    if scope.lower() in PIECE_SCOPES and str(graph.get("design_type") or "").lower() != "product":
         # Piece detail cells are LLM-authored (the /working-drawings path);
         # the deterministic sheet renders its frame + a "needs authoring" note.
         result = render_detail_sheet()
     else:
+        # A product's component-joinery sheet is rendered deterministically by
+        # generate_detail_package (its design_type branch), so route products
+        # there even under a piece scope — no "needs authoring" placeholder.
         result = generate_detail_package(graph)
     return _view_response(project_id, target_version.version, result)
 

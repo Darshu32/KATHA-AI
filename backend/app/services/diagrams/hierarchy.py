@@ -73,7 +73,14 @@ def generate(graph: dict, *, canvas_w: int = 900, canvas_h: int = 560) -> dict:
     row_y = 100
     body.append(_visual_row(graph, 40, row_y, ROW_W, row_h))
     body.append(_share_row(_material_shares(graph), "MATERIAL HIERARCHY", 40, row_y + row_h + 34, ROW_W))
-    body.append(_share_row(_functional_shares(graph), "FUNCTIONAL HIERARCHY", 40, row_y + 2 * row_h + 68, ROW_W))
+    if str(graph.get("design_type") or "").lower() in ("product", "furniture"):
+        # A single piece's parts don't carry room "roles" — they'd all bucket to
+        # "other" (100%), which says nothing. Note it instead.
+        fy = row_y + 2 * row_h + 64
+        body.append(text(40, fy, "FUNCTIONAL HIERARCHY", size=9, weight="600", fill=INK_SOFT))
+        body.append(text(40, fy + 28, "Functional roles describe a room's furniture mix — not the parts of a single piece.", size=9.5, fill=INK_MUTED))
+    else:
+        body.append(_share_row(_functional_shares(graph), "FUNCTIONAL HIERARCHY", 40, row_y + 2 * row_h + 68, ROW_W))
 
     svg = svg_open(canvas_w, canvas_h, title="Hierarchy") + "".join(body) + svg_close()
     return {"id": "hierarchy", "name": "Hierarchy", "format": "svg", "svg": svg, "meta": {"object_count": len(graph.get("objects", []))}}

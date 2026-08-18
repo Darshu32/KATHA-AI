@@ -60,6 +60,19 @@ def _human(cx: float, cy: float, r: float = 6, colour: str = INK) -> str:
 
 
 def generate(graph: dict, *, canvas_w: int = 900, canvas_h: int = 620) -> dict:
+    # A single product/furniture piece has no inhabited space — occupation,
+    # circulation and clearance don't apply, so drawing an "ENTRY" and a room
+    # around a chair is nonsense. Show an honest note instead.
+    if str(graph.get("design_type") or "").lower() in ("product", "furniture"):
+        body = [
+            background(canvas_w, canvas_h, fill=PAPER),
+            title_block(40, 36, "Spatial Organism", "Occupation · circulation · clearance", width=canvas_w - 80),
+            text(canvas_w / 2, canvas_h / 2 - 8, "Not applicable to a single product piece.", size=13, fill=INK_SOFT, anchor="middle"),
+            text(canvas_w / 2, canvas_h / 2 + 16, "Occupation & circulation describe an inhabited space — see Isometric, Detail and Massing.", size=10, fill=INK_MUTED, anchor="middle"),
+        ]
+        svg = svg_open(canvas_w, canvas_h, title="Spatial Organism") + "".join(body) + svg_close()
+        return {"id": "spatial_organism", "name": "Spatial Organism", "format": "svg", "svg": svg, "meta": {"not_applicable": "single_piece"}}
+
     # Frame the whole plan (shared source of truth), not just room 1.
     pb = plan_bounds(graph)
     foot_l, foot_w = pb["l"], pb["w"]
