@@ -335,15 +335,27 @@ export default function ImageWorkspaceMvp2() {
      submission context. Older generations remain in the gallery as
      read-only history; only the latest version can be edited (the
      /edit endpoint always operates on get_latest_version). */
-  const latestGeneration = generations[0] ?? null;
+  // Only ever DISPLAY cards for the active project. The gallery is persisted
+  // and its async writers (rerender/present/reconcile) touch the whole array,
+  // so a card from a previously-open project can linger; without this scope a
+  // rapid project switch could show that stale card's render + summary. Every
+  // card carries projectId, so this is exact.
+  const shownGenerations = useMemo(
+    () =>
+      activeProjectId
+        ? generations.filter((g) => g.projectId === activeProjectId)
+        : generations,
+    [generations, activeProjectId],
+  );
+  const latestGeneration = shownGenerations[0] ?? null;
 
   // When a new generation lands (or the gallery is replaced/cleared),
   // snap the hero to the newest result. Clicking a filmstrip thumb sets
   // focusedGenId directly and persists until the next generation, since
   // those clicks don't change the `generations` reference.
   useEffect(() => {
-    setFocusedGenId(generations[0]?.id ?? null);
-  }, [generations]);
+    setFocusedGenId(shownGenerations[0]?.id ?? null);
+  }, [shownGenerations]);
 
   // The version the user is *looking at* — the focused History card, falling
   // back to the latest. The read-only review surfaces (right rail: Summary /
@@ -352,7 +364,7 @@ export default function ImageWorkspaceMvp2() {
   // latest. Editing still targets the backend's get_latest_version, so it's
   // enabled only while the focused version *is* the latest.
   const focusedGeneration =
-    generations.find((g) => g.id === focusedGenId) ?? latestGeneration;
+    shownGenerations.find((g) => g.id === focusedGenId) ?? latestGeneration;
   const isViewingLatest =
     !!focusedGeneration && focusedGeneration.id === latestGeneration?.id;
 
@@ -362,6 +374,41 @@ export default function ImageWorkspaceMvp2() {
       | undefined;
     return data?.objects ?? [];
   }, [focusedGeneration]);
+
+  // Cost is a pure function of the graph, so compute it LIVE for the version
+  // being viewed — never trust the gallery card's frozen snapshot. A card
+  // estimate goes stale the instant the engine changes (e.g. the architecture
+  // built-up-area fix that took a shell from ₹329 to its real crore-scale
+  // figure) and is absent entirely for re-opened projects (handleOpenProject
+  // seeds `estimate: {}`). Fetch the engine's live estimate for the focused
+  // version and feed both cost surfaces (right rail + terminal). It's tagged
+  // with its version so a mid-fetch focus switch never shows another version's
+  // number, and a fetch failure quietly leaves the card's own estimate in place.
+  const [liveEstimate, setLiveEstimate] = useState<{ version: number; estimate: unknown } | null>(null);
+  useEffect(() => {
+    const v = focusedGeneration?.version;
+    if (!activeProjectId || !v || v <= 0) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const est = await designApi.estimateForVersion(token, activeProjectId, v);
+        if (!cancelled) setLiveEstimate({ version: v, estimate: est });
+      } catch {
+        // Network/API failure — keep whatever estimate the card already had.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [activeProjectId, focusedGeneration?.version, token]);
+
+  const focusedEstimate =
+    liveEstimate && liveEstimate.version === focusedGeneration?.version
+      ? liveEstimate.estimate
+      : focusedGeneration?.estimate;
+  const focusedForTerminal = focusedGeneration
+    ? { ...focusedGeneration, estimate: focusedEstimate }
+    : focusedGeneration;
 
   /* submitThemeSwitch — Pass 3 of the edit loop.
    *
@@ -433,13 +480,19 @@ export default function ImageWorkspaceMvp2() {
    * this refreshes it + the exact hotspots on the same version. */
   const submitRerender = async (): Promise<boolean> => {
     if (!activeProjectId || !latestGeneration || isRerendering) return false;
+    // Capture the target up front; verify against FRESH store state after the
+    // await so a project switch mid-request can't clobber the new project's
+    // gallery with this (now-stale) render.
+    const projectId = activeProjectId;
+    const targetId = latestGeneration.id;
     setIsRerendering(true);
     try {
-      const res = await designApi.rerender(token, activeProjectId);
-      if (res.image_url) {
+      const res = await designApi.rerender(token, projectId);
+      const store = useImageGenStore.getState();
+      if (res.image_url && store.activeProjectId === projectId) {
         replaceGenerations(
-          generations.map((g) =>
-            g.id === latestGeneration.id
+          store.generations.map((g) =>
+            g.id === targetId
               ? { ...g, url: res.image_url ?? g.url, objectsBbox: res.objects_bbox ?? g.objectsBbox }
               : g,
           ),
@@ -463,13 +516,19 @@ export default function ImageWorkspaceMvp2() {
     mood?: { setting?: string; light?: string; palette?: string },
   ): Promise<boolean> => {
     if (!activeProjectId || !latestGeneration || isPresenting) return false;
+    // Capture the target up front; verify against FRESH store state after the
+    // await so a project switch mid-request can't clobber the new project's
+    // gallery with this (now-stale) present render.
+    const projectId = activeProjectId;
+    const targetId = latestGeneration.id;
     setIsPresenting(true);
     try {
-      const res = await designApi.present(token, activeProjectId, mood);
-      if (res.image_url) {
+      const res = await designApi.present(token, projectId, mood);
+      const store = useImageGenStore.getState();
+      if (res.image_url && store.activeProjectId === projectId) {
         replaceGenerations(
-          generations.map((g) =>
-            g.id === latestGeneration.id ? { ...g, url: res.image_url ?? g.url } : g,
+          store.generations.map((g) =>
+            g.id === targetId ? { ...g, url: res.image_url ?? g.url } : g,
           ),
         );
       }
@@ -492,16 +551,26 @@ export default function ImageWorkspaceMvp2() {
     gen: import("@/lib/types").ImageGeneration,
   ): Promise<boolean> => {
     if (!activeProjectId || gen.version == null || gen.version <= 0) return false;
-    try {
-      const res = await designApi.deleteVersion(token, activeProjectId, gen.version);
+    // Drop the card locally and re-point the active version. Shared by the
+    // clean-delete path and the "already gone server-side" (404) path — both
+    // end in the same place: this version no longer exists.
+    const prune = (latest: number | null) => {
       const remaining = generations.filter((g) => g.id !== gen.id);
       replaceGenerations(remaining);
-      setActiveProject(
-        activeProjectId,
-        res.latest_version || remaining[0]?.version || null,
-      );
+      setActiveProject(activeProjectId, latest || remaining[0]?.version || null);
+    };
+    try {
+      const res = await designApi.deleteVersion(token, activeProjectId, gen.version);
+      prune(res.latest_version);
       return true;
     } catch (e) {
+      // 404 = the row is already gone (deleted out-of-band, a double click, or
+      // another tab). The user's intent — remove this card — is still met, so
+      // prune the ghost rather than stranding it as an un-deletable card.
+      if (e instanceof ApiError && e.status === 404) {
+        prune(null);
+        return true;
+      }
       toastError(e, "Couldn't delete version");
       return false;
     }
@@ -848,14 +917,14 @@ export default function ImageWorkspaceMvp2() {
             }}
             isSwitchingTheme={isSwitchingTheme}
             themeSwitchError={themeSwitchError}
-            generations={generations}
+            generations={shownGenerations}
             focusedId={focusedGenId}
             onFocus={setFocusedGenId}
             hasActiveProject={!!activeProjectId && !!latestGeneration}
             onOpenExport={() => setExportOpen(true)}
           />
           <div className="flex-1 overflow-auto draft-scroll grid-paper">
-            {generations.length === 0 ? (
+            {shownGenerations.length === 0 ? (
               <CanvasEmptyHero
                 scope={scope}
                 dim={dim}
@@ -865,7 +934,7 @@ export default function ImageWorkspaceMvp2() {
               />
             ) : (
               <CanvasGallery
-                generations={generations}
+                generations={shownGenerations}
                 dim={dim}
                 focusedId={focusedGenId}
                 onFocus={setFocusedGenId}
@@ -904,7 +973,7 @@ export default function ImageWorkspaceMvp2() {
         </main>
 
         <RightSummary
-          hasDesign={generations.length > 0}
+          hasDesign={shownGenerations.length > 0}
           dim={dim}
           theme={theme}
           objects={editableObjects}
@@ -919,7 +988,7 @@ export default function ImageWorkspaceMvp2() {
           codeCompliance={focusedGeneration?.codeCompliance}
           validation={focusedGeneration?.validation}
           mepCost={focusedGeneration?.mepCostEstimate}
-          estimate={focusedGeneration?.estimate}
+          estimate={focusedEstimate}
           activeProjectId={activeProjectId}
           latestVersion={focusedGeneration?.version ?? null}
           token={token ?? ""}
@@ -931,11 +1000,11 @@ export default function ImageWorkspaceMvp2() {
         <TerminalPanel
           tab={terminalTab}
           setTab={setTerminalTab}
-          hasDesign={generations.length > 0}
+          hasDesign={shownGenerations.length > 0}
           validation={focusedGeneration?.validation}
           mepCost={focusedGeneration?.mepCostEstimate}
           codeCompliance={focusedGeneration?.codeCompliance}
-          generation={focusedGeneration}
+          generation={focusedForTerminal}
           onClose={() => toggleTerminal()}
         />
       ) : (
