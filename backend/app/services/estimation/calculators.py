@@ -25,6 +25,19 @@ from app.services.estimation.models import EstimateItem, round_money, to_decimal
 FEET_PER_M = Decimal("3.280839895")
 SQFT_PER_SQM = Decimal("10.763910417")
 
+# Architecture massing volumes that are NOT habitable floor area: a roof cap, a
+# carved-out void/atrium, and facade elements (screens, louvres, brise-soleil,
+# canopies, fins) all sit on the built-up area but add no storeys of their own.
+# Only the actual building masses drive the shell/BUA cost — everything here is
+# excluded from the built-up-area tally so it isn't costed as floor plate.
+_NON_FLOOR_MASS = {
+    "roof", "void", "atrium", "cutout", "screen", "louver", "louvre", "louvers",
+    "louvres", "brise_soleil", "brise-soleil", "brisesoleil", "facade", "cladding",
+    "canopy", "pergola", "fin", "fins", "mullion", "shade", "shading", "sunshade",
+    "awning", "balustrade", "railing", "parapet", "trellis", "column", "columns",
+    "beam", "pilotis", "ground", "site", "terrain", "landscape", "tree", "planter",
+}
+
 
 def _ft(value, default_ft: str) -> Decimal:
     """A present metric dimension → feet; the (feet) default when absent/zero."""
@@ -69,11 +82,17 @@ def calculate_area_summary(graph_data: dict) -> dict:
             )
 
     # Exterior/architecture: no interior rooms, but there IS a built-up area —
-    # each massing volume contributes footprint × storeys (height ÷ ~3 m/floor).
-    # This is the area the shell + labour + services are costed on.
+    # each habitable massing volume contributes footprint × storeys (height ÷
+    # ~3 m/floor). This is the area the shell + labour + services are costed on.
+    #
+    # Identify masses by TYPE, not the `role` field. Architecture objects reach
+    # this graph tagged inconsistently — role "massing" via _architecture_graph,
+    # but "furniture" through other paths — so gating on role silently zeroed the
+    # entire building (a shell costed at ₹0). Count every mass except the
+    # non-floor elements above (roof/void/screen…), which carry no storeys.
     if not space_breakdown and str(graph_data.get("design_type")) == "architecture":
         for index, obj in enumerate(graph_data.get("objects") or [], start=1):
-            if str(obj.get("role")) != "massing":
+            if str(obj.get("type") or "").lower() in _NON_FLOOR_MASS:
                 continue
             dims = obj.get("dimensions") or {}
             length_ft = _ft(dims.get("length") or dims.get("width") or dims.get("x"), "40")

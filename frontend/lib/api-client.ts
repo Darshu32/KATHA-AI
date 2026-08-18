@@ -966,6 +966,16 @@ export const design = {
       remaining: number[];
     }>(`/projects/${projectId}/versions/${versionNum}`, "DELETE", undefined, token),
 
+  /** Live cost estimate for a specific version. The estimation engine
+   *  recomputes it from the stored graph on every call (never a frozen
+   *  snapshot), so it always reflects the current engine + the version's real
+   *  geometry — the reason architecture/product designs and re-opened projects
+   *  (whose gallery card carries no estimate) still show a correct cost. */
+  estimateForVersion: (token: string | undefined, projectId: string, versionNum: number) =>
+    request<Record<string, unknown>>(
+      `/projects/${projectId}/estimates/version/${versionNum}`, "GET", undefined, token,
+    ),
+
   updateMaterial: (token: string, projectId: string, objectId: string, material: string, color: string) =>
     request<{ status: string }>(
       `/projects/${projectId}/objects/${objectId}/material`, "PATCH", { material, color }, token,
